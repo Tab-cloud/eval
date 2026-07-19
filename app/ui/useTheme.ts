@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export type Theme = "dark" | "light";
 
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>("dark");
-  useEffect(() => {
-    setThemeState(document.documentElement.dataset.theme === "light" ? "light" : "dark");
-  }, []);
+  const [theme, setThemeState] = useState<Theme>(() => typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark");
   const setTheme = (next: Theme) => {
     document.documentElement.dataset.theme = next;
     document.documentElement.style.colorScheme = next;

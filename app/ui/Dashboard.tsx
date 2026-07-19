@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { useTheme } from "./useTheme";
 
+type DashboardUser = { email: string; displayName: string; tenantName: string; role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer" };
+
 const nav: { id: string; label: string; icon: IconName }[] = [
   { id: "overview", label: "总览", icon: "grid" },
   { id: "models", label: "模型", icon: "model" },
@@ -206,27 +208,44 @@ function Coming({ id }: { id: string }) {
   </section>;
 }
 
-export function Dashboard() {
+export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
   const [active, setActive] = useState("overview");
   const [modal, setModal] = useState(false);
   const [search, setSearch] = useState(false);
   const [toast, setToast] = useState("");
   const [governanceOpen, setGovernanceOpen] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setSearch(true); }
-      if (event.key === "Escape") { setModal(false); setSearch(false); setGovernanceOpen(false); setMobileMenu(false); }
+      if (event.key === "Escape") { setModal(false); setSearch(false); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   const saveKey = () => { setModal(false); setToast("API 密钥已创建，请立即安全保存"); setTimeout(() => setToast(""), 3000); };
-  const navigate = (id: string) => { setActive(id); setGovernanceOpen(false); setMobileMenu(false); };
+  const navigate = (id: string) => { setActive(id); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); };
+  const logout = async () => {
+    if (logoutLoading) return;
+    setLogoutLoading(true);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("logout failed");
+      location.href = "/login";
+    } catch {
+      setToast("退出失败，请稍后重试");
+      setLogoutLoading(false);
+    }
+  };
   const governanceActive = ["keys", "users", "access"].includes(active);
+  const avatarText = currentUser.displayName.slice(0, 2).toUpperCase();
+  const roleLabel = currentUser.role === "tenant_admin" ? "租户管理员" : currentUser.role === "platform_admin" ? "平台管理员" : currentUser.role === "developer" ? "开发者" : currentUser.role === "auditor" ? "审计员" : "查看者";
+  const isAdmin = currentUser.role === "tenant_admin" || currentUser.role === "platform_admin";
 
   return <div className="shell">
     <ParticleField/>
@@ -241,16 +260,16 @@ export function Dashboard() {
           <button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}>分析</button>
           <button className={active === "downloads" ? "active" : ""} onClick={() => navigate("downloads")}>下载</button>
         </nav>
-        <div className="header-actions"><button className="command-trigger" onClick={() => setSearch(true)}><Icon name="search"/><span>搜索</span><kbd>⌘ K</kbd></button><span className="region"><i/>CN East</span><button className="round-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><button className="round-button" aria-label="通知"><Icon name="bell"/><i className="notify"/></button><button className="avatar account-button" aria-label="账户菜单">LY</button></div>
+        <div className="header-actions"><button className="command-trigger" onClick={() => setSearch(true)}><Icon name="search"/><span>搜索</span><kbd>⌘ K</kbd></button><span className="region"><i/>CN East</span><button className="round-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><button className="round-button" aria-label="通知"><Icon name="bell"/><i className="notify"/></button><button className={`avatar account-button${accountOpen ? " active" : ""}`} onClick={() => setAccountOpen(open => !open)} aria-expanded={accountOpen} aria-haspopup="menu" aria-label={`${currentUser.displayName}，${roleLabel}`}>{avatarText}</button>{accountOpen && <div className="account-popover" role="menu"><div className="account-popover-head"><span className="avatar">{avatarText}</span><div><b>{currentUser.displayName}</b><small>{currentUser.email}</small></div></div><div className="account-context"><span>当前组织</span><b>{currentUser.tenantName}</b><small>{roleLabel}</small></div>{isAdmin && <a className="account-admin-link" href="/admin" role="menuitem"><Icon name="shield"/><span><b>管理员控制室</b><small>用户、模型、发布与收费配置</small></span><Icon name="arrow"/></a>}<button className="account-logout" onClick={() => void logout()} disabled={logoutLoading} role="menuitem"><Icon name="logout"/><span>{logoutLoading ? "正在退出…" : "退出登录"}</span><Icon name="arrow"/></button></div>}</div>
       </div>
     </header>
     <main>
-      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>2026 年 7 月 19 日</p><h2>{active === "overview" ? "欢迎回来，林屿" : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>刚刚更新</div>}</div>{active === "overview" ? <Overview onCreate={() => setModal(true)}/> : <Coming id={active}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>正在连接（杭州）科技有限公司</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
+      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>2026 年 7 月 19 日</p><h2>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>刚刚更新</div>}</div>{active === "overview" ? <Overview onCreate={() => setModal(true)}/> : <Coming id={active}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>{currentUser.tenantName}</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
     </main>
 
     <nav className="mobile-dock" aria-label="移动端导航"><button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}><Icon name="grid"/><span>总览</span></button><button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}><Icon name="model"/><span>模型</span></button><button className={active === "routes" ? "active" : ""} onClick={() => navigate("routes")}><Icon name="route"/><span>路由</span></button><button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}><Icon name="chart"/><span>分析</span></button><button className={mobileMenu || ["keys","users","access","downloads"].includes(active) ? "active" : ""} onClick={() => setMobileMenu(true)}><Icon name="more"/><span>更多</span></button></nav>
 
-    {mobileMenu && <div className="overlay mobile-menu-overlay" onMouseDown={event => event.currentTarget === event.target && setMobileMenu(false)}><div className="mobile-menu"><div className="mobile-menu-handle"/><div className="mobile-menu-head"><div><p>Luban Cloud</p><h2>更多功能</h2></div><button onClick={() => setMobileMenu(false)} aria-label="关闭">×</button></div><div className="mobile-menu-grid">{nav.filter(item => ["keys","users","access","downloads"].includes(item.id)).map(item => <button key={item.id} onClick={() => navigate(item.id)}><span><Icon name={item.icon}/></span><b>{item.label}</b><small>{item.id === "keys" ? "凭证管理" : item.id === "users" ? "团队成员" : item.id === "access" ? "角色权限" : "客户端与 SDK"}</small></button>)}</div><div className="mobile-account"><div className="avatar">LY</div><div><b>林屿</b><small>鲁班科技 · 管理员</small></div><button><Icon name="settings"/>设置</button></div></div></div>}
+    {mobileMenu && <div className="overlay mobile-menu-overlay" onMouseDown={event => event.currentTarget === event.target && setMobileMenu(false)}><div className="mobile-menu"><div className="mobile-menu-handle"/><div className="mobile-menu-head"><div><p>Eval Control Room</p><h2>更多功能</h2></div><button onClick={() => setMobileMenu(false)} aria-label="关闭">×</button></div><div className="mobile-menu-grid">{nav.filter(item => ["keys","users","access","downloads"].includes(item.id)).map(item => <button key={item.id} onClick={() => navigate(item.id)}><span><Icon name={item.icon}/></span><b>{item.label}</b><small>{item.id === "keys" ? "凭证管理" : item.id === "users" ? "团队成员" : item.id === "access" ? "角色权限" : "客户端与 SDK"}</small></button>)}</div><div className="mobile-account"><div className="avatar">{avatarText}</div><div><b>{currentUser.displayName}</b><small>{currentUser.tenantName} · {roleLabel}</small></div>{isAdmin && <a className="mobile-admin-link" href="/admin"><Icon name="shield"/>管理</a>}<button className="mobile-logout" onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "退出中" : "退出登录"}</button></div></div></div>}
 
     {modal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && setModal(false)}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="key"/></div><button onClick={() => setModal(false)} aria-label="关闭">×</button></div><p className="modal-kicker">凭证管理</p><h2>创建 API 密钥</h2><p>密钥只会完整显示一次。所有调用都将绑定当前租户与权限策略。</p><label>密钥名称<input autoFocus defaultValue="Production Gateway"/></label><label>权限范围<select defaultValue="models:invoke"><option value="models:invoke">调用已授权模型</option><option value="read:all">只读访问</option><option value="admin">租户管理员</option></select></label><div className="scope-note"><Icon name="shield"/><span><b>最小权限原则</b><small>建议为不同环境创建独立密钥。</small></span></div><button className="primary full" onClick={saveKey}>创建密钥 <Icon name="arrow"/></button></div></div>}
     {search && <div className="overlay search-overlay" onMouseDown={event => event.currentTarget === event.target && setSearch(false)}><div className="command"><div><Icon name="search"/><input autoFocus placeholder="搜索模型、团队、文档或命令"/></div><p>快速前往</p>{nav.slice(0, 5).map(item => <button key={item.id} onClick={() => { setActive(item.id); setSearch(false); }}><Icon name={item.icon}/><span>{item.label}</span><kbd>↵</kbd></button>)}</div></div>}

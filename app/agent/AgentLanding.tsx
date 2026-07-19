@@ -52,24 +52,20 @@ function BrandMark() {
 export function AgentLanding() {
   const rootRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef<number | null>(null);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [locale, setLocale] = useState<"zh" | "en">("zh");
+  const [theme, setTheme] = useState<"dark" | "light">(() => typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  const [locale, setLocale] = useState<"zh" | "en">(() => typeof localStorage !== "undefined" && localStorage.getItem("eval-locale") === "en" ? "en" : "zh");
   const [activeRuntime, setActiveRuntime] = useState(0);
   const [downloads, setDownloads] = useState<PublicRelease[]>([]);
   const [downloadsLoading, setDownloadsLoading] = useState(true);
 
   useEffect(() => {
-    const current = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-    setTheme(current);
-    const savedLocale = localStorage.getItem("eval-locale") === "en" ? "en" : "zh";
-    setLocale(savedLocale);
-    document.documentElement.lang = savedLocale === "en" ? "en" : "zh-CN";
+    document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
     const observer = new IntersectionObserver(entries => entries.forEach(entry => {
       if (entry.isIntersecting) entry.target.classList.add("is-visible");
     }), { threshold: .14 });
     rootRef.current?.querySelectorAll("[data-reveal]").forEach(node => observer.observe(node));
     return () => observer.disconnect();
-  }, []);
+  }, [locale]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setActiveRuntime(current => (current + 1) % runtimeScenes.length), 4600);

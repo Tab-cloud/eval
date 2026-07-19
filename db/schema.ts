@@ -23,6 +23,19 @@ export const memberships = sqliteTable("memberships", {
   role: text("role", { enum: ["platform_admin", "tenant_admin", "developer", "auditor", "viewer"] }).notNull(), ...timestamps,
 }, (t) => [uniqueIndex("membership_tenant_user_uq").on(t.tenantId, t.userId), index("membership_tenant_idx").on(t.tenantId)]);
 
+export const passwordCredentials = sqliteTable("password_credentials", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  passwordHash: text("password_hash").notNull(), passwordSalt: text("password_salt").notNull(),
+  iterations: integer("iterations").notNull(), updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+});
+
+export const authSessions = sqliteTable("auth_sessions", {
+  id: text("id").primaryKey(), tokenHash: text("token_hash").notNull(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(), createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (t) => [uniqueIndex("auth_sessions_token_uq").on(t.tokenHash), index("auth_sessions_user_idx").on(t.userId)]);
+
 export const apiKeys = sqliteTable("api_keys", {
   id: text("id").primaryKey(), tenantId: text("tenant_id").notNull().references(() => tenants.id),
   ownerId: text("owner_id").notNull().references(() => users.id), name: text("name").notNull(),
@@ -52,3 +65,38 @@ export const releases = sqliteTable("releases", {
   version: text("version").notNull(), objectKey: text("object_key").notNull(), sha256: text("sha256").notNull(),
   visibility: text("visibility", { enum: ["public", "tenant", "internal"] }).notNull(), ...timestamps,
 }, (t) => [index("releases_tenant_idx").on(t.tenantId)]);
+
+export const llmConfigs = sqliteTable("llm_configs", {
+  id: text("id").primaryKey(), tenantId: text("tenant_id").notNull().references(() => tenants.id),
+  displayName: text("display_name").notNull(), provider: text("provider").notNull(), modelId: text("model_id").notNull(),
+  baseUrl: text("base_url").notNull(), secretRef: text("secret_ref").notNull(),
+  status: text("status", { enum: ["active", "maintenance", "disabled"] }).notNull().default("active"),
+  requestsPerMinute: integer("requests_per_minute").notNull().default(60), ...timestamps,
+}, (t) => [index("llm_configs_tenant_idx").on(t.tenantId)]);
+
+export const agentArtifacts = sqliteTable("agent_artifacts", {
+  id: text("id").primaryKey(), tenantId: text("tenant_id").notNull().references(() => tenants.id),
+  fileName: text("file_name").notNull(), label: text("label").notNull(),
+  format: text("format", { enum: ["NSIS", "MSI"] }).notNull(), objectKey: text("object_key").notNull(),
+  sizeBytes: integer("size_bytes").notNull(), sha256: text("sha256").notNull(),
+  status: text("status", { enum: ["ready", "archived"] }).notNull().default("ready"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (t) => [index("agent_artifacts_tenant_idx").on(t.tenantId), uniqueIndex("agent_artifacts_object_key_uq").on(t.objectKey)]);
+
+export const releaseVersions = sqliteTable("release_versions", {
+  id: text("id").primaryKey(), tenantId: text("tenant_id").notNull().references(() => tenants.id),
+  version: text("version").notNull(), channel: text("channel", { enum: ["stable", "beta", "internal"] }).notNull(),
+  artifactId: text("artifact_id").notNull().references(() => agentArtifacts.id), notes: text("notes").notNull(),
+  mandatory: integer("mandatory", { mode: "boolean" }).notNull().default(false),
+  status: text("status", { enum: ["draft", "published"] }).notNull().default("draft"),
+  publishedAt: integer("published_at", { mode: "timestamp" }), ...timestamps,
+}, (t) => [index("release_versions_tenant_idx").on(t.tenantId), uniqueIndex("release_versions_tenant_version_uq").on(t.tenantId, t.version, t.channel)]);
+
+export const billingPlans = sqliteTable("billing_plans", {
+  id: text("id").primaryKey(), tenantId: text("tenant_id").notNull().references(() => tenants.id),
+  name: text("name").notNull(), monthlyPriceCents: integer("monthly_price_cents").notNull(),
+  currency: text("currency", { enum: ["CNY", "USD"] }).notNull().default("CNY"),
+  requestLimit: integer("request_limit").notNull(), seatLimit: integer("seat_limit").notNull(),
+  features: text("features", { mode: "json" }).$type<string[]>().notNull(),
+  status: text("status", { enum: ["active", "archived"] }).notNull().default("active"), ...timestamps,
+}, (t) => [index("billing_plans_tenant_idx").on(t.tenantId)]);
