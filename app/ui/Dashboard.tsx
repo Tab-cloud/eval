@@ -22,6 +22,16 @@ const models = [
   { mark: "D", name: "DeepSeek V3.2", vendor: "DeepSeek", state: "维护", latency: "1.2 s", usage: "8.6%", tone: "indigo" },
 ];
 
+const moduleDetails: Record<string, { chapter: string; kicker: string; title: string; description: string; stats: [string, string][]; rows: [string, string, string][] }> = {
+  models: { chapter: "MODEL FIELD", kicker: "模型集合", title: "选择智能，\n不被供应商束缚。", description: "统一查看模型能力、健康状态与租户授权，让每个团队在正确的任务上调用正确的模型。", stats: [["24", "可用模型"], ["4", "模型供应商"], ["99.98%", "网关可用率"]], rows: [["GPT-5.2", "生产可用", "682 ms"], ["Claude 4.5 Sonnet", "生产可用", "741 ms"], ["Gemini 3 Pro", "生产可用", "890 ms"]] },
+  routes: { chapter: "ROUTING LAYER", kicker: "智能路由", title: "每一次请求，\n都走向更好的答案。", description: "以延迟、成本、地域和健康状态为信号，在模型之间完成可解释的流量调度与故障转移。", stats: [["8", "活动策略"], ["32 ms", "路由开销"], ["0.02%", "故障转移率"]], rows: [["生产默认路由", "运行中", "68% 流量"], ["低延迟路由", "运行中", "21% 流量"], ["分析任务路由", "观察中", "11% 流量"]] },
+  keys: { chapter: "CREDENTIAL VAULT", kicker: "访问凭证", title: "授权调用，\n不交出控制权。", description: "为环境与团队分别签发最小权限凭证，所有使用、轮换与撤销动作都进入审计链。", stats: [["12", "活动密钥"], ["3", "权限范围"], ["0", "异常调用"]], rows: [["Production Gateway", "models:invoke", "2 分钟前"], ["Analytics Readonly", "read:all", "1 小时前"], ["Staging Agent", "models:invoke", "昨天"]] },
+  users: { chapter: "ORGANIZATION", kicker: "用户与组织", title: "让协作扩张，\n让边界保持清晰。", description: "以租户、团队和成员关系组织协作，每个身份只看见被授权的资源与操作。", stats: [["36", "组织成员"], ["6", "协作团队"], ["4", "待处理邀请"]], rows: [["产品研发组", "12 名成员", "正常"], ["智能硬件组", "9 名成员", "正常"], ["数据分析组", "7 名成员", "正常"]] },
+  access: { chapter: "GOVERNANCE", kicker: "权限策略", title: "自主运行，\n始终处于治理之中。", description: "角色权限、资源归属与租户隔离共同组成不可绕过的控制边界。", stats: [["5", "系统角色"], ["18", "生效策略"], ["100%", "审计覆盖"]], rows: [["租户管理员", "全局管理", "5 名成员"], ["开发者", "模型调用", "18 名成员"], ["审计员", "只读审计", "3 名成员"]] },
+  analytics: { chapter: "SIGNAL ROOM", kicker: "用量分析", title: "看见消耗，\n也看见价值。", description: "从团队、密钥、模型与错误维度理解调用质量，让成本决策建立在真实信号之上。", stats: [["12.6M", "七日请求"], ["$8,429", "本月消费"], ["12.8%", "调用增长"]], rows: [["产品研发组", "4.8M 请求", "$3,214"], ["智能客服组", "3.1M 请求", "$2,087"], ["数据分析组", "2.4M 请求", "$1,662"]] },
+  downloads: { chapter: "RELEASE VAULT", kicker: "工具发布", title: "把能力带回，\n你的工程现场。", description: "公开安装包由管理员审核与上传；正式发布前不展示虚假文件、大小或下载地址。", stats: [["2", "实际构建格式"], ["0", "当前公开包"], ["PUBLIC", "访客权限"]], rows: [["Windows x64 安装程序", "NSIS · .exe", "等待管理员上传"], ["Windows x64 企业部署包", "MSI · .msi", "等待管理员上传"], ["公开下载目录", "无需登录", "已就绪"]] },
+};
+
 function ParticleField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -187,7 +197,13 @@ function Overview({ onCreate }: { onCreate: () => void }) {
 
 function Coming({ id }: { id: string }) {
   const item = nav.find(entry => entry.id === id) ?? nav[0];
-  return <section className="subpage"><div className="subhero surface"><div className="subicon"><Icon name={item.icon}/></div><div><p>Luban Cloud</p><h1>{item.label}</h1><span>该模块的架构与权限边界已经就绪，下一阶段将连接真实数据与业务工作流。</span></div></div><div className="placeholder-grid"><div className="surface placeholder-main"><span/><span/><span/><span/></div><div className="surface placeholder-side"><i/><i/><i/></div></div></section>;
+  const detail = moduleDetails[id] ?? moduleDetails.models;
+  return <section className="subpage cinematic-subpage">
+    <div className="subpage-chapter"><span>CONTROL ROOM</span><i/><span>{detail.chapter}</span></div>
+    <div className="subhero surface"><div className="subhero-copy"><p>{detail.kicker}</p><h1>{detail.title.split("\n").map((line, index) => <span key={line}>{line}{index === 0 && <br/>}</span>)}</h1><strong>{detail.description}</strong></div><div className="subhero-signal"><div className="subicon"><Icon name={item.icon}/></div><small>MODULE / {item.id.toUpperCase()}</small><b>ONLINE</b></div></div>
+    <div className="sub-stat-grid">{detail.stats.map(([value, label], index) => <article className="surface" key={label}><span>0{index + 1}</span><strong>{value}</strong><small>{label}</small></article>)}</div>
+    <div className="sub-ledger"><div className="sub-ledger-head"><span>LIVE DIRECTORY</span><span>STATUS / NOW</span></div>{detail.rows.map(([name, meta, state], index) => <article key={name}><span>0{index + 1}</span><h2>{name}</h2><p>{meta}</p><b><i/>{state}</b><button aria-label={`查看 ${name}`}><Icon name="arrow"/></button></article>)}</div>
+  </section>;
 }
 
 export function Dashboard() {
@@ -216,7 +232,7 @@ export function Dashboard() {
     <ParticleField/>
     <header className="topbar">
       <div className="topbar-inner">
-        <button className="brand top-brand" onClick={() => navigate("overview")} aria-label="返回总览"><span className="brandmark">L</span><span><b>Luban</b><small>Cloud</small></span></button>
+        <button className="brand top-brand" onClick={() => navigate("overview")} aria-label="返回总览"><span className="console-brand-mark"><img src="/favicon.svg" alt=""/></span><span><b>Eval</b><small>Control Room</small></span></button>
         <nav className="topnav" aria-label="主要导航">
           <button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}>总览</button>
           <button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}>模型</button>
@@ -229,7 +245,7 @@ export function Dashboard() {
       </div>
     </header>
     <main>
-      <div className="content"><div className="page-title"><div><p>2026 年 7 月 19 日</p><h2>{active === "overview" ? "欢迎回来，林屿" : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>刚刚更新</div>}</div>{active === "overview" ? <Overview onCreate={() => setModal(true)}/> : <Coming id={active}/>}<footer><span>© 2026 Luban Cloud</span><span>服务状态　开发文档　隐私</span></footer></div>
+      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>2026 年 7 月 19 日</p><h2>{active === "overview" ? "欢迎回来，林屿" : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>刚刚更新</div>}</div>{active === "overview" ? <Overview onCreate={() => setModal(true)}/> : <Coming id={active}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>正在连接（杭州）科技有限公司</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
     </main>
 
     <nav className="mobile-dock" aria-label="移动端导航"><button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}><Icon name="grid"/><span>总览</span></button><button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}><Icon name="model"/><span>模型</span></button><button className={active === "routes" ? "active" : ""} onClick={() => navigate("routes")}><Icon name="route"/><span>路由</span></button><button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}><Icon name="chart"/><span>分析</span></button><button className={mobileMenu || ["keys","users","access","downloads"].includes(active) ? "active" : ""} onClick={() => setMobileMenu(true)}><Icon name="more"/><span>更多</span></button></nav>
