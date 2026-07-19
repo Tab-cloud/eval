@@ -41,3 +41,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# Administrator-uploaded release binaries stay outside Git and belong in release storage.
+/public/downloads/*.exe
+/public/downloads/*.msi
