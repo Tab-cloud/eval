@@ -68,6 +68,7 @@ export function AgentLanding() {
   }, [locale]);
 
   useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => setActiveRuntime(current => (current + 1) % runtimeScenes.length), 4600);
     return () => window.clearInterval(timer);
   }, []);
@@ -77,7 +78,8 @@ export function AgentLanding() {
     fetch("/api/v1/downloads")
       .then(response => response.ok ? response.json() : Promise.reject(new Error("Download catalog unavailable")))
       .then(payload => {
-        if (active) setDownloads(Array.isArray(payload.data) ? payload.data : []);
+        const result = payload as { data?: PublicRelease[] };
+        if (active) setDownloads(Array.isArray(result.data) ? result.data : []);
       })
       .catch(() => {
         if (active) setDownloads([]);

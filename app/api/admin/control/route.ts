@@ -1,5 +1,6 @@
 import { isAdminError, requireAdminRequest } from "../../../auth/admin";
 import { adminSnapshot, executeAdminAction } from "../../../admin/store";
+import { rejectCrossSiteWrite } from "../../../security/request";
 
 export async function GET(request: Request) {
   const user = await requireAdminRequest(request);
@@ -8,6 +9,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const rejected = rejectCrossSiteWrite(request);
+  if (rejected) return rejected;
   const user = await requireAdminRequest(request);
   if (isAdminError(user)) return user;
   let payload: { action?: unknown; input?: unknown };

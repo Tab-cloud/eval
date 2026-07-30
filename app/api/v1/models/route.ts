@@ -1,12 +1,27 @@
-import { isResponse, requireApiIdentity } from "../_shared/auth";
-
-const catalog = [
-  { id: "gpt-5.2", provider: "openai", displayName: "GPT-5.2", capabilities: ["chat", "vision", "tools"], status: "active" },
-  { id: "claude-4.5-sonnet", provider: "anthropic", displayName: "Claude 4.5 Sonnet", capabilities: ["chat", "vision", "tools"], status: "active" },
-  { id: "gemini-3-pro", provider: "google", displayName: "Gemini 3 Pro", capabilities: ["chat", "vision"], status: "active" },
-];
+import { authDatabase } from "../../../auth/core";
+import { ensureGatewaySchema } from "../../../console/store";
+import { isResponse, requireApiIdentity, requireScope } from "../_shared/auth";
 
 export async function GET(request: Request) {
-  const identity = requireApiIdentity(request); if (isResponse(identity)) return identity;
-  return Response.json({ data: catalog, meta: { tenantId: identity.tenantId, count: catalog.length } });
+  const identity = await requireApiIdentity(request);
+  if (isResponse(identity)) return identity;
+  const forbidden = requireScope(identity, "models:read");
+  if (forbidden) return forbidden;
+  await ensureGatewaySchema();
+  const result = await authDatabase().prepare(
+    "SELECT id, display_name, provider, model_id, status, requests_per_minute FROM llm_configs WHERE tenant_id = ? AND status != 'disabled' ORDER BY display_name",
+  ).bind(identity.tenantId).all<Record<string, string | number>>();
+  return Response.json({
+    object: "list",
+    data: result.results.map(model => ({
+      id: String(model.id),
+      object: "model",
+      created: 0,
+      owned_by: String(model.provider),
+      display_name: String(model.display_name),
+      upstream_model: String(model.model_id),
+      status: String(model.status),
+      requests_per_minute: Number(model.requests_per_minute),
+    })),
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }

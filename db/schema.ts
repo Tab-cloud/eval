@@ -100,3 +100,28 @@ export const billingPlans = sqliteTable("billing_plans", {
   features: text("features", { mode: "json" }).$type<string[]>().notNull(),
   status: text("status", { enum: ["active", "archived"] }).notNull().default("active"), ...timestamps,
 }, (t) => [index("billing_plans_tenant_idx").on(t.tenantId)]);
+
+export const gatewayRequests = sqliteTable("gateway_requests", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id),
+  apiKeyId: text("api_key_id").notNull().references(() => apiKeys.id),
+  modelConfigId: text("model_config_id").references(() => llmConfigs.id),
+  endpoint: text("endpoint", { enum: ["chat.completions", "responses"] }).notNull(),
+  statusCode: integer("status_code").notNull(),
+  latencyMs: integer("latency_ms").notNull(),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  errorCode: text("error_code"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+}, (t) => [
+  index("gateway_requests_tenant_time_idx").on(t.tenantId, t.createdAt),
+  index("gateway_requests_key_time_idx").on(t.apiKeyId, t.createdAt),
+]);
+
+export const authLoginAttempts = sqliteTable("auth_login_attempts", {
+  keyHash: text("key_hash").primaryKey(),
+  failedCount: integer("failed_count").notNull().default(0),
+  firstFailedAt: integer("first_failed_at").notNull(),
+  blockedUntil: integer("blocked_until"),
+  updatedAt: integer("updated_at").notNull(),
+});

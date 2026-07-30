@@ -2,10 +2,13 @@ import { env } from "cloudflare:workers";
 import { authDatabase } from "../../../auth/core";
 import { isAdminError, requireAdminRequest } from "../../../auth/admin";
 import { ensureAdminSchema } from "../../../admin/store";
+import { rejectCrossSiteWrite } from "../../../security/request";
 
 const MAX_ARTIFACT_SIZE = 120 * 1024 * 1024;
 
 export async function POST(request: Request) {
+  const rejected = rejectCrossSiteWrite(request);
+  if (rejected) return rejected;
   const user = await requireAdminRequest(request);
   if (isAdminError(user)) return user;
   await ensureAdminSchema();

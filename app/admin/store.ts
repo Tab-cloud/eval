@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -31,12 +32,13 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
   const tenantId = user.tenantId;
-  const [users, llms, artifacts, releases, plans] = await Promise.all([
+  const [users, llms, artifacts, releases, plans, audits] = await Promise.all([
     db.prepare("SELECT u.id, u.email, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, display_name AS displayName, provider, model_id AS modelId, base_url AS baseUrl, secret_ref AS secretRef, status, requests_per_minute AS requestsPerMinute, updated_at AS updatedAt FROM llm_configs WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, request_limit AS requestLimit, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
+    db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
   return {
@@ -48,12 +50,14 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       artifacts: artifacts.results.length,
       publishedReleases: (releases.results as Array<Record<string, unknown>>).filter(item => item.status === "published").length,
       activePlans: (plans.results as Array<Record<string, unknown>>).filter(item => item.status === "active").length,
+      auditEvents: audits.results.length,
     },
     users: userRows,
     llms: llms.results,
     artifacts: artifacts.results,
     releases: releases.results,
     plans: plans.results,
+    audits: audits.results,
   };
 }
 
@@ -66,7 +70,7 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const displayName = text(input.displayName);
     const password = text(input.password);
     const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2 || password.length < 6) throw new Error("请填写有效邮箱、姓名和至少 6 位初始密码。");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2 || password.length < 10 || !/[a-zA-Z]/.test(password) || !/\d/.test(password)) throw new Error("请填写有效邮箱、姓名，以及至少 10 位并包含字母和数字的初始密码。");
     const id = `usr_${crypto.randomUUID()}`;
     const credential = await createPasswordHash(password);
     await db.batch([
@@ -82,6 +86,13 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const status = allowed(text(input.status), ["active", "disabled"], "active");
     const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
     if (id === user.id && status === "disabled") throw new Error("不能停用当前登录账号。");
+    if (id === user.id && role !== "tenant_admin") throw new Error("不能移除当前登录账号的管理员权限。");
+    const target = await db.prepare("SELECT m.role, u.status FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.user_id = ? AND m.tenant_id = ?").bind(id, user.tenantId).first<{ role: string; status: string }>();
+    if (!target) throw new Error("用户不存在或不属于当前组织。");
+    if (target.role === "tenant_admin" && target.status === "active" && (role !== "tenant_admin" || status !== "active")) {
+      const admins = await db.prepare("SELECT COUNT(*) AS count FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN ('tenant_admin','platform_admin') AND u.status = 'active'").bind(user.tenantId).first<{ count: number }>();
+      if (Number(admins?.count ?? 0) <= 1) throw new Error("当前组织至少需要保留一名可用管理员。");
+    }
     await db.batch([
       db.prepare("UPDATE users SET status = ?, updated_at = ? WHERE id = ? AND id IN (SELECT user_id FROM memberships WHERE tenant_id = ?)").bind(status, now, id, user.tenantId),
       db.prepare("UPDATE memberships SET role = ?, updated_at = ? WHERE user_id = ? AND tenant_id = ?").bind(role, now, id, user.tenantId),
@@ -98,6 +109,33 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     await recordAudit(db, user, "llm.save", "llm_config", id, { provider, modelId, rpm });
     return { id };
   }
+  if (action === "set_llm_status") {
+    const id = text(input.id);
+    const status = allowed(text(input.status), ["active", "maintenance", "disabled"], "maintenance");
+    const result = await db.prepare("UPDATE llm_configs SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, now, id, user.tenantId).run();
+    if (!result.meta.changes) throw new Error("模型配置不存在。");
+    await recordAudit(db, user, "llm.status", "llm_config", id, { status });
+    return { id, status };
+  }
+  if (action === "test_llm") {
+    const id = text(input.id);
+    const config = await db.prepare("SELECT base_url, secret_ref FROM llm_configs WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ base_url: string; secret_ref: string }>();
+    if (!config) throw new Error("模型配置不存在。");
+    const secret = (env as unknown as Record<string, unknown>)[config.secret_ref];
+    if (typeof secret !== "string" || !secret) throw new Error(`部署环境尚未配置 ${config.secret_ref}。`);
+    let target: URL;
+    try { target = new URL("models", config.base_url.endsWith("/") ? config.base_url : `${config.base_url}/`); } catch { throw new Error("模型地址无效。"); }
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(target, { headers: { Authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(15_000) });
+    } catch { throw new Error("无法连接模型上游。"); }
+    const healthy = response.ok;
+    await db.prepare("UPDATE llm_configs SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(healthy ? "active" : "maintenance", now, id, user.tenantId).run();
+    await recordAudit(db, user, "llm.test", "llm_config", id, { healthy, statusCode: response.status, latencyMs: Date.now() - started });
+    if (!healthy) throw new Error(`上游健康检查失败（HTTP ${response.status}）。`);
+    return { id, healthy, latencyMs: Date.now() - started };
+  }
   if (action === "create_release") {
     const artifactId = text(input.artifactId), version = text(input.version), notes = text(input.notes);
     const channel = allowed(text(input.channel), ["stable", "beta", "internal"], "stable");
@@ -110,6 +148,14 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     await recordAudit(db, user, "release.create", "release_version", id, { version, channel, artifactId, status, mandatory: Boolean(input.mandatory) });
     return { id };
   }
+  if (action === "set_release_status") {
+    const id = text(input.id);
+    const status = allowed(text(input.status), ["draft", "published"], "draft");
+    const result = await db.prepare("UPDATE release_versions SET status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, status === "published" ? now : null, now, id, user.tenantId).run();
+    if (!result.meta.changes) throw new Error("版本不存在。");
+    await recordAudit(db, user, status === "published" ? "release.publish" : "release.rollback", "release_version", id, { status });
+    return { id, status };
+  }
   if (action === "save_plan") {
     const id = text(input.id) || `plan_${crypto.randomUUID()}`;
     const name = text(input.name), currency = allowed(text(input.currency), ["CNY", "USD"], "CNY");
@@ -119,6 +165,14 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     await db.prepare("INSERT INTO billing_plans (id, tenant_id, name, monthly_price_cents, currency, request_limit, seat_limit, features, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents, currency=excluded.currency, request_limit=excluded.request_limit, seat_limit=excluded.seat_limit, features=excluded.features, updated_at=excluded.updated_at WHERE tenant_id=excluded.tenant_id").bind(id, user.tenantId, name, monthlyPriceCents, currency, requestLimit, seatLimit, JSON.stringify(features), now, now).run();
     await recordAudit(db, user, "billing_plan.save", "billing_plan", id, { currency, monthlyPriceCents, requestLimit, seatLimit });
     return { id };
+  }
+  if (action === "set_plan_status") {
+    const id = text(input.id);
+    const status = allowed(text(input.status), ["active", "archived"], "archived");
+    const result = await db.prepare("UPDATE billing_plans SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, now, id, user.tenantId).run();
+    if (!result.meta.changes) throw new Error("套餐不存在。");
+    await recordAudit(db, user, "billing_plan.status", "billing_plan", id, { status });
+    return { id, status };
   }
   throw new Error("不支持的管理员操作。");
 }

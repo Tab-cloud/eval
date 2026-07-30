@@ -38,7 +38,13 @@ Luban AI 是面向企业团队的 AI API 控制平面：向下连接多家模型
 - `POST /api/auth/logout`：撤销当前会话。
 - `GET /api/auth/me`：返回当前登录用户、租户与角色。
 - `GET /api/v1/health`：公开健康检查。
-- `GET /api/v1/models`：需要 `Authorization: Bearer ...` 与 `X-Luban-Tenant`。
+- `GET /api/v1/models`：需要具备 `models:read` 的 API Key；租户由服务端根据密钥反查。
+- `POST /api/v1/chat/completions`：OpenAI-compatible Chat Completions 中转，支持透传流式响应。
+- `POST /api/v1/responses`：OpenAI-compatible Responses 中转。
+- `GET /api/console/snapshot`：返回当前登录组织的真实模型、密钥、请求、发布与审计摘要。
+- `POST /api/console/api-keys`：创建只显示一次的 API Key。
+- `DELETE /api/console/api-keys/:id`：撤销当前用户或管理员有权操作的 API Key。
+- `POST /api/auth/password`：验证当前密码后更新密码、撤销所有会话并要求重新登录。
 - `GET /api/v1/downloads`：无需登录，返回公开发布目录；只有管理员上传并标记可用的正式包才包含下载地址。
 - `GET /api/v1/downloads/:id`：无需登录，只允许下载处于正式发布状态且绑定真实 R2 对象的稳定版本。
 - `GET /api/admin/control`：管理员读取当前组织的用户、模型、源文件、版本、套餐与看板指标。

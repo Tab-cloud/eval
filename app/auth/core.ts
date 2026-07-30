@@ -65,6 +65,9 @@ async function initializeSchema() {
     "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, expires_at integer NOT NULL, created_at integer NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_uq ON auth_sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id)",
+    "CREATE TABLE IF NOT EXISTS auth_login_attempts (key_hash text PRIMARY KEY NOT NULL, failed_count integer DEFAULT 0 NOT NULL, first_failed_at integer NOT NULL, blocked_until integer, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata text, created_at integer NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
   ];
   await db.batch(statements.map(sql => db.prepare(sql)));
 
@@ -104,6 +107,37 @@ export async function authenticateEmail(email: string, password: string): Promis
   return mapUser(row);
 }
 
+export async function loginAttemptKey(email: string, request: Request) {
+  const address = request.headers.get("cf-connecting-ip") ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  return sha256(`${email.toLowerCase()}:${address}`);
+}
+
+export async function isLoginBlocked(keyHash: string) {
+  await ensureAuthSchema();
+  const now = Math.floor(Date.now() / 1000);
+  const row = await database().prepare("SELECT blocked_until FROM auth_login_attempts WHERE key_hash = ?").bind(keyHash).first<{ blocked_until: number | null }>();
+  return Boolean(row?.blocked_until && row.blocked_until > now);
+}
+
+export async function recordFailedLogin(keyHash: string) {
+  await ensureAuthSchema();
+  const db = database();
+  const now = Math.floor(Date.now() / 1000);
+  const row = await db.prepare("SELECT failed_count, first_failed_at FROM auth_login_attempts WHERE key_hash = ?").bind(keyHash).first<{ failed_count: number; first_failed_at: number }>();
+  const expiredWindow = !row || now - row.first_failed_at > 15 * 60;
+  const failedCount = expiredWindow ? 1 : row.failed_count + 1;
+  const firstFailedAt = expiredWindow ? now : row.first_failed_at;
+  const blockedUntil = failedCount >= 5 ? now + 15 * 60 : null;
+  await db.prepare(
+    "INSERT INTO auth_login_attempts (key_hash, failed_count, first_failed_at, blocked_until, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key_hash) DO UPDATE SET failed_count=excluded.failed_count, first_failed_at=excluded.first_failed_at, blocked_until=excluded.blocked_until, updated_at=excluded.updated_at",
+  ).bind(keyHash, failedCount, firstFailedAt, blockedUntil, now).run();
+}
+
+export async function clearFailedLogins(keyHash: string) {
+  await ensureAuthSchema();
+  await database().prepare("DELETE FROM auth_login_attempts WHERE key_hash = ?").bind(keyHash).run();
+}
+
 export async function createSession(user: AuthenticatedUser): Promise<string> {
   await ensureAuthSchema();
   const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
@@ -140,6 +174,24 @@ export async function revokeSession(token: string | undefined) {
   if (!token) return;
   await ensureAuthSchema();
   await database().prepare("DELETE FROM auth_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+}
+
+export async function changePassword(user: AuthenticatedUser, currentPassword: string, nextPassword: string) {
+  await ensureAuthSchema();
+  const db = database();
+  const credential = await db.prepare("SELECT password_hash, password_salt, iterations FROM password_credentials WHERE user_id = ?")
+    .bind(user.id).first<{ password_hash: string; password_salt: string; iterations: number }>();
+  if (!credential || !await verifyPassword(currentPassword, credential.password_salt, credential.iterations, credential.password_hash)) return false;
+  const next = await createPasswordHash(nextPassword);
+  const now = Math.floor(Date.now() / 1000);
+  await db.batch([
+    db.prepare("UPDATE password_credentials SET password_hash = ?, password_salt = ?, iterations = ?, updated_at = ? WHERE user_id = ?")
+      .bind(next.passwordHash, next.salt, next.iterations, now, user.id),
+    db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(user.id),
+    db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'auth.password.change', 'user', ?, '{}', ?)")
+      .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, user.id, now),
+  ]);
+  return true;
 }
 
 export function sessionCookie(token: string, secure: boolean) {

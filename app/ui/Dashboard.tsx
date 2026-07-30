@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { useTheme } from "./useTheme";
 
 type DashboardUser = { email: string; displayName: string; tenantName: string; role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer" };
+type ConsoleSnapshot = {
+  generatedAt: number;
+  metrics: { requests: number; todayRequests: number; tokens: number; averageLatency: number; successRate: number | null; activeMembers: number; totalMembers: number; activeModels: number; activeKeys: number };
+  models: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; status: string; requestsPerMinute: number; updatedAt: number }>;
+  keys: Array<{ id: string; name: string; prefix: string; scopes: string[]; expiresAt: number | null; lastUsedAt: number | null; revokedAt: number | null; createdAt: number; ownerName: string }>;
+  recentRequests: Array<{ id: string; endpoint: string; statusCode: number; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; modelName: string; keyPrefix: string }>;
+  releases: Array<{ id: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string }>;
+  audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
+  dailyUsage: Array<{ day: number; requests: number }>;
+};
 
 const nav: { id: string; label: string; icon: IconName }[] = [
   { id: "overview", label: "总览", icon: "grid" },
@@ -17,21 +27,14 @@ const nav: { id: string; label: string; icon: IconName }[] = [
   { id: "downloads", label: "下载中心", icon: "download" },
 ];
 
-const models = [
-  { mark: "O", name: "GPT-5.2", vendor: "OpenAI", state: "正常", latency: "682 ms", usage: "41.8%", tone: "blue" },
-  { mark: "C", name: "Claude 4.5 Sonnet", vendor: "Anthropic", state: "正常", latency: "741 ms", usage: "27.4%", tone: "sand" },
-  { mark: "G", name: "Gemini 3 Pro", vendor: "Google", state: "正常", latency: "890 ms", usage: "18.2%", tone: "sky" },
-  { mark: "D", name: "DeepSeek V3.2", vendor: "DeepSeek", state: "维护", latency: "1.2 s", usage: "8.6%", tone: "indigo" },
-];
-
-const moduleDetails: Record<string, { chapter: string; kicker: string; title: string; description: string; stats: [string, string][]; rows: [string, string, string][] }> = {
-  models: { chapter: "MODEL FIELD", kicker: "模型集合", title: "选择智能，\n不被供应商束缚。", description: "统一查看模型能力、健康状态与租户授权，让每个团队在正确的任务上调用正确的模型。", stats: [["24", "可用模型"], ["4", "模型供应商"], ["99.98%", "网关可用率"]], rows: [["GPT-5.2", "生产可用", "682 ms"], ["Claude 4.5 Sonnet", "生产可用", "741 ms"], ["Gemini 3 Pro", "生产可用", "890 ms"]] },
-  routes: { chapter: "ROUTING LAYER", kicker: "智能路由", title: "每一次请求，\n都走向更好的答案。", description: "以延迟、成本、地域和健康状态为信号，在模型之间完成可解释的流量调度与故障转移。", stats: [["8", "活动策略"], ["32 ms", "路由开销"], ["0.02%", "故障转移率"]], rows: [["生产默认路由", "运行中", "68% 流量"], ["低延迟路由", "运行中", "21% 流量"], ["分析任务路由", "观察中", "11% 流量"]] },
-  keys: { chapter: "CREDENTIAL VAULT", kicker: "访问凭证", title: "授权调用，\n不交出控制权。", description: "为环境与团队分别签发最小权限凭证，所有使用、轮换与撤销动作都进入审计链。", stats: [["12", "活动密钥"], ["3", "权限范围"], ["0", "异常调用"]], rows: [["Production Gateway", "models:invoke", "2 分钟前"], ["Analytics Readonly", "read:all", "1 小时前"], ["Staging Agent", "models:invoke", "昨天"]] },
-  users: { chapter: "ORGANIZATION", kicker: "用户与组织", title: "让协作扩张，\n让边界保持清晰。", description: "以租户、团队和成员关系组织协作，每个身份只看见被授权的资源与操作。", stats: [["36", "组织成员"], ["6", "协作团队"], ["4", "待处理邀请"]], rows: [["产品研发组", "12 名成员", "正常"], ["智能硬件组", "9 名成员", "正常"], ["数据分析组", "7 名成员", "正常"]] },
-  access: { chapter: "GOVERNANCE", kicker: "权限策略", title: "自主运行，\n始终处于治理之中。", description: "角色权限、资源归属与租户隔离共同组成不可绕过的控制边界。", stats: [["5", "系统角色"], ["18", "生效策略"], ["100%", "审计覆盖"]], rows: [["租户管理员", "全局管理", "5 名成员"], ["开发者", "模型调用", "18 名成员"], ["审计员", "只读审计", "3 名成员"]] },
-  analytics: { chapter: "SIGNAL ROOM", kicker: "用量分析", title: "看见消耗，\n也看见价值。", description: "从团队、密钥、模型与错误维度理解调用质量，让成本决策建立在真实信号之上。", stats: [["12.6M", "七日请求"], ["$8,429", "本月消费"], ["12.8%", "调用增长"]], rows: [["产品研发组", "4.8M 请求", "$3,214"], ["智能客服组", "3.1M 请求", "$2,087"], ["数据分析组", "2.4M 请求", "$1,662"]] },
-  downloads: { chapter: "RELEASE VAULT", kicker: "工具发布", title: "把能力带回，\n你的工程现场。", description: "公开安装包由管理员审核与上传；正式发布前不展示虚假文件、大小或下载地址。", stats: [["2", "实际构建格式"], ["0", "当前公开包"], ["PUBLIC", "访客权限"]], rows: [["Windows x64 安装程序", "NSIS · .exe", "等待管理员上传"], ["Windows x64 企业部署包", "MSI · .msi", "等待管理员上传"], ["公开下载目录", "无需登录", "已就绪"]] },
+const moduleCopy: Record<string, { chapter: string; kicker: string; title: string; description: string }> = {
+  models: { chapter: "MODEL FIELD", kicker: "模型集合", title: "选择智能，\n不被供应商束缚。", description: "这里只显示管理员已真实接入并授权给当前组织的模型。" },
+  routes: { chapter: "ROUTING LAYER", kicker: "请求入口", title: "每一次请求，\n都有真实去向。", description: "当前版本按请求模型精确路由；健康加权与故障转移将在产生真实运行数据后开放。" },
+  keys: { chapter: "CREDENTIAL VAULT", kicker: "访问凭证", title: "授权调用，\n不交出控制权。", description: "密钥只显示一次、仅保存哈希，并绑定当前组织、拥有者与最小权限范围。" },
+  users: { chapter: "ORGANIZATION", kicker: "用户与组织", title: "让协作扩张，\n让边界保持清晰。", description: "成员身份与组织边界由服务端会话和租户关系共同决定。" },
+  access: { chapter: "GOVERNANCE", kicker: "权限策略", title: "自主运行，\n始终处于治理之中。", description: "当前角色、密钥 Scope 与租户边界共同构成不可绕过的控制条件。" },
+  analytics: { chapter: "SIGNAL ROOM", kicker: "真实用量", title: "看见调用，\n再做成本决策。", description: "指标来自网关真实请求记录，不再展示推测或演示数据。" },
+  downloads: { chapter: "RELEASE VAULT", kicker: "工具发布", title: "把能力带回，\n你的工程现场。", description: "这里只展示管理员上传、绑定并正式发布的真实安装包。" },
 };
 
 function ParticleField() {
@@ -149,63 +152,104 @@ function Metric({ label, value, note, tone, featured = false }: { label: string;
   </article>;
 }
 
-function Overview({ onCreate }: { onCreate: () => void }) {
+function Overview({ snapshot, loading, onCreate, onNavigate }: { snapshot: ConsoleSnapshot | null; loading: boolean; onCreate: () => void; onNavigate: (id: string) => void }) {
+  const metrics = snapshot?.metrics;
+  const ready = Boolean(metrics?.activeModels && metrics?.activeKeys);
+  const recent = snapshot?.recentRequests ?? [];
+  const models = snapshot?.models ?? [];
+  const maxDaily = Math.max(1, ...(snapshot?.dailyUsage ?? []).map(item => Number(item.requests)));
   return <>
     <section className="overview-hero surface">
       <div className="hero-refraction" aria-hidden="true"/>
-      <div className="hero-copy"><div className="status-label"><span/>服务运行正常</div><h1>一个入口。<br/>连接所有模型。</h1><p>在一个清晰、安全的控制台中管理模型、访问权限和每一次调用。</p><div className="hero-actions"><button className="primary" onClick={onCreate}><Icon name="plus"/>创建 API 密钥</button><button className="plain-button">阅读开发文档 <Icon name="arrow"/></button></div></div>
+      <div className="hero-copy"><div className={`status-label${ready ? "" : " pending"}`}><span/>{loading ? "正在读取控制平面" : ready ? "网关已具备调用条件" : "等待完成模型与密钥配置"}</div><h1>一个入口。<br/>连接所有模型。</h1><p>所有数字均来自当前组织的真实配置和网关请求，不再使用演示指标。</p><div className="hero-actions"><button className="primary" onClick={onCreate}><Icon name="plus"/>创建 API 密钥</button><a className="plain-button" href="/docs">阅读开发文档 <Icon name="arrow"/></a></div></div>
       <div className="gateway-card">
-        <div className="gateway-head"><span>Gateway</span><span className="availability">99.98%</span></div>
-        <div className="gateway-score"><strong>1.84M</strong><span>今日请求</span></div>
+        <div className="gateway-head"><span>Gateway</span><span className="availability">{ready ? "READY" : "SETUP"}</span></div>
+        <div className="gateway-score"><strong>{loading ? "—" : compact(metrics?.todayRequests ?? 0)}</strong><span>过去 24 小时请求</span></div>
         <div className="gateway-list">
-          <div><span><i className="dot green"/>亚太</span><b>18 ms</b></div>
-          <div><span><i className="dot green"/>北美</span><b>42 ms</b></div>
-          <div><span><i className="dot green"/>欧洲</span><b>36 ms</b></div>
+          <div><span><i className={`dot ${metrics?.activeModels ? "green" : ""}`}/>模型配置</span><b>{metrics?.activeModels ?? 0}</b></div>
+          <div><span><i className={`dot ${metrics?.activeKeys ? "green" : ""}`}/>活动密钥</span><b>{metrics?.activeKeys ?? 0}</b></div>
+          <div><span><i className={`dot ${metrics?.requests ? "green" : ""}`}/>平均延迟</span><b>{metrics?.averageLatency ? `${metrics.averageLatency} ms` : "—"}</b></div>
         </div>
       </div>
     </section>
 
     <section className="content-section metrics-section">
-      <div className="section-intro"><div><p>实时态势</p><h2>今天，一切运行顺畅。</h2></div><span>所有关键指标均在预期范围内</span></div>
+      <div className="section-intro"><div><p>真实态势</p><h2>{metrics?.requests ? "每一次调用，都已被记录。" : "从第一条真实调用开始。"}</h2></div><span>{snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "正在同步"}</span></div>
       <div className="metric-grid">
-        <Metric label="今日请求" value="1.84M" note="较昨日增长 12.8%" tone="blue" featured/>
-        <Metric label="本月消费" value="$8,429" note="已使用预算的 63%" tone="graphite"/>
-        <Metric label="平均延迟" value="726 ms" note="较上周降低 8.3%" tone="violet"/>
-        <Metric label="成功率" value="99.98%" note="过去 30 天" tone="green"/>
+        <Metric label="30 日请求" value={loading ? "—" : compact(metrics?.requests ?? 0)} note="来自网关调用记录" tone="blue" featured/>
+        <Metric label="Token 用量" value={loading ? "—" : compact(metrics?.tokens ?? 0)} note="上游返回用量时记录" tone="graphite"/>
+        <Metric label="平均延迟" value={metrics?.averageLatency ? `${metrics.averageLatency} ms` : "—"} note="最近 30 天" tone="violet"/>
+        <Metric label="成功率" value={metrics?.successRate === null || metrics?.successRate === undefined ? "—" : `${metrics.successRate}%`} note="HTTP 2xx–3xx" tone="green"/>
       </div>
     </section>
 
     <section className="content-section traffic-section">
-      <div className="section-intro"><div><p>流量脉络</p><h2>让每一次调用都清晰可见。</h2></div><span>过去 7 天 · 实时更新</span></div>
+      <div className="section-intro"><div><p>流量脉络</p><h2>让每一次调用都清晰可见。</h2></div><span>过去 7 天 · 真实记录</span></div>
       <div className="dashboard-grid"><article className="surface chart-card">
-        <div className="card-head"><div><p>请求趋势</p><h2>模型调用量</h2></div><div className="segmented"><button className="active">7 天</button><button>30 天</button><button>90 天</button></div></div>
-        <div className="chart-summary"><strong>12.6M</strong><span>过去 7 天</span></div>
-        <div className="chart"><div className="grid-lines"/><svg viewBox="0 0 700 180" preserveAspectRatio="none" aria-label="过去七天的调用量折线图"><path className="line" d="M0 150 C65 135 82 72 145 94 S230 148 285 92 S368 42 420 78 S510 142 560 79 S640 36 700 42"/></svg><div className="chart-labels"><span>周一</span><span>周二</span><span>周三</span><span>周四</span><span>周五</span><span>周六</span><span>今天</span></div></div>
+        <div className="card-head"><div><p>请求趋势</p><h2>模型调用量</h2></div><div className="segmented"><button className="active">7 天</button></div></div>
+        <div className="chart-summary"><strong>{compact((snapshot?.dailyUsage ?? []).reduce((sum, item) => sum + Number(item.requests), 0))}</strong><span>过去 7 天</span></div>
+        {(snapshot?.dailyUsage.length ?? 0) > 0 ? <div className="real-chart" aria-label="过去七天的真实调用量">{snapshot!.dailyUsage.map(item => <i key={item.day} style={{ height: `${Math.max(8, Number(item.requests) / maxDaily * 100)}%` }} title={`${item.requests} 次请求`}/>)}</div> : <EmptyConsole text="尚无网关调用。创建密钥并完成第一次请求后，趋势会出现在这里。"/>}
       </article>
       <article className="surface activity-card">
-        <div className="card-head"><div><p>实时活动</p><h2>最近调用</h2></div><button className="round-button" aria-label="查看全部"><Icon name="arrow"/></button></div>
-        <div className="activity-list">{[["GPT-5.2","产品研发组","刚刚","684 ms"],["Claude 4.5","内容策略组","12 秒前","731 ms"],["Gemini 3 Pro","数据分析组","28 秒前","902 ms"],["GPT-5.2","智能客服组","41 秒前","612 ms"]].map((item, i) => <div className="activity" key={i}><span className="activity-mark">{item[0][0]}</span><div><b>{item[0]}</b><small>{item[1]} · {item[2]}</small></div><code>{item[3]}</code></div>)}</div>
+        <div className="card-head"><div><p>实时活动</p><h2>最近调用</h2></div><button className="round-button" aria-label="查看用量分析" onClick={() => onNavigate("analytics")}><Icon name="arrow"/></button></div>
+        {recent.length ? <div className="activity-list">{recent.slice(0,4).map(item => <div className="activity" key={item.id}><span className="activity-mark">{item.modelName[0]}</span><div><b>{item.modelName}</b><small>{item.endpoint} · {formatRelative(item.createdAt)}</small></div><code>{item.latencyMs} ms</code></div>)}</div> : <EmptyConsole text="还没有真实调用记录。"/>}
       </article></div>
     </section>
 
     <section className="content-section models-section">
-      <div className="section-intro"><div><p>模型目录</p><h2>模型，始终在最佳状态。</h2></div><button className="plain-button">管理模型 <Icon name="arrow"/></button></div>
+      <div className="section-intro"><div><p>模型目录</p><h2>{models.length ? "已接入的模型，清晰可见。" : "尚未接入模型。"}</h2></div><button className="plain-button" onClick={() => onNavigate("models")}>管理模型 <Icon name="arrow"/></button></div>
       <div className="surface models-card">
-        <div className="model-table"><div className="model-row model-header"><span>模型</span><span>状态</span><span>平均延迟</span><span>流量占比</span><span/></div>{models.map(model => <div className="model-row" key={model.name}><span className="model-name"><i className={model.tone}>{model.mark}</i><span><b>{model.name}</b><small>{model.vendor}</small></span></span><span className={`model-state ${model.state === "正常" ? "online" : "maintenance"}`}><i/>{model.state}</span><code>{model.latency}</code><span className="usage"><span><i style={{ width: model.usage }}/></span>{model.usage}</span><button className="round-button small" aria-label={`查看 ${model.name}`}><Icon name="chevron"/></button></div>)}</div>
+        {models.length ? <div className="model-table"><div className="model-row model-header"><span>模型</span><span>状态</span><span>RPM</span><span>上游模型</span><span/></div>{models.map(model => <div className="model-row" key={model.id}><span className="model-name"><i className="blue">{model.displayName[0]}</i><span><b>{model.displayName}</b><small>{model.provider}</small></span></span><span className={`model-state ${model.status === "active" ? "online" : "maintenance"}`}><i/>{model.status === "active" ? "正常" : "维护"}</span><code>{model.requestsPerMinute}</code><span className="usage">{model.modelId}</span><button className="round-button small" aria-label={`查看 ${model.displayName}`} onClick={() => onNavigate("models")}><Icon name="chevron"/></button></div>)}</div> : <EmptyConsole text="管理员需要先在控制室配置模型地址和部署密钥引用。"/>}
       </div>
     </section>
   </>;
 }
 
-function Coming({ id }: { id: string }) {
+function Coming({ id, snapshot, onCreateKey, onRevokeKey }: { id: string; snapshot: ConsoleSnapshot | null; onCreateKey: () => void; onRevokeKey: (id: string) => void }) {
   const item = nav.find(entry => entry.id === id) ?? nav[0];
-  const detail = moduleDetails[id] ?? moduleDetails.models;
+  const detail = moduleCopy[id] ?? moduleCopy.models;
+  const { stats, rows } = moduleData(id, snapshot);
   return <section className="subpage cinematic-subpage">
     <div className="subpage-chapter"><span>CONTROL ROOM</span><i/><span>{detail.chapter}</span></div>
     <div className="subhero surface"><div className="subhero-copy"><p>{detail.kicker}</p><h1>{detail.title.split("\n").map((line, index) => <span key={line}>{line}{index === 0 && <br/>}</span>)}</h1><strong>{detail.description}</strong></div><div className="subhero-signal"><div className="subicon"><Icon name={item.icon}/></div><small>MODULE / {item.id.toUpperCase()}</small><b>ONLINE</b></div></div>
-    <div className="sub-stat-grid">{detail.stats.map(([value, label], index) => <article className="surface" key={label}><span>0{index + 1}</span><strong>{value}</strong><small>{label}</small></article>)}</div>
-    <div className="sub-ledger"><div className="sub-ledger-head"><span>LIVE DIRECTORY</span><span>STATUS / NOW</span></div>{detail.rows.map(([name, meta, state], index) => <article key={name}><span>0{index + 1}</span><h2>{name}</h2><p>{meta}</p><b><i/>{state}</b><button aria-label={`查看 ${name}`}><Icon name="arrow"/></button></article>)}</div>
+    <div className="sub-stat-grid">{stats.map(([value, label], index) => <article className="surface" key={label}><span>0{index + 1}</span><strong>{value}</strong><small>{label}</small></article>)}</div>
+    <div className="sub-ledger"><div className="sub-ledger-head"><span>LIVE DIRECTORY</span><span>STATUS / NOW</span></div>{rows.length ? rows.map(([name, meta, state, resourceId], index) => <article key={`${name}-${index}`}><span>0{index + 1}</span><h2>{name}</h2><p>{meta}</p><b><i/>{state}</b>{id === "keys" && resourceId && state !== "已撤销" ? <button aria-label={`撤销 ${name}`} onClick={() => onRevokeKey(resourceId)}><Icon name="logout"/></button> : <span/>}</article>) : <EmptyConsole text={id === "keys" ? "尚未创建 API 密钥。" : "当前组织暂无真实数据。"}/>}</div>
+    {id === "keys" && <button className="primary subpage-action" onClick={onCreateKey}><Icon name="plus"/>创建 API 密钥</button>}
   </section>;
+}
+
+function EmptyConsole({ text }: { text: string }) {
+  return <div className="console-empty"><i/><p>{text}</p></div>;
+}
+
+type DataRow = [string, string, string, string?];
+function moduleData(id: string, snapshot: ConsoleSnapshot | null): { stats: [string, string][]; rows: DataRow[] } {
+  const metrics = snapshot?.metrics;
+  if (id === "models") return {
+    stats: [[String(metrics?.activeModels ?? 0), "活动模型"], [String(snapshot?.models.length ?? 0), "全部配置"], [String(new Set((snapshot?.models ?? []).map(item => item.provider)).size), "供应商"]],
+    rows: (snapshot?.models ?? []).map(item => [item.displayName, `${item.provider} · ${item.modelId}`, item.status === "active" ? "可调用" : "维护"]),
+  };
+  if (id === "keys") return {
+    stats: [[String(metrics?.activeKeys ?? 0), "活动密钥"], [String(snapshot?.keys.length ?? 0), "全部密钥"], ["HASHED", "存储方式"]],
+    rows: (snapshot?.keys ?? []).map(item => [item.name, `${item.prefix}… · ${item.scopes.join(", ")}`, item.revokedAt ? "已撤销" : item.expiresAt && item.expiresAt < Date.now()/1000 ? "已过期" : item.lastUsedAt ? formatRelative(item.lastUsedAt) : "尚未使用", item.id]),
+  };
+  if (id === "users") return { stats: [[String(metrics?.totalMembers ?? 0), "组织成员"], [String(metrics?.activeMembers ?? 0), "活动成员"], ["SERVER", "租户边界"]], rows: [] };
+  if (id === "access") return { stats: [["5", "系统角色"], [String(snapshot?.audits.length ?? 0), "近期审计"], ["ENFORCED", "服务端校验"]], rows: (snapshot?.audits ?? []).slice(0,8).map(item => [item.action, item.resourceType, formatRelative(item.createdAt)]) };
+  if (id === "analytics") return { stats: [[compact(metrics?.requests ?? 0), "30 日请求"], [compact(metrics?.tokens ?? 0), "Token"], [metrics?.successRate == null ? "—" : `${metrics.successRate}%`, "成功率"]], rows: (snapshot?.recentRequests ?? []).map(item => [item.modelName, `${item.inputTokens + item.outputTokens} tokens`, `${item.statusCode} · ${item.latencyMs} ms`]) };
+  if (id === "downloads") return { stats: [[String(snapshot?.releases.filter(item => item.status === "published").length ?? 0), "公开版本"], [String(snapshot?.releases.length ?? 0), "版本记录"], ["R2", "文件存储"]], rows: (snapshot?.releases ?? []).map(item => [`v${item.version}`, `${item.format} · ${item.fileName}`, item.status === "published" ? "已发布" : "草稿"]) };
+  return { stats: [[String(metrics?.activeModels ?? 0), "精确路由模型"], [String(metrics?.requests ?? 0), "已记录请求"], ["NEXT", "健康加权路由"]], rows: (snapshot?.models ?? []).map(item => [item.displayName, item.modelId, `${item.requestsPerMinute} RPM`]) };
+}
+
+function compact(value: number) {
+  return Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+function formatTime(value: number) { return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }
+function formatRelative(value: number) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - value));
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return new Date(value * 1000).toLocaleDateString("zh-CN");
 }
 
 export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
@@ -217,18 +261,86 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
   const [mobileMenu, setMobileMenu] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
+  const [keySaving, setKeySaving] = useState(false);
+  const [createdSecret, setCreatedSecret] = useState("");
+  const [passwordModal, setPasswordModal] = useState(false);
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const { theme, toggleTheme } = useTheme();
+  const refreshSnapshot = useCallback(async () => {
+    try {
+      const response = await fetch("/api/console/snapshot", { cache: "no-store" });
+      if (!response.ok) throw new Error("snapshot failed");
+      setSnapshot(await response.json());
+    } catch {
+      setToast("控制平面数据同步失败，请稍后重试");
+    } finally {
+      setSnapshotLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setSearch(true); }
-      if (event.key === "Escape") { setModal(false); setSearch(false); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); }
+      if (event.key === "Escape") { setModal(false); setPasswordModal(false); setSearch(false); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refreshSnapshot(), 0);
+    const timer = window.setInterval(() => void refreshSnapshot(), 30_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [refreshSnapshot]);
 
-  const saveKey = () => { setModal(false); setToast("API 密钥已创建，请立即安全保存"); setTimeout(() => setToast(""), 3000); };
+  const saveKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (keySaving) return;
+    setKeySaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/console/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.get("name"), scopes: form.getAll("scopes"), expiresInDays: Number(form.get("expiresInDays")) }),
+      });
+      const payload = await response.json() as { key?: { secret: string }; error?: string };
+      if (!response.ok || !payload.key) throw new Error(payload.error || "创建密钥失败。");
+      setCreatedSecret(payload.key.secret);
+      await refreshSnapshot();
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "创建密钥失败。");
+    } finally {
+      setKeySaving(false);
+    }
+  };
+  const revokeKey = async (id: string) => {
+    if (!window.confirm("撤销后该密钥将立即失效，且无法恢复。确定继续吗？")) return;
+    const response = await fetch(`/api/console/api-keys/${id}`, { method: "DELETE" });
+    const payload = await response.json() as { error?: string };
+    setToast(response.ok ? "API 密钥已撤销" : payload.error || "撤销失败");
+    if (response.ok) await refreshSnapshot();
+  };
+  const closeKeyModal = () => { setModal(false); setCreatedSecret(""); };
+  const updatePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (passwordSaving) return;
+    setPasswordSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword: form.get("currentPassword"), nextPassword: form.get("nextPassword") }) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "密码修改失败。");
+      location.href = "/login";
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "密码修改失败。");
+      setPasswordSaving(false);
+    }
+  };
   const navigate = (id: string) => { setActive(id); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); };
   const logout = async () => {
     if (logoutLoading) return;
@@ -260,18 +372,19 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
           <button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}>分析</button>
           <button className={active === "downloads" ? "active" : ""} onClick={() => navigate("downloads")}>下载</button>
         </nav>
-        <div className="header-actions"><button className="command-trigger" onClick={() => setSearch(true)}><Icon name="search"/><span>搜索</span><kbd>⌘ K</kbd></button><span className="region"><i/>CN East</span><button className="round-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><button className="round-button" aria-label="通知"><Icon name="bell"/><i className="notify"/></button><button className={`avatar account-button${accountOpen ? " active" : ""}`} onClick={() => setAccountOpen(open => !open)} aria-expanded={accountOpen} aria-haspopup="menu" aria-label={`${currentUser.displayName}，${roleLabel}`}>{avatarText}</button>{accountOpen && <div className="account-popover" role="menu"><div className="account-popover-head"><span className="avatar">{avatarText}</span><div><b>{currentUser.displayName}</b><small>{currentUser.email}</small></div></div><div className="account-context"><span>当前组织</span><b>{currentUser.tenantName}</b><small>{roleLabel}</small></div>{isAdmin && <a className="account-admin-link" href="/admin" role="menuitem"><Icon name="shield"/><span><b>管理员控制室</b><small>用户、模型、发布与收费配置</small></span><Icon name="arrow"/></a>}<button className="account-logout" onClick={() => void logout()} disabled={logoutLoading} role="menuitem"><Icon name="logout"/><span>{logoutLoading ? "正在退出…" : "退出登录"}</span><Icon name="arrow"/></button></div>}</div>
+        <div className="header-actions"><button className="command-trigger" onClick={() => setSearch(true)}><Icon name="search"/><span>搜索</span><kbd>⌘ K</kbd></button><span className="region"><i/>CN East</span><button className="round-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><button className="round-button" aria-label="查看近期审计" onClick={() => navigate("access")}><Icon name="bell"/>{snapshot?.audits.length ? <i className="notify"/> : null}</button><button className={`avatar account-button${accountOpen ? " active" : ""}`} onClick={() => setAccountOpen(open => !open)} aria-expanded={accountOpen} aria-haspopup="menu" aria-label={`${currentUser.displayName}，${roleLabel}`}>{avatarText}</button>{accountOpen && <div className="account-popover" role="menu"><div className="account-popover-head"><span className="avatar">{avatarText}</span><div><b>{currentUser.displayName}</b><small>{currentUser.email}</small></div></div><div className="account-context"><span>当前组织</span><b>{currentUser.tenantName}</b><small>{roleLabel}</small></div>{isAdmin && <a className="account-admin-link" href="/admin" role="menuitem"><Icon name="shield"/><span><b>管理员控制室</b><small>用户、模型、发布与收费配置</small></span><Icon name="arrow"/></a>}<button className="account-password" onClick={() => { setAccountOpen(false); setPasswordModal(true); }} role="menuitem"><Icon name="key"/><span>修改登录密码</span><Icon name="arrow"/></button><button className="account-logout" onClick={() => void logout()} disabled={logoutLoading} role="menuitem"><Icon name="logout"/><span>{logoutLoading ? "正在退出…" : "退出登录"}</span><Icon name="arrow"/></button></div>}</div>
       </div>
     </header>
     <main>
-      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>2026 年 7 月 19 日</p><h2>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>刚刚更新</div>}</div>{active === "overview" ? <Overview onCreate={() => setModal(true)}/> : <Coming id={active}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>{currentUser.tenantName}</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
+      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</p><h2>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>{snapshotLoading ? "正在同步" : "真实数据"}</div>}</div>{active === "overview" ? <Overview snapshot={snapshot} loading={snapshotLoading} onCreate={() => { setCreatedSecret(""); setModal(true); }} onNavigate={navigate}/> : <Coming id={active} snapshot={snapshot} onCreateKey={() => { setCreatedSecret(""); setModal(true); }} onRevokeKey={id => void revokeKey(id)}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>{currentUser.tenantName}</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
     </main>
 
     <nav className="mobile-dock" aria-label="移动端导航"><button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}><Icon name="grid"/><span>总览</span></button><button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}><Icon name="model"/><span>模型</span></button><button className={active === "routes" ? "active" : ""} onClick={() => navigate("routes")}><Icon name="route"/><span>路由</span></button><button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}><Icon name="chart"/><span>分析</span></button><button className={mobileMenu || ["keys","users","access","downloads"].includes(active) ? "active" : ""} onClick={() => setMobileMenu(true)}><Icon name="more"/><span>更多</span></button></nav>
 
     {mobileMenu && <div className="overlay mobile-menu-overlay" onMouseDown={event => event.currentTarget === event.target && setMobileMenu(false)}><div className="mobile-menu"><div className="mobile-menu-handle"/><div className="mobile-menu-head"><div><p>Eval Control Room</p><h2>更多功能</h2></div><button onClick={() => setMobileMenu(false)} aria-label="关闭">×</button></div><div className="mobile-menu-grid">{nav.filter(item => ["keys","users","access","downloads"].includes(item.id)).map(item => <button key={item.id} onClick={() => navigate(item.id)}><span><Icon name={item.icon}/></span><b>{item.label}</b><small>{item.id === "keys" ? "凭证管理" : item.id === "users" ? "团队成员" : item.id === "access" ? "角色权限" : "客户端与 SDK"}</small></button>)}</div><div className="mobile-account"><div className="avatar">{avatarText}</div><div><b>{currentUser.displayName}</b><small>{currentUser.tenantName} · {roleLabel}</small></div>{isAdmin && <a className="mobile-admin-link" href="/admin"><Icon name="shield"/>管理</a>}<button className="mobile-logout" onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "退出中" : "退出登录"}</button></div></div></div>}
 
-    {modal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && setModal(false)}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="key"/></div><button onClick={() => setModal(false)} aria-label="关闭">×</button></div><p className="modal-kicker">凭证管理</p><h2>创建 API 密钥</h2><p>密钥只会完整显示一次。所有调用都将绑定当前租户与权限策略。</p><label>密钥名称<input autoFocus defaultValue="Production Gateway"/></label><label>权限范围<select defaultValue="models:invoke"><option value="models:invoke">调用已授权模型</option><option value="read:all">只读访问</option><option value="admin">租户管理员</option></select></label><div className="scope-note"><Icon name="shield"/><span><b>最小权限原则</b><small>建议为不同环境创建独立密钥。</small></span></div><button className="primary full" onClick={saveKey}>创建密钥 <Icon name="arrow"/></button></div></div>}
+    {modal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && closeKeyModal()}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="key"/></div><button onClick={closeKeyModal} aria-label="关闭">×</button></div><p className="modal-kicker">凭证管理</p><h2>{createdSecret ? "保存你的密钥" : "创建 API 密钥"}</h2>{createdSecret ? <div className="secret-once"><p>这是唯一一次完整显示。关闭后无法再次查看。</p><code>{createdSecret}</code><button className="primary full" onClick={() => { void navigator.clipboard.writeText(createdSecret); setToast("密钥已复制"); }}><Icon name="key"/>复制密钥</button><button className="plain-button full" onClick={closeKeyModal}>我已安全保存</button></div> : <form onSubmit={event => void saveKey(event)}><p>密钥只会完整显示一次。租户由服务端根据密钥反查，不接受客户端指定。</p><label>密钥名称<input name="name" autoFocus defaultValue="Production Gateway" required minLength={2} maxLength={64}/></label><fieldset className="scope-fields"><legend>权限范围</legend><label><input name="scopes" type="checkbox" value="models:read" defaultChecked/>读取模型目录</label><label><input name="scopes" type="checkbox" value="models:invoke" defaultChecked/>调用已授权模型</label><label><input name="scopes" type="checkbox" value="usage:read"/>读取用量</label></fieldset><label>有效期<select name="expiresInDays" defaultValue="90"><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="0">永不过期</option></select></label><div className="scope-note"><Icon name="shield"/><span><b>最小权限原则</b><small>建议为生产、测试与本地开发分别创建密钥。</small></span></div><button className="primary full" disabled={keySaving}>{keySaving ? "正在创建…" : "创建密钥"} <Icon name="arrow"/></button></form>}</div></div>}
+    {passwordModal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && setPasswordModal(false)}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="shield"/></div><button onClick={() => setPasswordModal(false)} aria-label="关闭">×</button></div><p className="modal-kicker">账号安全</p><h2>修改登录密码</h2><form onSubmit={event => void updatePassword(event)}><p>修改后会撤销所有已登录会话，需要使用新密码重新登录。</p><label>当前密码<input name="currentPassword" type="password" autoComplete="current-password" required/></label><label>新密码<input name="nextPassword" type="password" autoComplete="new-password" minLength={10} required placeholder="至少 10 位，包含字母与数字"/></label><button className="primary full" disabled={passwordSaving}>{passwordSaving ? "正在更新…" : "更新密码并退出"} <Icon name="arrow"/></button></form></div></div>}
     {search && <div className="overlay search-overlay" onMouseDown={event => event.currentTarget === event.target && setSearch(false)}><div className="command"><div><Icon name="search"/><input autoFocus placeholder="搜索模型、团队、文档或命令"/></div><p>快速前往</p>{nav.slice(0, 5).map(item => <button key={item.id} onClick={() => { setActive(item.id); setSearch(false); }}><Icon name={item.icon}/><span>{item.label}</span><kbd>↵</kbd></button>)}</div></div>}
     {toast && <div className="toast"><Icon name="check"/>{toast}</div>}
   </div>;
