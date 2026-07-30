@@ -1,3 +1,17 @@
+import { postgresDatabase } from "../../../../db/postgres";
+
 export async function GET() {
-  return Response.json({ status: "ok", service: "luban-ai-gateway", version: "0.1.0", timestamp: new Date().toISOString() });
+  const timestamp = new Date().toISOString();
+  try {
+    await postgresDatabase().prepare("SELECT 1 AS ok").first();
+    return Response.json(
+      { status: "ok", service: "eval-agent-web", database: "postgresql", version: "0.2.0", timestamp },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  } catch {
+    return Response.json(
+      { status: "unavailable", service: "eval-agent-web", database: "unreachable", version: "0.2.0", timestamp },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 }

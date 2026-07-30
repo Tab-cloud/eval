@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import { authDatabase } from "../auth/core";
 import { ensureGatewaySchema } from "../console/store";
 import { isResponse, requireApiIdentity, requireScope } from "../api/v1/_shared/auth";
@@ -39,8 +38,7 @@ export async function proxyGateway(request: Request, endpoint: GatewayEndpoint) 
     return Response.json({ error: { code: "RATE_LIMITED", message: "已达到该模型的每分钟请求上限。" } }, { status: 429, headers: { "Retry-After": "60" } });
   }
 
-  const runtime = env as unknown as Record<string, unknown>;
-  const upstreamSecret = runtime[model.secret_ref];
+  const upstreamSecret = process.env[model.secret_ref];
   if (typeof upstreamSecret !== "string" || !upstreamSecret) {
     return gatewayError(503, "PROVIDER_SECRET_MISSING", "模型凭据尚未在部署环境中配置。");
   }

@@ -21,7 +21,8 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "操作失败。";
-    const status = /UNIQUE constraint failed: users.email/.test(message) ? 409 : 400;
+    const databaseCode = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    const status = databaseCode === "23505" || /UNIQUE constraint failed: users.email/.test(message) ? 409 : 400;
     return Response.json({ error: status === 409 ? "该邮箱已经存在。" : message }, { status });
   }
 }

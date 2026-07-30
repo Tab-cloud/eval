@@ -1,39 +1,77 @@
-# Luban AI Cloud Console
+# Eval Agent Web
 
-`eval_web` 是 Luban 的云端 Web 与 API 控制面原型，覆盖企业登录、模型集合管理、路由策略、API 密钥、用户/组织、权限隔离、用量分析和下载中心。
+面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。项目包含公开落地页、邮箱登录、用户控制台、管理员控制室、OpenAI-compatible API、安装包下载和开发者文档。
+
+## 当前架构
+
+项目采用原生 ECS 部署，不依赖 Cloudflare Workers、D1、R2、Vinext 或 Wrangler。
+
+- Web：Next.js 16、Node.js 22，标准 Node Runtime
+- 进程管理：systemd
+- 数据库：PostgreSQL 16+ 或阿里云 RDS PostgreSQL
+- 文件：ECS 独立云盘，目录由 `ARTIFACT_STORAGE_PATH` 指定
+- 入口：Nginx 或阿里云 ALB 终止 HTTPS，转发到 `127.0.0.1:41738`
+- 日志：systemd journal，可接入阿里云日志服务 SLS
+
+生产拓扑、服务器初始化和发布步骤见 [ECS 原生部署说明](./docs/ECS_DEPLOYMENT.md)。
 
 ## 本地启动
 
-需要 Node.js 22.13 或更高版本。
+需要 Node.js 22.13+ 和 PostgreSQL 16+：
 
-```bash
+```powershell
+Copy-Item .env.example .env.local
 npm ci
-copy .env.example .env.local
+npm run db:migrate
 npm run dev
 ```
 
-默认首页 `/` 为 Eval Agent 产品落地页，`/login` 为登录体验，登录完成后进入 `/console` 用户控制台；管理员可从账号菜单进入独立的 `/admin` 控制室，`/agent` 保留为落地页兼容入口。落地页的正式工具包下载不要求登录，健康检查位于 `/api/v1/health`；其余受保护接口需要已验证身份与租户上下文，详见 [架构说明](./docs/ARCHITECTURE.md)。
+默认开发地址为 `http://localhost:41738`。
 
-本地开发环境提供两个初始邮箱账号，密码均为 `123456`：
+## 本地账号
 
-- `user@eval.local`：普通开发者。
-- `admin@eval.local`：租户管理员。
+仅在 `EVAL_ENABLE_SEEDED_ACCOUNTS=true` 时创建：
 
-初始密码仅用于本地开发。生产环境默认不会创建这两个账号；只有显式设置 `EVAL_ENABLE_SEEDED_ACCOUNTS=true` 才会启用。
+- `user@eval.local`：普通开发者
+- `admin@eval.local`：租户管理员
+- 初始密码均为 `123456`
 
-## 当前状态
+生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false`，并通过正式初始化流程创建管理员账号。
 
-- 已完成高保真响应式控制台与登录页。
-- 已定义租户、用户、成员关系、API Key、模型授权、审计和发布物数据模型。
-- 已提供模型目录、公开下载清单与健康检查接口骨架。下载清单仅声明项目实际生成过的 Windows x64 NSIS（`.exe`）和 MSI（`.msi`）格式；管理员上传正式包前保持“待发布”，不填写虚假地址、大小或校验值。
-- 已接通邮箱密码验证、PBKDF2 密码哈希、D1 会话、HttpOnly Cookie 与控制台访问保护。
-- 已接通真实 API Key 生命周期：一次性展示、SHA-256 哈希存储、Scope、有效期、撤销与最近使用时间。
-- 已提供 OpenAI-compatible `/api/v1/chat/completions` 与 `/api/v1/responses` 网关；租户从 API Key 反查，网关记录真实请求、Token、延迟和状态码。
-- 用户控制台指标来自当前组织的真实配置与网关调用；未配置时显示可信空状态，不再展示固定演示数字。
-- 登录接口具备失败次数限制；用户可以修改密码并撤销全部会话；浏览器写操作执行同源校验。
-- 已完成独立管理员控制室：用户与角色、LLM 供应商配置、Agent 安装包源文件、版本发布、套餐规则和管理员数据看板。结构化配置保存在 D1，真实 `.exe`/`.msi` 文件保存在 R2。
-- 收费模块当前只负责套餐、席位、请求额度和功能项配置；支付渠道、扣款与发票尚未接入。管理员可以启停模型、测试 OpenAI-compatible 上游连接、发布或回滚版本、归档套餐。
+## 数据库
 
-## 重要安全约束
+修改 [db/schema.ts](./db/schema.ts) 后生成并执行迁移：
 
-租户 ID 必须由后端从已验证身份中派生。当前开发接口中的 `X-Luban-Tenant` 只用于契约联调，生产网关必须从 API Key 反查租户，所有数据库访问同时附加租户条件，并保留跨租户越权测试。
+```powershell
+npm run db:generate
+npm run db:migrate
+```
+
+所有服务端查询必须附加登录会话或 API Key 派生的 `tenant_id`，不接受客户端提交租户标识。
+
+## 安装包文件
+
+管理员上传的真实 `.exe` 和 `.msi` 文件保存于 `ARTIFACT_STORAGE_PATH`。生产环境应将该目录放在独立云盘或共享文件系统中，并纳入备份。
+
+数据库只记录文件标识、大小、SHA-256、租户归属和发布状态。公开下载接口只返回已正式发布、属于稳定通道且源文件真实存在的版本。
+
+## 主要入口
+
+- `/`：公开落地页与公开下载
+- `/login`：邮箱密码登录
+- `/console`：用户控制台
+- `/admin`：租户管理员控制室
+- `/docs`：开发者接口文档
+- `/api/v1/models`：模型目录
+- `/api/v1/chat/completions`：Chat Completions 中转
+- `/api/v1/responses`：Responses 中转
+- `/api/v1/health`：健康检查
+
+## 生产安全
+
+- PostgreSQL 只开放给应用安全组，不暴露公网端口。
+- 数据库启用 TLS、自动备份和时间点恢复。
+- LLM 密钥只通过 ECS 环境文件或密钥管理服务注入。
+- API Key 仅保存 SHA-256 哈希，完整密钥只在创建时显示一次。
+- 登录 Cookie 使用 HttpOnly、SameSite，并在 HTTPS 下启用 Secure。
+- 安装包目录禁止执行权限，Nginx 限制请求体大小。

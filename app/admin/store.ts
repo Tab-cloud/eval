@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -15,15 +15,15 @@ async function initializeAdminSchema() {
   await ensureAuthSchema();
   const db = authDatabase();
   await db.batch([
-    "CREATE TABLE IF NOT EXISTS llm_configs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, display_name text NOT NULL, provider text NOT NULL, model_id text NOT NULL, base_url text NOT NULL, secret_ref text NOT NULL, status text NOT NULL, requests_per_minute integer NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS llm_configs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, display_name text NOT NULL, provider text NOT NULL, model_id text NOT NULL, base_url text NOT NULL, secret_ref text NOT NULL, status text NOT NULL, requests_per_minute integer NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS llm_configs_tenant_idx ON llm_configs (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes integer NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS agent_artifacts_tenant_idx ON agent_artifacts (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL, notes text NOT NULL, mandatory integer NOT NULL, status text NOT NULL, published_at integer, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS release_versions_tenant_idx ON release_versions (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, request_limit integer NOT NULL, seat_limit integer NOT NULL, features text NOT NULL, status text NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, request_limit bigint NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata text, created_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
   ].map(sql => db.prepare(sql)));
 }
@@ -121,7 +121,7 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const id = text(input.id);
     const config = await db.prepare("SELECT base_url, secret_ref FROM llm_configs WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ base_url: string; secret_ref: string }>();
     if (!config) throw new Error("模型配置不存在。");
-    const secret = (env as unknown as Record<string, unknown>)[config.secret_ref];
+    const secret = process.env[config.secret_ref];
     if (typeof secret !== "string" || !secret) throw new Error(`部署环境尚未配置 ${config.secret_ref}。`);
     let target: URL;
     try { target = new URL("models", config.base_url.endsWith("/") ? config.base_url : `${config.base_url}/`); } catch { throw new Error("模型地址无效。"); }
@@ -144,7 +144,7 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const artifact = await db.prepare("SELECT id FROM agent_artifacts WHERE id = ? AND tenant_id = ?").bind(artifactId, user.tenantId).first();
     if (!artifact) throw new Error("安装包不存在或不属于当前组织。");
     const id = `rel_${crypto.randomUUID()}`;
-    await db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, user.tenantId, version, channel, artifactId, notes, input.mandatory ? 1 : 0, status, status === "published" ? now : null, now, now).run();
+    await db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, user.tenantId, version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now).run();
     await recordAudit(db, user, "release.create", "release_version", id, { version, channel, artifactId, status, mandatory: Boolean(input.mandatory) });
     return { id };
   }
@@ -181,7 +181,7 @@ function text(value: unknown) { return typeof value === "string" ? value.trim() 
 function number(value: unknown, fallback: number) { const parsed = Number(value); return Number.isFinite(parsed) ? Math.round(parsed) : fallback; }
 function allowed<T extends string>(value: string, values: readonly T[], fallback: T): T { return values.includes(value as T) ? value as T : fallback; }
 
-async function recordAudit(db: D1Database, user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>) {
+async function recordAudit(db: PostgresDatabase, user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>) {
   await db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, action, resourceType, resourceId, JSON.stringify(metadata), Math.floor(Date.now() / 1000)).run();
 }

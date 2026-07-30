@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { postgresDatabase, type PostgresDatabase } from "../../db/postgres";
 
 export const SESSION_COOKIE = "eval_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -34,9 +34,8 @@ const seededAccounts = [
 
 let schemaInitialization: Promise<void> | null = null;
 
-function database(): D1Database {
-  if (!env.DB) throw new Error("D1 database binding DB is unavailable.");
-  return env.DB;
+function database(): PostgresDatabase {
+  return postgresDatabase();
 }
 
 export function authDatabase() {
@@ -54,19 +53,19 @@ export function ensureAuthSchema(): Promise<void> {
 async function initializeSchema() {
   const db = database();
   const statements = [
-    "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_uq ON tenants (slug)",
-    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at integer, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
-    "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id), user_id text NOT NULL REFERENCES users(id), role text NOT NULL, created_at integer NOT NULL, updated_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS membership_tenant_user_uq ON memberships (tenant_id, user_id)",
     "CREATE INDEX IF NOT EXISTS membership_tenant_idx ON memberships (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS password_credentials (user_id text PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, password_hash text NOT NULL, password_salt text NOT NULL, iterations integer NOT NULL, updated_at integer NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, expires_at integer NOT NULL, created_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS password_credentials (user_id text PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, password_hash text NOT NULL, password_salt text NOT NULL, iterations integer NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, expires_at bigint NOT NULL, created_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_uq ON auth_sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id)",
-    "CREATE TABLE IF NOT EXISTS auth_login_attempts (key_hash text PRIMARY KEY NOT NULL, failed_count integer DEFAULT 0 NOT NULL, first_failed_at integer NOT NULL, blocked_until integer, updated_at integer NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata text, created_at integer NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_login_attempts (key_hash text PRIMARY KEY NOT NULL, failed_count integer DEFAULT 0 NOT NULL, first_failed_at bigint NOT NULL, blocked_until bigint, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
   ];
   await db.batch(statements.map(sql => db.prepare(sql)));
@@ -77,13 +76,13 @@ async function initializeSchema() {
   const now = Math.floor(Date.now() / 1000);
   const tenantId = "tenant_eval_default";
   const seedStatements = [
-    db.prepare("INSERT OR IGNORE INTO tenants (id, name, slug, plan, status, created_at, updated_at) VALUES (?, ?, ?, 'team', 'active', ?, ?)").bind(tenantId, "正在连接（杭州）科技有限公司", "connecting-hangzhou", now, now),
+    db.prepare("INSERT INTO tenants (id, name, slug, plan, status, created_at, updated_at) VALUES (?, ?, ?, 'team', 'active', ?, ?) ON CONFLICT DO NOTHING").bind(tenantId, "正在连接（杭州）科技有限公司", "connecting-hangzhou", now, now),
   ];
   for (const account of seededAccounts) {
     seedStatements.push(
-      db.prepare("INSERT OR IGNORE INTO users (id, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(account.id, account.email, account.displayName, now, now),
-      db.prepare("INSERT OR IGNORE INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(`mem_${account.id}`, tenantId, account.id, account.role, now, now),
-      db.prepare("INSERT OR IGNORE INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)").bind(account.id, account.passwordHash, account.salt, PASSWORD_ITERATIONS, now),
+      db.prepare("INSERT INTO users (id, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.email, account.displayName, now, now),
+      db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(`mem_${account.id}`, tenantId, account.id, account.role, now, now),
+      db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.passwordHash, account.salt, PASSWORD_ITERATIONS, now),
     );
   }
   await db.batch(seedStatements);
@@ -108,7 +107,9 @@ export async function authenticateEmail(email: string, password: string): Promis
 }
 
 export async function loginAttemptKey(email: string, request: Request) {
-  const address = request.headers.get("cf-connecting-ip") ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  const address = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    ?? request.headers.get("x-real-ip")
+    ?? "local";
   return sha256(`${email.toLowerCase()}:${address}`);
 }
 

@@ -16,7 +16,8 @@
   --green: #248a3d;
   --orange: #c93400;
   --shadow: 0 12px 38px rgba(0, 0, 0, .055);
-  --font: var(--font-geist), -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
 }
 
 html[data-theme="dark"] {

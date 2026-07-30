@@ -15,8 +15,10 @@
 
 # next.js
 /.next/
-/.vinext/
 /out/
+/.vinext/
+/.wrangler/
+/dist/
 
 # misc
 .DS_Store
@@ -37,10 +39,10 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
-/dist/
-/.wrangler/
 /outputs/
 /work/
+/data/
+/.postgres-test/
 
 # Administrator-uploaded release binaries stay outside Git and belong in release storage.
 /public/downloads/*.exe

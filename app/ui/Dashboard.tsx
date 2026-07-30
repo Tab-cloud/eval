@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { useTheme } from "./useTheme";
@@ -236,7 +237,7 @@ function moduleData(id: string, snapshot: ConsoleSnapshot | null): { stats: [str
   if (id === "users") return { stats: [[String(metrics?.totalMembers ?? 0), "组织成员"], [String(metrics?.activeMembers ?? 0), "活动成员"], ["SERVER", "租户边界"]], rows: [] };
   if (id === "access") return { stats: [["5", "系统角色"], [String(snapshot?.audits.length ?? 0), "近期审计"], ["ENFORCED", "服务端校验"]], rows: (snapshot?.audits ?? []).slice(0,8).map(item => [item.action, item.resourceType, formatRelative(item.createdAt)]) };
   if (id === "analytics") return { stats: [[compact(metrics?.requests ?? 0), "30 日请求"], [compact(metrics?.tokens ?? 0), "Token"], [metrics?.successRate == null ? "—" : `${metrics.successRate}%`, "成功率"]], rows: (snapshot?.recentRequests ?? []).map(item => [item.modelName, `${item.inputTokens + item.outputTokens} tokens`, `${item.statusCode} · ${item.latencyMs} ms`]) };
-  if (id === "downloads") return { stats: [[String(snapshot?.releases.filter(item => item.status === "published").length ?? 0), "公开版本"], [String(snapshot?.releases.length ?? 0), "版本记录"], ["R2", "文件存储"]], rows: (snapshot?.releases ?? []).map(item => [`v${item.version}`, `${item.format} · ${item.fileName}`, item.status === "published" ? "已发布" : "草稿"]) };
+  if (id === "downloads") return { stats: [[String(snapshot?.releases.filter(item => item.status === "published").length ?? 0), "公开版本"], [String(snapshot?.releases.length ?? 0), "版本记录"], ["ECS", "持久存储"]], rows: (snapshot?.releases ?? []).map(item => [`v${item.version}`, `${item.format} · ${item.fileName}`, item.status === "published" ? "已发布" : "草稿"]) };
   return { stats: [[String(metrics?.activeModels ?? 0), "精确路由模型"], [String(metrics?.requests ?? 0), "已记录请求"], ["NEXT", "健康加权路由"]], rows: (snapshot?.models ?? []).map(item => [item.displayName, item.modelId, `${item.requestsPerMinute} RPM`]) };
 }
 
@@ -363,7 +364,7 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
     <ParticleField/>
     <header className="topbar">
       <div className="topbar-inner">
-        <button className="brand top-brand" onClick={() => navigate("overview")} aria-label="返回总览"><span className="console-brand-mark"><img src="/favicon.svg" alt=""/></span><span><b>Eval</b><small>Control Room</small></span></button>
+        <button className="brand top-brand" onClick={() => navigate("overview")} aria-label="返回总览"><span className="console-brand-mark"><Image src="/favicon.svg" alt="" width={24} height={24}/></span><span><b>Eval</b><small>Control Room</small></span></button>
         <nav className="topnav" aria-label="主要导航">
           <button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}>总览</button>
           <button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}>模型</button>

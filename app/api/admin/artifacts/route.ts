@@ -1,8 +1,8 @@
-import { env } from "cloudflare:workers";
 import { authDatabase } from "../../../auth/core";
 import { isAdminError, requireAdminRequest } from "../../../auth/admin";
 import { ensureAdminSchema } from "../../../admin/store";
 import { rejectCrossSiteWrite } from "../../../security/request";
+import { deleteArtifact, putArtifact } from "../../../storage/artifacts";
 
 const MAX_ARTIFACT_SIZE = 120 * 1024 * 1024;
 
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   const id = `artifact_${crypto.randomUUID()}`;
   const objectKey = `releases/${user.tenantId}/${id}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-  await env.RELEASES.put(objectKey, bytes, { httpMetadata: { contentType: file.type || "application/octet-stream" }, customMetadata: { tenantId: user.tenantId, sha256 } });
+  await putArtifact(objectKey, bytes);
   const now = Math.floor(Date.now() / 1000);
   const db = authDatabase();
   try {
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'artifact.upload', 'agent_artifact', ?, ?, ?)").bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, id, JSON.stringify({ fileName: file.name, sizeBytes: file.size, sha256 }), now),
     ]);
   } catch (error) {
-    await env.RELEASES.delete(objectKey);
+    await deleteArtifact(objectKey);
     throw error;
   }
   return Response.json({ ok: true, artifact: { id, fileName: file.name, label, format: extension === ".exe" ? "NSIS" : "MSI", sizeBytes: file.size, sha256 } });

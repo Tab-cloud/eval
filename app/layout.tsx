@@ -1,11 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./theme.css";
-
-const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
-const mono = Geist_Mono({ variable: "--font-mono", subsets: ["latin"] });
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -45,7 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${geist.variable} ${mono.variable}`}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

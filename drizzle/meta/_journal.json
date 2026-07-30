@@ -1,33 +1,12 @@
 {
   "version": "7",
-  "dialect": "sqlite",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
       "version": "7",
-      "when": 1784385600000,
-      "tag": "0000_luban_control_plane",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1784446659775,
-      "tag": "0001_long_odin",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1784447911592,
-      "tag": "0002_abnormal_randall",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1785327733949,
-      "tag": "0003_unusual_excalibur",
+      "when": 1785409491416,
+      "tag": "0000_lame_newton_destine",
       "breakpoints": true
     }
   ]

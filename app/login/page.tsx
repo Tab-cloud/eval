@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "../ui/icons";
@@ -42,7 +43,7 @@ export default function LoginPage() {
       pageRef.current?.style.setProperty("--cursor-opacity", "1");
     }} onPointerLeave={() => pageRef.current?.style.setProperty("--cursor-opacity", "0")}>
       <div className="login-cursor-light" aria-hidden="true"/>
-      <Link className="login-brand" href="/"><span><img src="/favicon.svg" alt=""/></span><b>EVAL</b></Link>
+      <Link className="login-brand" href="/"><span><Image src="/favicon.svg" alt="" width={24} height={24}/></span><b>EVAL</b></Link>
       <button className="login-theme" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}>
         <Icon name={theme === "dark" ? "sun" : "moon"}/>
       </button>

@@ -22,7 +22,7 @@ export async function requireApiIdentity(request: Request): Promise<ApiIdentity 
   if (!row || row.tenant_status !== "active" || row.revoked_at || (row.expires_at && Number(row.expires_at) <= now)) return unauthenticated();
   let scopes: string[] = [];
   try {
-    const parsed = JSON.parse(String(row.scopes));
+    const parsed = Array.isArray(row.scopes) ? row.scopes : JSON.parse(String(row.scopes));
     if (Array.isArray(parsed)) scopes = parsed.filter(value => typeof value === "string");
   } catch { return unauthenticated(); }
   await authDatabase().prepare("UPDATE api_keys SET last_used_at = ?, updated_at = ? WHERE id = ?").bind(now, now, row.id).run();

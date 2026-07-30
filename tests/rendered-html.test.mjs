@@ -43,7 +43,8 @@ test("published downloads require a real stored artifact", async () => {
   ]);
   assert.match(catalog, /r\.status = 'published'/);
   assert.match(catalog, /r\.channel = 'stable'/);
-  assert.match(download, /env\.RELEASES\.get/);
+  assert.match(download, /getArtifact/);
+  assert.match(upload, /putArtifact/);
   assert.match(upload, /\.exe/);
   assert.match(upload, /\.msi/);
   assert.match(upload, /SHA-256/);
@@ -105,4 +106,39 @@ test("console reads real snapshots and does not ship the former fixed metrics", 
   assert.match(dashboard, /\/api\/console\/api-keys/);
   assert.match(snapshot, /gateway_requests/);
   assert.doesNotMatch(dashboard, /1\.84M|\$8,429|12\.6M/);
+});
+
+test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
+  const [packageJson, schema, database, migration, storage, service, nginx, hosting, deployment] = await Promise.all([
+    source("../package.json"),
+    source("../db/schema.ts"),
+    source("../db/postgres.ts"),
+    source("../db/migrate.mjs"),
+    source("../app/storage/artifacts.ts"),
+    source("../deploy/systemd/eval-web.service"),
+    source("../deploy/nginx/eval.zailink.space.conf"),
+    source("../docs/ARCHITECTURE.md"),
+    source("../docs/ECS_DEPLOYMENT.md"),
+  ]);
+  assert.match(packageJson, /"build": "next build"/);
+  assert.match(packageJson, /"pg":/);
+  assert.doesNotMatch(packageJson, /vinext|wrangler|cloudflare/i);
+  assert.match(schema, /drizzle-orm\/pg-core/);
+  assert.match(schema, /jsonb/);
+  assert.match(database, /DATABASE_URL/);
+  assert.match(database, /Pool/);
+  assert.match(migration, /pg_advisory_lock/);
+  assert.match(storage, /ARTIFACT_STORAGE_PATH/);
+  assert.match(service, /ExecStartPre=\/usr\/bin\/node db\/migrate\.mjs/);
+  assert.match(service, /ExecStart=\/usr\/bin\/node node_modules\/next\/dist\/bin\/next start --hostname 127\.0\.0\.1 --port 41738/);
+  assert.match(service, /User=eval-web/);
+  assert.match(service, /ProtectSystem=strict/);
+  assert.match(service, /ReadWritePaths=\/srv\/eval-web\/artifacts \/opt\/eval-web\/current\/\.next\/cache/);
+  assert.match(nginx, /server_name eval\.zailink\.space/);
+  assert.match(nginx, /X-Forwarded-Proto/);
+  assert.match(nginx, /proxy_buffering off/);
+  assert.match(hosting, /PostgreSQL/);
+  assert.doesNotMatch(hosting, /\bD1\b|\bR2\b|Cloudflare Workers/);
+  assert.match(deployment, /systemctl enable --now eval-web/);
+  assert.doesNotMatch(deployment, /docker|container/i);
 });

@@ -1,0 +1,38 @@
+[Unit]
+Description=Eval Agent Web
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=eval-web
+Group=eval-web
+WorkingDirectory=/opt/eval-web/current
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=41738
+EnvironmentFile=/etc/eval-web/eval-web.env
+ExecStartPre=/usr/bin/node db/migrate.mjs
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 41738
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0027
+ReadWritePaths=/srv/eval-web/artifacts /opt/eval-web/current/.next/cache
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eval-web
+
+[Install]
+WantedBy=multi-user.target

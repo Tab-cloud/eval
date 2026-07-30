@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import "./style.css";
 
@@ -18,7 +19,7 @@ const chatExample = `curl https://your-domain.example/api/v1/chat/completions \\
 
 export default function DocsPage() {
   return <main className="docs-page">
-    <header><Link href="/"><img src="/favicon.svg" alt=""/><span><b>EVAL</b><small>DEVELOPER SYSTEM</small></span></Link><nav><Link href="/console">控制台</Link><Link href="/login">登录</Link></nav></header>
+    <header><Link href="/"><Image src="/favicon.svg" alt="" width={24} height={24}/><span><b>EVAL</b><small>DEVELOPER SYSTEM</small></span></Link><nav><Link href="/console">控制台</Link><Link href="/login">登录</Link></nav></header>
     <section className="docs-hero"><p>DEVELOPER INTERFACE / V1</p><h1>一个端点。<br/><em>进入所有模型。</em></h1><span>当前接口使用 OpenAI-compatible JSON 契约。租户身份由服务端根据 API Key 反查，客户端不能指定组织。</span></section>
     <section className="docs-grid">
       <aside><p>QUICK START</p>{["认证","模型目录","Chat Completions","Responses","错误与限流"].map((item,index)=><a href={`#section-${index+1}`} key={item}><span>0{index+1}</span>{item}</a>)}</aside>

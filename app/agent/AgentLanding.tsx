@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
 type PublicRelease = {
@@ -46,7 +47,7 @@ const runtimeScenes = [
 ];
 
 function BrandMark() {
-  return <span className="agent-brand-mark"><img src="/favicon.svg" alt=""/></span>;
+  return <span className="agent-brand-mark"><Image src="/favicon.svg" alt="" width={24} height={24}/></span>;
 }
 
 export function AgentLanding() {

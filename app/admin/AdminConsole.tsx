@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
@@ -11,8 +12,8 @@ type Snapshot = {
   llms: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; secretRef: string; status: string; requestsPerMinute: number }>;
   artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; status: string; createdAt: number }>;
   releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
-  plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; requestLimit: number; seatLimit: number; features: string; status: string }>;
-  audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: string; createdAt: number; actorName: string }>;
+  plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; requestLimit: number; seatLimit: number; features: string | string[]; status: string }>;
+  audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
 };
 
 const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconName }> = [
@@ -71,7 +72,7 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
 
   const activeModule = modules.find(item => item.id === active) ?? modules[0];
   return <main className="admin-room">
-    <header className="admin-bar"><a href="/console" className="admin-brand"><span><img src="/favicon.svg" alt=""/></span><div><b>Eval Admin</b><small>CONTROL ROOM</small></div></a><nav aria-label="管理员导航">{modules.map(item => <button key={item.id} aria-label={item.label} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav><div className="admin-actions"><a href="/console">用户控制台</a><button onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><span>{currentUser.displayName.slice(0,2)}</span></div></header>
+    <header className="admin-bar"><a href="/console" className="admin-brand"><span><Image src="/favicon.svg" alt="" width={24} height={24}/></span><div><b>Eval Admin</b><small>CONTROL ROOM</small></div></a><nav aria-label="管理员导航">{modules.map(item => <button key={item.id} aria-label={item.label} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav><div className="admin-actions"><a href="/console">用户控制台</a><button onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><span>{currentUser.displayName.slice(0,2)}</span></div></header>
     <div className="admin-frame">
       <div className="admin-rail"><span>ADMINISTRATIVE CONTROL PLANE</span><i/></div>
       <section className="admin-heading"><div><p>{activeModule.eyebrow} / 0{modules.indexOf(activeModule)+1}</p><h1>{activeModule.label}</h1></div><p>{adminDescription(active)}</p></section>
@@ -126,5 +127,5 @@ function AdminLedger({headings,children}:{headings:string[];children:React.React
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
 function adminDescription(id:string){return ({dashboard:"跨用户、模型、发布与商业配置的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",llms:"配置供应商、模型路由地址、密钥引用与速率边界。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义套餐价格、席位、请求额度与商业权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
-function safeFeatures(value:string){try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
+function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
 function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","llm.save":"保存模型","llm.status":"模型状态","llm.test":"模型测试","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","api_key.create":"创建 API Key","api_key.revoke":"撤销 API Key","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}
