@@ -1,5 +1,8 @@
 import type { PostgresDatabase } from "../../db/postgres";
-import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
+import { authDatabase, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
+import { normalizeChinesePhone } from "../auth/phone";
+import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
+import { normalizeSemver } from "../releases/public";
 
 let adminSchemaInitialization: Promise<void> | null = null;
 
@@ -18,9 +21,13 @@ async function initializeAdminSchema() {
     "CREATE TABLE IF NOT EXISTS llm_configs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, display_name text NOT NULL, provider text NOT NULL, model_id text NOT NULL, base_url text NOT NULL, secret_ref text NOT NULL, status text NOT NULL, requests_per_minute integer NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS llm_configs_tenant_idx ON llm_configs (tenant_id)",
     "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS updater_signature text",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS architecture text NOT NULL DEFAULT 'x86_64'",
     "CREATE INDEX IF NOT EXISTS agent_artifacts_tenant_idx ON agent_artifacts (tenant_id)",
     "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS release_versions_tenant_idx ON release_versions (tenant_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
     "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, request_limit bigint NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
@@ -33,14 +40,15 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const db = authDatabase();
   const tenantId = user.tenantId;
   const [users, llms, artifacts, releases, plans, audits] = await Promise.all([
-    db.prepare("SELECT u.id, u.email, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
+    db.prepare("SELECT u.id, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, display_name AS displayName, provider, model_id AS modelId, base_url AS baseUrl, secret_ref AS secretRef, status, requests_per_minute AS requestsPerMinute, updated_at AS updatedAt FROM llm_configs WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
+    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, updater_signature IS NOT NULL AS signed, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, request_limit AS requestLimit, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
+  const authSettings = providerSettingsSnapshot(await tenantProviderSettings(tenantId));
   return {
     currentUser: user,
     metrics: {
@@ -58,6 +66,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     releases: releases.results,
     plans: plans.results,
     audits: audits.results,
+    authSettings,
   };
 }
 
@@ -68,15 +77,12 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
   if (action === "create_user") {
     const email = text(input.email).toLowerCase();
     const displayName = text(input.displayName);
-    const password = text(input.password);
     const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2 || password.length < 10 || !/[a-zA-Z]/.test(password) || !/\d/.test(password)) throw new Error("请填写有效邮箱、姓名，以及至少 10 位并包含字母和数字的初始密码。");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2) throw new Error("请填写有效邮箱和姓名。");
     const id = `usr_${crypto.randomUUID()}`;
-    const credential = await createPasswordHash(password);
     await db.batch([
       db.prepare("INSERT INTO users (id, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(id, email, displayName, now, now),
       db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(`mem_${crypto.randomUUID()}`, user.tenantId, id, role, now, now),
-      db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)").bind(id, credential.passwordHash, credential.salt, credential.iterations, now),
     ]);
     await recordAudit(db, user, "user.create", "user", id, { email, role });
     return { id };
@@ -99,6 +105,35 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     ]);
     await recordAudit(db, user, "user.update", "user", id, { status, role });
     return { id };
+  }
+  if (action === "update_user_phone") {
+    const id = text(input.id);
+    const rawPhone = text(input.phone);
+    const phoneE164 = rawPhone ? normalizeChinesePhone(rawPhone) : null;
+    if (!id || (rawPhone && !phoneE164)) throw new Error("请输入有效的中国大陆手机号。");
+    const target = await db.prepare("SELECT user_id FROM memberships WHERE user_id = ? AND tenant_id = ?")
+      .bind(id, user.tenantId)
+      .first();
+    if (!target) throw new Error("用户不存在或不属于当前组织。");
+    await db.prepare(
+      "UPDATE users SET phone_e164 = ?, updated_at = ? WHERE id = ? AND id IN (SELECT user_id FROM memberships WHERE tenant_id = ?)",
+    ).bind(phoneE164, now, id, user.tenantId).run();
+    await recordAudit(db, user, "user.phone.update", "user", id, { configured: Boolean(phoneE164) });
+    return { id, phoneConfigured: Boolean(phoneE164) };
+  }
+  if (action === "save_auth_settings") {
+    const settings = await saveTenantProviderSettings(user.tenantId, input);
+    await recordAudit(db, user, "auth.providers.save", "auth_provider_settings", user.tenantId, {
+      smsEnabled: settings.smsEnabled,
+      googleEnabled: settings.googleEnabled,
+      aliyunAccessKeyIdRef: settings.aliyunAccessKeyIdRef,
+      aliyunAccessKeySecretRef: settings.aliyunAccessKeySecretRef,
+      smsCodePepperRef: settings.smsCodePepperRef,
+      googleClientIdRef: settings.googleClientIdRef,
+      googleClientSecretRef: settings.googleClientSecretRef,
+      hostedDomainRestricted: Boolean(settings.googleAllowedHostedDomain),
+    });
+    return providerSettingsSnapshot(settings);
   }
   if (action === "save_llm") {
     const id = text(input.id) || `llm_${crypto.randomUUID()}`;
@@ -140,17 +175,25 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const artifactId = text(input.artifactId), version = text(input.version), notes = text(input.notes);
     const channel = allowed(text(input.channel), ["stable", "beta", "internal"], "stable");
     const status = allowed(text(input.status), ["draft", "published"], "draft");
-    if (!/^\d+\.\d+\.\d+([+-][a-zA-Z0-9.-]+)?$/.test(version) || !artifactId) throw new Error("请选择安装包并填写有效的语义化版本号。");
-    const artifact = await db.prepare("SELECT id FROM agent_artifacts WHERE id = ? AND tenant_id = ?").bind(artifactId, user.tenantId).first();
+    const normalizedVersion = normalizeSemver(version);
+    if (!normalizedVersion || !artifactId) throw new Error("请选择安装包并填写有效的语义化版本号。");
+    const artifact = await db.prepare("SELECT id, updater_signature FROM agent_artifacts WHERE id = ? AND tenant_id = ?").bind(artifactId, user.tenantId).first<{ id: string; updater_signature: string | null }>();
     if (!artifact) throw new Error("安装包不存在或不属于当前组织。");
+    if (!artifact.updater_signature) throw new Error("该安装包缺少 Tauri .sig 签名，不能发布为自动更新版本。");
+    const duplicate = await db.prepare("SELECT id FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?").bind(user.tenantId, normalizedVersion.version, channel).first();
+    if (duplicate) throw new Error("当前渠道已存在相同版本号。");
     const id = `rel_${crypto.randomUUID()}`;
-    await db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, user.tenantId, version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now).run();
-    await recordAudit(db, user, "release.create", "release_version", id, { version, channel, artifactId, status, mandatory: Boolean(input.mandatory) });
+    await db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, user.tenantId, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now).run();
+    await recordAudit(db, user, "release.create", "release_version", id, { version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) });
     return { id };
   }
   if (action === "set_release_status") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["draft", "published"], "draft");
+    if (status === "published") {
+      const release = await db.prepare("SELECT a.updater_signature FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id WHERE r.id = ? AND r.tenant_id = ?").bind(id, user.tenantId).first<{ updater_signature: string | null }>();
+      if (!release?.updater_signature) throw new Error("该版本的安装包缺少 Tauri .sig 签名，无法发布。");
+    }
     const result = await db.prepare("UPDATE release_versions SET status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, status === "published" ? now : null, now, id, user.tenantId).run();
     if (!result.meta.changes) throw new Error("版本不存在。");
     await recordAudit(db, user, status === "published" ? "release.publish" : "release.rollback", "release_version", id, { status });

@@ -4,21 +4,24 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
+import { AuthSettingsView, type AuthSettingsSnapshot } from "./AuthSettingsView";
 
-type AdminUser = { id: string; email: string; displayName: string; tenantId: string; tenantName: string; role: string };
+type AdminUser = { id: string; email: string; phoneE164?: string | null; displayName: string; tenantId: string; tenantName: string; role: string };
 type Snapshot = {
   metrics: { users: number; activeUsers: number; llms: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number };
-  users: Array<{ id: string; email: string; displayName: string; status: string; role: string; lastLoginAt?: number }>;
+  users: Array<{ id: string; email: string; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
   llms: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; secretRef: string; status: string; requestsPerMinute: number }>;
-  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; status: string; createdAt: number }>;
+  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; platform: string; architecture: string; status: string; createdAt: number }>;
   releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
   plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; requestLimit: number; seatLimit: number; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
+  authSettings: AuthSettingsSnapshot;
 };
 
 const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconName }> = [
   { id: "dashboard", label: "运营看板", eyebrow: "SIGNAL", icon: "grid" },
   { id: "users", label: "用户管理", eyebrow: "IDENTITY", icon: "users" },
+  { id: "identity", label: "登录与身份", eyebrow: "AUTHENTICATION", icon: "key" },
   { id: "llms", label: "LLM 配置", eyebrow: "INTELLIGENCE", icon: "model" },
   { id: "artifacts", label: "工具源文件", eyebrow: "ARTIFACTS", icon: "download" },
   { id: "releases", label: "版本升级", eyebrow: "RELEASES", icon: "route" },
@@ -81,6 +84,8 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
       {!data ? <div className="admin-loading"><i/><span>正在读取控制面数据</span></div> : <>
         {active === "dashboard" && <DashboardView data={data}/>} 
         {active === "users" && <UsersView data={data} busy={busy} action={action}/>} 
+        {active === "users" && <PhoneBindingPanel data={data} busy={busy} action={action}/>}
+        {active === "identity" && <AuthSettingsView settings={data.authSettings} busy={busy} action={action}/>}
         {active === "llms" && <LlmsView data={data} busy={busy} action={action}/>} 
         {active === "artifacts" && <ArtifactsView data={data} busy={busy} upload={uploadArtifact}/>} 
         {active === "releases" && <ReleasesView data={data} busy={busy} action={action}/>} 
@@ -98,7 +103,24 @@ function DashboardView({ data }: { data: Snapshot }) {
 }
 
 function UsersView({ data, busy, action }: ViewProps) {
-  return <div className="admin-module"><AdminForm title="创建用户账号" note="账号立即生效，密码以安全哈希保存。组织始终至少保留一名可用管理员。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("create_user",Object.fromEntries(f),"用户账号已创建。");event.currentTarget.reset();}}><input name="displayName" placeholder="姓名" required/><input name="email" type="email" placeholder="name@company.com" required/><input name="password" type="password" minLength={10} placeholder="至少 10 位，包含字母和数字" required/><select name="role" defaultValue="developer"><option value="developer">开发者</option><option value="viewer">查看者</option><option value="auditor">审计员</option><option value="tenant_admin">租户管理员</option></select><button disabled={busy}>创建账号 <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["用户","状态","角色","最近登录","操作"]}>{data.users.map(user=><article key={user.id}><div><b>{user.displayName}</b><small>{user.email}</small></div><span className={`admin-status ${user.status}`}><i/>{user.status === "active" ? "正常" : "已停用"}</span><select defaultValue={user.role} onChange={event=>void action("update_user",{id:user.id,status:user.status,role:event.target.value},"用户角色已更新。")}>{["tenant_admin","developer","auditor","viewer"].map(role=><option value={role} key={role}>{role}</option>)}</select><code>{user.lastLoginAt ? new Date(user.lastLoginAt*1000).toLocaleDateString("zh-CN") : "尚未登录"}</code><button onClick={()=>void action("update_user",{id:user.id,role:user.role,status:user.status === "active" ? "disabled" : "active"},user.status === "active" ? "用户已停用。" : "用户已启用。")} disabled={busy}>{user.status === "active" ? "停用" : "启用"}</button></article>)}</AdminLedger></div>;
+  return <div className="admin-module"><AdminForm title="创建用户账号" note="先预置组织邮箱与角色；英文用户可使用匹配的 Google 邮箱登录，中文用户需在下方继续绑定手机号。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("create_user",Object.fromEntries(f),"用户账号已创建。");event.currentTarget.reset();}}><input name="displayName" placeholder="姓名" required/><input name="email" type="email" placeholder="name@company.com" required/><select name="role" defaultValue="developer"><option value="developer">开发者</option><option value="viewer">查看者</option><option value="auditor">审计员</option><option value="tenant_admin">租户管理员</option></select><button disabled={busy}>创建账号 <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["用户","状态","角色","最近登录","操作"]}>{data.users.map(user=><article key={user.id}><div><b>{user.displayName}</b><small>{user.email}</small></div><span className={`admin-status ${user.status}`}><i/>{user.status === "active" ? "正常" : "已停用"}</span><select defaultValue={user.role} onChange={event=>void action("update_user",{id:user.id,status:user.status,role:event.target.value},"用户角色已更新。")}>{["tenant_admin","developer","auditor","viewer"].map(role=><option value={role} key={role}>{role}</option>)}</select><code>{user.lastLoginAt ? new Date(user.lastLoginAt*1000).toLocaleDateString("zh-CN") : "尚未登录"}</code><button onClick={()=>void action("update_user",{id:user.id,role:user.role,status:user.status === "active" ? "disabled" : "active"},user.status === "active" ? "用户已停用。" : "用户已启用。")} disabled={busy}>{user.status === "active" ? "停用" : "启用"}</button></article>)}</AdminLedger></div>;
+}
+
+function PhoneBindingPanel({ data, busy, action }: ViewProps) {
+  return <AdminForm title="绑定中文登录手机号" note="手机号只用于中文界面的验证码登录；用户仍需由管理员预先创建，系统不会通过短信自动创建组织或账号。">
+    <form onSubmit={event => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      void action("update_user_phone", Object.fromEntries(form), "用户登录手机号已更新。");
+    }}>
+      <select name="id" required defaultValue="">
+        <option value="" disabled>选择组织用户</option>
+        {data.users.map(user => <option value={user.id} key={user.id}>{user.displayName} · {user.email}{user.phoneE164 ? ` · ${maskPhone(user.phoneE164)}` : ""}</option>)}
+      </select>
+      <input name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="中国大陆手机号；留空可解除绑定"/>
+      <button disabled={busy}>保存手机号 <Icon name="arrow"/></button>
+    </form>
+  </AdminForm>;
 }
 
 function LlmsView({ data, busy, action }: ViewProps) {
@@ -106,7 +128,7 @@ function LlmsView({ data, busy, action }: ViewProps) {
 }
 
 function ArtifactsView({ data, busy, upload }: {data:Snapshot;busy:boolean;upload:(form:HTMLFormElement)=>Promise<void>}) {
-  return <div className="admin-module"><AdminForm title="上传 Agent 工具源文件" note="根据项目真实构建产物，仅接受 Windows x64 NSIS（.exe）和 MSI（.msi），最大 120 MB。"><form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}><input name="label" placeholder="显示名称，如 Windows x64 安装程序" required/><label className="admin-file"><Icon name="download"/><span>选择 .exe 或 .msi 文件</span><input name="file" type="file" accept=".exe,.msi" required/></label><button disabled={busy}>{busy ? "正在上传…" : "上传源文件"} <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["源文件","格式","大小","SHA256","状态"]}>{data.artifacts.map(item=><article key={item.id}><div><b>{item.label}</b><small>{item.fileName}</small></div><span>{item.format}</span><code>{formatBytes(item.sizeBytes)}</code><code title={item.sha256}>{item.sha256.slice(0,12)}…</code><a href={`/api/admin/artifacts/${item.id}`}>下载校验</a></article>)}</AdminLedger></div>;
+  return <div className="admin-module"><AdminForm title="上传 Agent 更新产物" note="同时上传 Tauri 构建生成的 Windows x64 NSIS（.exe）或 MSI（.msi）及对应 .sig；缺少签名的文件不能发布为自动更新。"><form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}><input name="label" placeholder="显示名称，如 Windows x64 安装程序" required/><label className="admin-file"><Icon name="download"/><span>选择 .exe 或 .msi 安装包</span><input name="file" type="file" accept=".exe,.msi" required/></label><label className="admin-file"><Icon name="shield"/><span>选择对应的 .sig 签名文件</span><input name="signature" type="file" accept=".sig" required/></label><button disabled={busy}>{busy ? "正在上传…" : "上传更新产物"} <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["源文件","平台","大小","SHA256","签名"]}>{data.artifacts.map(item=><article key={item.id}><div><b>{item.label}</b><small>{item.fileName}</small></div><span>{item.platform}-{item.architecture}</span><code>{formatBytes(item.sizeBytes)}</code><code title={item.sha256}>{item.sha256.slice(0,12)}…</code><a href={`/api/admin/artifacts/${item.id}`}>{item.signed ? "已签名 · 下载" : "签名缺失"}</a></article>)}</AdminLedger></div>;
 }
 
 function ReleasesView({ data, busy, action }: ViewProps) {
@@ -125,7 +147,8 @@ type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Rec
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、模型、发布与商业配置的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",llms:"配置供应商、模型路由地址、密钥引用与速率边界。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义套餐价格、席位、请求额度与商业权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、模型、发布与商业配置的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置中文短信与英文 Google 登录，并检查部署凭据完整度。",llms:"配置供应商、模型路由地址、密钥引用与速率边界。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义套餐价格、席位、请求额度与商业权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
+function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
-function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","llm.save":"保存模型","llm.status":"模型状态","llm.test":"模型测试","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","api_key.create":"创建 API Key","api_key.revoke":"撤销 API Key","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}
+function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","auth.providers.save":"保存登录配置","llm.save":"保存模型","llm.status":"模型状态","llm.test":"模型测试","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","api_key.create":"创建 API Key","api_key.revoke":"撤销 API Key","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}

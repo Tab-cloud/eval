@@ -18,12 +18,16 @@ export const tenants = pgTable("tenants", {
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull(),
+  phoneE164: text("phone_e164"),
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url"),
   status: text("status", { enum: ["invited", "active", "disabled"] }).notNull(),
   lastLoginAt: epoch("last_login_at"),
   ...timestamps,
-}, (table) => [uniqueIndex("users_email_uq").on(table.email)]);
+}, (table) => [
+  uniqueIndex("users_email_uq").on(table.email),
+  uniqueIndex("users_phone_uq").on(table.phoneE164),
+]);
 
 export const memberships = pgTable("memberships", {
   id: text("id").primaryKey(),
@@ -140,6 +144,9 @@ export const agentArtifacts = pgTable("agent_artifacts", {
   objectKey: text("object_key").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
   sha256: text("sha256").notNull(),
+  updaterSignature: text("updater_signature"),
+  platform: text("platform").notNull().default("windows"),
+  architecture: text("architecture").notNull().default("x86_64"),
   status: text("status", { enum: ["ready", "archived"] }).notNull().default("ready"),
   createdAt: epoch("created_at").notNull(),
 }, (table) => [
@@ -199,4 +206,61 @@ export const authLoginAttempts = pgTable("auth_login_attempts", {
   firstFailedAt: epoch("first_failed_at").notNull(),
   blockedUntil: epoch("blocked_until"),
   updatedAt: epoch("updated_at").notNull(),
+});
+
+export const authSmsChallenges = pgTable("auth_sms_challenges", {
+  keyHash: text("key_hash").primaryKey(),
+  codeHash: text("code_hash").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  expiresAt: epoch("expires_at").notNull(),
+  consumedAt: epoch("consumed_at"),
+  aliyunBizId: text("aliyun_biz_id"),
+  ...timestamps,
+});
+
+export const authSmsRateLimits = pgTable("auth_sms_rate_limits", {
+  keyHash: text("key_hash").primaryKey(),
+  windowStartedAt: epoch("window_started_at").notNull(),
+  sendCount: integer("send_count").notNull().default(0),
+  blockedUntil: epoch("blocked_until"),
+  updatedAt: epoch("updated_at").notNull(),
+});
+
+export const authOauthStates = pgTable("auth_oauth_states", {
+  stateHash: text("state_hash").primaryKey(),
+  codeVerifier: text("code_verifier").notNull(),
+  nonce: text("nonce").notNull(),
+  redirectUri: text("redirect_uri").notNull(),
+  expiresAt: epoch("expires_at").notNull(),
+  consumedAt: epoch("consumed_at"),
+  createdAt: epoch("created_at").notNull(),
+});
+
+export const authOidcIdentities = pgTable("auth_oidc_identities", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  subject: text("subject").notNull(),
+  emailAtLink: text("email_at_link").notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("auth_oidc_provider_subject_uq").on(table.provider, table.subject),
+  uniqueIndex("auth_oidc_provider_user_uq").on(table.provider, table.userId),
+  index("auth_oidc_user_idx").on(table.userId),
+]);
+
+export const authProviderSettings = pgTable("auth_provider_settings", {
+  tenantId: text("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  smsEnabled: boolean("sms_enabled").notNull().default(false),
+  aliyunSignName: text("aliyun_sign_name"),
+  aliyunTemplateCode: text("aliyun_template_code"),
+  aliyunTemplateCodeKey: text("aliyun_template_code_key").notNull().default("code"),
+  aliyunAccessKeyIdRef: text("aliyun_access_key_id_ref").notNull().default("ALIBABA_CLOUD_ACCESS_KEY_ID"),
+  aliyunAccessKeySecretRef: text("aliyun_access_key_secret_ref").notNull().default("ALIBABA_CLOUD_ACCESS_KEY_SECRET"),
+  smsCodePepperRef: text("sms_code_pepper_ref").notNull().default("AUTH_SMS_CODE_PEPPER"),
+  googleEnabled: boolean("google_enabled").notNull().default(false),
+  googleClientIdRef: text("google_client_id_ref").notNull().default("GOOGLE_OAUTH_CLIENT_ID"),
+  googleClientSecretRef: text("google_client_secret_ref").notNull().default("GOOGLE_OAUTH_CLIENT_SECRET"),
+  googleAllowedHostedDomain: text("google_allowed_hosted_domain"),
+  ...timestamps,
 });

@@ -1,6 +1,8 @@
 # Eval Agent Web
 
-面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。项目包含公开落地页、邮箱登录、用户控制台、管理员控制室、OpenAI-compatible API、安装包下载和开发者文档。
+Eval Web 同时提供公开落地页、组织登录、AI/Agent 管理控制台和桌面端签名更新服务。桌面客户端通过 `/api/v1/updates/{target}/{arch}/{current_version}` 检查管理员发布的真实安装包；未发布、未签名或不属于公开发布租户的文件不会进入更新通道。
+
+面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。项目包含公开落地页、中英文分流登录、用户控制台、管理员控制室、OpenAI-compatible API、安装包下载和开发者文档。
 
 ## 当前架构
 
@@ -34,9 +36,9 @@ npm run dev
 
 - `user@eval.local`：普通开发者
 - `admin@eval.local`：租户管理员
-- 初始密码均为 `123456`
+- 初始密码均为 `123456`，仅在本地同时设置 `EVAL_ENABLE_PASSWORD_LOGIN=true` 时可使用旧密码接口
 
-生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false`，并通过正式初始化流程创建管理员账号。
+生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false` 和 `EVAL_ENABLE_PASSWORD_LOGIN=false`，并通过正式初始化流程创建管理员账号。
 
 ## 数据库
 
@@ -58,7 +60,7 @@ npm run db:migrate
 ## 主要入口
 
 - `/`：公开落地页与公开下载
-- `/login`：邮箱密码登录
+- `/login`：中文界面使用手机号与阿里云短信验证码；英文界面使用管理员预置邮箱的 Google 登录
 - `/console`：用户控制台
 - `/admin`：租户管理员控制室
 - `/docs`：开发者接口文档
@@ -74,4 +76,5 @@ npm run db:migrate
 - LLM 密钥只通过 ECS 环境文件或密钥管理服务注入。
 - API Key 仅保存 SHA-256 哈希，完整密钥只在创建时显示一次。
 - 登录 Cookie 使用 HttpOnly、SameSite，并在 HTTPS 下启用 Secure。
+- 短信和 Google 登录都只接受管理员已预置的组织成员，不在登录过程中创建账号、租户或角色。
 - 安装包目录禁止执行权限，Nginx 限制请求体大小。

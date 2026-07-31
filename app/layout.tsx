@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Script from "next/script";
 import "./globals.css";
 import "./theme.css";
 
@@ -38,9 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const themeScript = `(function(){try{var saved=localStorage.getItem('luban-theme');var theme=saved==='light'||saved==='dark'?saved:(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');document.documentElement.dataset.theme=theme;document.documentElement.style.colorScheme=theme}catch(e){}})()`;
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
+      <head><Script id="eval-theme-bootstrap" strategy="beforeInteractive">{themeScript}</Script></head>
       <body>{children}</body>
     </html>
   );

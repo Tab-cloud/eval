@@ -2,6 +2,9 @@ import { authenticateEmail, clearFailedLogins, createSession, isLoginBlocked, lo
 import { rejectCrossSiteWrite } from "../../../security/request";
 
 export async function POST(request: Request) {
+  if (process.env.EVAL_ENABLE_PASSWORD_LOGIN !== "true") {
+    return Response.json({ error: "邮箱密码登录已关闭，请使用当前语言对应的登录方式。" }, { status: 404 });
+  }
   const rejected = rejectCrossSiteWrite(request);
   if (rejected) return rejected;
   let payload: { email?: unknown; password?: unknown };

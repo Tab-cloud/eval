@@ -7,6 +7,7 @@ const PASSWORD_ITERATIONS = 210_000;
 export type AuthenticatedUser = {
   id: string;
   email: string;
+  phoneE164?: string;
   displayName: string;
   tenantId: string;
   tenantName: string;
@@ -56,7 +57,9 @@ async function initializeSchema() {
     "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_uq ON tenants (slug)",
     "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 text",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_uq ON users (phone_e164)",
     "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS membership_tenant_user_uq ON memberships (tenant_id, user_id)",
     "CREATE INDEX IF NOT EXISTS membership_tenant_idx ON memberships (tenant_id)",
@@ -65,6 +68,14 @@ async function initializeSchema() {
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_uq ON auth_sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id)",
     "CREATE TABLE IF NOT EXISTS auth_login_attempts (key_hash text PRIMARY KEY NOT NULL, failed_count integer DEFAULT 0 NOT NULL, first_failed_at bigint NOT NULL, blocked_until bigint, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_sms_challenges (key_hash text PRIMARY KEY NOT NULL, code_hash text NOT NULL, attempts integer DEFAULT 0 NOT NULL, expires_at bigint NOT NULL, consumed_at bigint, aliyun_biz_id text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_sms_rate_limits (key_hash text PRIMARY KEY NOT NULL, window_started_at bigint NOT NULL, send_count integer DEFAULT 0 NOT NULL, blocked_until bigint, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_oauth_states (state_hash text PRIMARY KEY NOT NULL, code_verifier text NOT NULL, nonce text NOT NULL, redirect_uri text NOT NULL, expires_at bigint NOT NULL, consumed_at bigint, created_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_oidc_identities (id text PRIMARY KEY NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider text NOT NULL, subject text NOT NULL, email_at_link text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_subject_uq ON auth_oidc_identities (provider, subject)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_user_uq ON auth_oidc_identities (provider, user_id)",
+    "CREATE INDEX IF NOT EXISTS auth_oidc_user_idx ON auth_oidc_identities (user_id)",
+    "CREATE TABLE IF NOT EXISTS auth_provider_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, sms_enabled boolean DEFAULT false NOT NULL, aliyun_sign_name text, aliyun_template_code text, aliyun_template_code_key text DEFAULT 'code' NOT NULL, aliyun_access_key_id_ref text DEFAULT 'ALIBABA_CLOUD_ACCESS_KEY_ID' NOT NULL, aliyun_access_key_secret_ref text DEFAULT 'ALIBABA_CLOUD_ACCESS_KEY_SECRET' NOT NULL, sms_code_pepper_ref text DEFAULT 'AUTH_SMS_CODE_PEPPER' NOT NULL, google_enabled boolean DEFAULT false NOT NULL, google_client_id_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_ID' NOT NULL, google_client_secret_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_SECRET' NOT NULL, google_allowed_hosted_domain text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
   ];
@@ -91,7 +102,7 @@ async function initializeSchema() {
 export async function authenticateEmail(email: string, password: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.display_name, u.status, c.password_hash, c.password_salt, c.iterations,
+    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status, c.password_hash, c.password_salt, c.iterations,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM users u
     JOIN password_credentials c ON c.user_id = u.id
@@ -103,6 +114,60 @@ export async function authenticateEmail(email: string, password: string): Promis
   if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
   const valid = await verifyPassword(password, String(row.password_salt), Number(row.iterations), String(row.password_hash));
   if (!valid) return null;
+  return mapUser(row);
+}
+
+export async function findActiveUserByPhone(phoneE164: string): Promise<AuthenticatedUser | null> {
+  await ensureAuthSchema();
+  const row = await database().prepare(`
+    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    FROM users u
+    JOIN memberships m ON m.user_id = u.id
+    JOIN tenants t ON t.id = m.tenant_id
+    WHERE u.phone_e164 = ?
+    LIMIT 1
+  `).bind(phoneE164).first<Record<string, string | number>>();
+  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  return mapUser(row);
+}
+
+export async function findOrLinkGoogleUser(subject: string, verifiedEmail: string, tenantId: string): Promise<AuthenticatedUser | null> {
+  await ensureAuthSchema();
+  const db = database();
+  const existing = await googleUserBySubject(subject, tenantId);
+  if (existing) return existing;
+
+  const candidate = await db.prepare(`
+    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    FROM users u
+    JOIN memberships m ON m.user_id = u.id
+    JOIN tenants t ON t.id = m.tenant_id
+    WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
+    LIMIT 1
+  `).bind(verifiedEmail, tenantId).first<Record<string, string | number>>();
+  if (!candidate || candidate.status !== "active" || candidate.tenant_status !== "active") return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare(
+    "INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, 'google', ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+  ).bind(`oidc_${crypto.randomUUID()}`, String(candidate.id), subject, verifiedEmail.toLowerCase(), now, now).run();
+  return googleUserBySubject(subject, tenantId);
+}
+
+async function googleUserBySubject(subject: string, tenantId: string): Promise<AuthenticatedUser | null> {
+  const row = await database().prepare(`
+    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    FROM auth_oidc_identities i
+    JOIN users u ON u.id = i.user_id
+    JOIN memberships m ON m.user_id = u.id
+    JOIN tenants t ON t.id = m.tenant_id
+    WHERE i.provider = 'google' AND i.subject = ? AND m.tenant_id = ?
+    LIMIT 1
+  `).bind(subject, tenantId).first<Record<string, string | number>>();
+  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
   return mapUser(row);
 }
 
@@ -158,7 +223,7 @@ export async function getSessionUser(token: string | undefined): Promise<Authent
   await ensureAuthSchema();
   const now = Math.floor(Date.now() / 1000);
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.display_name, u.status, s.tenant_id, m.role,
+    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status, s.tenant_id, m.role,
            t.name AS tenant_name, t.status AS tenant_status
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
@@ -230,6 +295,7 @@ function mapUser(row: Record<string, string | number>): AuthenticatedUser {
   return {
     id: String(row.id),
     email: String(row.email),
+    ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
     displayName: String(row.display_name),
     tenantId: String(row.tenant_id),
     tenantName: String(row.tenant_name),

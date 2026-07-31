@@ -26,7 +26,7 @@ PostgreSQL  Cloud Disk  LLM Providers
 
 ## PostgreSQL
 
-PostgreSQL 保存租户、用户、成员关系、密码凭据、会话、API Key、LLM 配置、调用记录、审计日志、安装包元数据、版本与套餐。
+PostgreSQL 保存租户、用户、手机号、成员关系、短信挑战、OAuth 状态、OIDC 身份、密码凭据、会话、API Key、LLM 配置、调用记录、审计日志、安装包元数据、版本与套餐。
 
 - Schema：`db/schema.ts`
 - Migration：`drizzle/*.sql`
@@ -51,11 +51,16 @@ PostgreSQL 保存租户、用户、成员关系、密码凭据、会话、API Ke
 
 ## 身份与权限
 
-- 浏览器登录：邮箱、PBKDF2-SHA256、服务端会话、HttpOnly Cookie。
+- 中文浏览器登录：管理员预绑定中国大陆手机号，阿里云短信发送 6 位一次性验证码；验证码只保存带部署 Pepper 的哈希，5 分钟过期并限制发送及验证频率。
+- 英文浏览器登录：Google OpenID Connect 授权码流程，使用 state、nonce 和 PKCE；仅允许已存在且处于启用状态的组织邮箱完成身份绑定。
+- 两种入口最终签发同一种服务端会话与 HttpOnly Cookie；登录流程不会自动创建租户、账号或角色。
+- 旧邮箱密码接口默认关闭，仅可在受控本地环境显式设置 `EVAL_ENABLE_PASSWORD_LOGIN=true`；生产环境不得开启。
 - API 调用：Bearer API Key，数据库只保存不可逆哈希。
 - 租户：从登录会话或 API Key 反查，不信任请求头中的租户 ID。
 - RBAC：`platform_admin`、`tenant_admin`、`developer`、`auditor`、`viewer`。
 - 审计：管理员写操作、密码修改、密钥创建和撤销都记录租户与执行者。
+
+管理员控制台的“登录与身份”模块保存短信签名、模板代码、Google Workspace 域和部署变量引用。AccessKey、Google Client Secret 与验证码 Pepper 只通过 ECS 环境变量注入；数据库和管理员接口仅返回变量是否已配置，不返回变量值。`EVAL_IDENTITY_TENANT_SLUG` 指定承载公开 Google 登录入口的租户。
 
 ## 网关
 
@@ -74,3 +79,12 @@ PostgreSQL 保存租户、用户、成员关系、密码凭据、会话、API Ke
 构建和数据库迁移在服务启动前完成。systemd 的 `ExecStartPre` 执行迁移，迁移失败时主进程不会启动。迁移器使用 PostgreSQL advisory lock，多个 ECS 实例滚动启动时不会并发修改 Schema。
 
 应用目录以只读方式运行；只有安装包云盘目录可写。Node 进程绑定 `127.0.0.1:41738`，不直接暴露公网。安装包云盘和 PostgreSQL/RDS 必须独立备份。
+
+## Eval 桌面端自动升级
+
+管理员上传 Windows NSIS（`.exe`）或 MSI（`.msi`）时，必须同时上传 Tauri 构建生成的同名 `.sig` 签名。数据库保存安装包 SHA-256、签名、平台和架构；签名私钥只存在于受保护的构建环境，不进入 Web 服务、数据库或 Git。
+
+- `GET /api/v1/updates/{target}/{arch}/{current_version}?channel=stable`：Tauri 动态更新接口。有新版本时返回 `version`、`url`、`signature`、`notes`、`pub_date`；无更新返回 `204`。
+- `GET /api/v1/downloads/{release_id}`：下载管理员实际上传并正式发布的安装包。
+- `EVAL_PUBLIC_RELEASE_TENANT_SLUG`：唯一允许对公众发布安装包的租户。公开查询和下载都在服务端按此租户隔离。
+- 发布前校验语义化版本、渠道重复和 `.sig` 是否存在；客户端仍会使用内置公钥再次验证签名。

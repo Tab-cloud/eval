@@ -41,8 +41,20 @@ DATABASE_SSL_REJECT_UNAUTHORIZED=true
 DATABASE_POOL_MAX=15
 DATABASE_CONNECT_TIMEOUT_MS=5000
 DATABASE_IDLE_TIMEOUT_MS=30000
+APP_ORIGIN=https://eval.zailink.space
+EVAL_PUBLIC_RELEASE_TENANT_SLUG=connecting-hangzhou
+EVAL_IDENTITY_TENANT_SLUG=connecting-hangzhou
 ARTIFACT_STORAGE_PATH=/srv/eval-web/artifacts
 EVAL_ENABLE_SEEDED_ACCOUNTS=false
+EVAL_ENABLE_PASSWORD_LOGIN=false
+ALIBABA_CLOUD_ACCESS_KEY_ID=replace-with-server-side-credential
+ALIBABA_CLOUD_ACCESS_KEY_SECRET=replace-with-server-side-credential
+ALIYUN_SMS_SIGN_NAME=已审核短信签名
+ALIYUN_SMS_TEMPLATE_CODE=已审核验证码模板代码
+ALIYUN_SMS_TEMPLATE_CODE_KEY=code
+AUTH_SMS_CODE_PEPPER=至少32位随机字符串
+GOOGLE_OAUTH_CLIENT_ID=replace-with-web-client-id
+GOOGLE_OAUTH_CLIENT_SECRET=replace-with-web-client-secret
 OPENAI_API_KEY=replace-with-real-secret
 ```
 
@@ -54,6 +66,14 @@ sudo chmod 0640 /etc/eval-web/eval-web.env
 ```
 
 不要把数据库密码、证书或 LLM 密钥提交到 Git。
+
+阿里云短信签名和验证码模板必须先审核通过，RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，并把授权回调 URI 精确配置为：
+
+```text
+https://eval.zailink.space/api/auth/google/callback
+```
+
+如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。管理员需先在用户管理中创建邮箱账号，并为中文登录绑定手机号。
 
 ## 构建与首次启动
 
@@ -116,6 +136,18 @@ Nginx 模板已经包含：
 6. 健康检查失败时把 `current` 切回上一版本并重启服务。
 
 多 ECS 环境应通过 ALB 摘除实例后逐台滚动更新，避免整体中断。
+
+## 桌面端版本发布
+
+桌面安装包在独立的可信构建机生成，不在 ECS 上签名。构建环境设置 `TAURI_SIGNING_PRIVATE_KEY`（以及密钥有密码时的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）和 `EVAL_UPDATER_PUBLIC_KEY`，执行 Tauri Windows 构建后会得到安装包及对应 `.sig`。私钥不得复制到 ECS。
+
+管理员在“工具源文件”中同时上传安装包和 `.sig`，再在“版本升级”中绑定安装包、填写语义化版本号并发布。发布后可验证：
+
+```bash
+curl -i "https://eval.zailink.space/api/v1/updates/windows/x86_64/0.1.0?channel=stable"
+```
+
+有更新应返回 `200` 和签名更新清单；当前版本已是最新或平台不支持时应返回 `204`。
 
 ## 备份与扩容
 

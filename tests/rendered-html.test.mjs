@@ -92,6 +92,7 @@ test("browser writes are same-origin protected and login attempts are limited", 
   assert.match(security, /sec-fetch-site/);
   assert.match(security, /origin/);
   assert.match(login, /isLoginBlocked/);
+  assert.match(login, /EVAL_ENABLE_PASSWORD_LOGIN/);
   assert.match(login, /Retry-After/);
   assert.match(password, /changePassword/);
   assert.match(password, /至少 10 位/);
@@ -141,4 +142,108 @@ test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
   assert.doesNotMatch(hosting, /\bD1\b|\bR2\b|Cloudflare Workers/);
   assert.match(deployment, /systemctl enable --now eval-web/);
   assert.doesNotMatch(deployment, /docker|container/i);
+});
+
+test("locale selects phone SMS for Chinese and Google identity for English", async () => {
+  const login = await source("../app/login/page.tsx");
+  assert.match(login, /\/api\/auth\/sms\/send/);
+  assert.match(login, /\/api\/auth\/sms\/login/);
+  assert.match(login, /\/api\/auth\/google\/start/);
+  assert.match(login, /localStorage\.getItem\("eval-locale"\)/);
+  assert.match(login, /locale === "zh"/);
+  assert.match(login, /Continue with Google/);
+  assert.match(login, /手机号验证/);
+  assert.doesNotMatch(login, /\/api\/auth\/login/);
+});
+
+test("SMS login uses Alibaba Cloud, hashed one-time codes, and database rate limits", async () => {
+  const [provider, settings, sms, schema, sendRoute] = await Promise.all([
+    source("../app/auth/aliyun-sms.ts"),
+    source("../app/auth/provider-settings.ts"),
+    source("../app/auth/sms.ts"),
+    source("../db/schema.ts"),
+    source("../app/api/auth/sms/send/route.ts"),
+  ]);
+  assert.match(provider, /@alicloud\/dysmsapi20170525/);
+  assert.match(provider, /dysmsapi\.aliyuncs\.com/);
+  assert.match(provider, /environmentValue/);
+  assert.match(provider, /tenantProviderSettings/);
+  assert.match(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
+  assert.match(settings, /AUTH_SMS_CODE_PEPPER/);
+  assert.match(sms, /smsCodePepperRef/);
+  assert.match(sms, /challengeCodeHash/);
+  assert.match(sms, /sms:cooldown/);
+  assert.match(sms, /sms:phone/);
+  assert.match(sms, /sms:ip/);
+  assert.match(schema, /authSmsChallenges/);
+  assert.match(schema, /authSmsRateLimits/);
+  assert.match(sendRoute, /如果该手机号已绑定账号/);
+});
+
+test("Google sign-in uses OIDC protections and only links pre-provisioned users", async () => {
+  const [google, authCore, schema] = await Promise.all([
+    source("../app/auth/google.ts"),
+    source("../app/auth/core.ts"),
+    source("../db/schema.ts"),
+  ]);
+  assert.match(google, /code_challenge_method:\s*"S256"/);
+  assert.match(google, /state/);
+  assert.match(google, /nonce/);
+  assert.match(google, /verifyIdToken/);
+  assert.match(google, /email_verified !== true/);
+  assert.match(authCore, /findOrLinkGoogleUser/);
+  assert.match(authCore, /WHERE lower\(u\.email\) = lower\(\?\)/);
+  assert.doesNotMatch(google, /INSERT INTO users/);
+  assert.match(schema, /authOauthStates/);
+  assert.match(schema, /authOidcIdentities/);
+});
+
+test("admin identity settings store only deployment references and drive both login providers", async () => {
+  const [consoleUi, identityUi, settings, store, google, sms, schema, config] = await Promise.all([
+    source("../app/admin/AdminConsole.tsx"),
+    source("../app/admin/AuthSettingsView.tsx"),
+    source("../app/auth/provider-settings.ts"),
+    source("../app/admin/store.ts"),
+    source("../app/auth/google.ts"),
+    source("../app/auth/aliyun-sms.ts"),
+    source("../db/schema.ts"),
+    source("../.env.example"),
+  ]);
+  assert.match(consoleUi, /登录与身份/);
+  assert.match(consoleUi, /AuthSettingsView/);
+  assert.match(identityUi, /aliyunAccessKeySecretRef/);
+  assert.match(identityUi, /googleClientSecretRef/);
+  assert.doesNotMatch(identityUi, /name="(?:accessKeySecret|clientSecret)"/);
+  assert.match(settings, /process\.env\[reference\]/);
+  assert.match(settings, /saveTenantProviderSettings/);
+  assert.match(store, /auth\.providers\.save/);
+  assert.match(google, /identityProviderSettings/);
+  assert.match(sms, /tenantProviderSettings/);
+  assert.match(schema, /authProviderSettings/);
+  assert.match(config, /EVAL_IDENTITY_TENANT_SLUG/);
+});
+
+test("desktop updater exposes only signed releases from the public release tenant", async () => {
+  const [updateRoute, catalog, download, releaseStore, upload, schema, config] = await Promise.all([
+    source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
+    source("../app/api/v1/downloads/route.ts"),
+    source("../app/api/v1/downloads/[id]/route.ts"),
+    source("../app/admin/store.ts"),
+    source("../app/api/admin/artifacts/route.ts"),
+    source("../db/schema.ts"),
+    source("../.env.example"),
+  ]);
+  assert.match(updateRoute, /status:\s*204/);
+  assert.match(updateRoute, /signature:\s*release\.updater_signature/);
+  assert.match(updateRoute, /publicReleaseTenantSlug\(\)/);
+  assert.match(updateRoute, /compareSemver/);
+  assert.match(catalog, /JOIN tenants/);
+  assert.match(catalog, /publicReleaseTenantSlug\(\)/);
+  assert.match(download, /JOIN tenants/);
+  assert.match(download, /publicReleaseTenantSlug\(\)/);
+  assert.match(releaseStore, /缺少 Tauri \.sig 签名/);
+  assert.match(upload, /form\.get\("signature"\)/);
+  assert.match(upload, /updater_signature/);
+  assert.match(schema, /updaterSignature/);
+  assert.match(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
 });

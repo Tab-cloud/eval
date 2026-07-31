@@ -1,5 +1,6 @@
 import { authDatabase } from "../../../auth/core";
 import { ensureAdminSchema } from "../../../admin/store";
+import { publicReleaseTenantSlug } from "../../../releases/public";
 
 type PublishedRelease = {
   id: string;
@@ -19,8 +20,8 @@ const placeholders = [
 export async function GET() {
   await ensureAdminSchema();
   const result = await authDatabase().prepare(
-    "SELECT r.id, r.version, a.format, a.file_name, a.size_bytes, a.sha256, r.published_at FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id WHERE r.status = 'published' AND r.channel = 'stable' AND a.status = 'ready' ORDER BY r.published_at DESC",
-  ).all<PublishedRelease>();
+    "SELECT r.id, r.version, a.format, a.file_name, a.size_bytes, a.sha256, r.published_at FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id JOIN tenants t ON t.id = r.tenant_id WHERE t.slug = ? AND r.status = 'published' AND r.channel = 'stable' AND a.status = 'ready' ORDER BY r.published_at DESC",
+  ).bind(publicReleaseTenantSlug()).all<PublishedRelease>();
   const latest = new Map<string, PublishedRelease>();
   for (const item of result.results) if (!latest.has(item.format)) latest.set(item.format, item);
   const data = placeholders.map(placeholder => {
