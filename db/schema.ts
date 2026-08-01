@@ -17,6 +17,7 @@ export const tenants = pgTable("tenants", {
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
+  username: text("username"),
   email: text("email").notNull(),
   phoneE164: text("phone_e164"),
   displayName: text("display_name").notNull(),
@@ -25,6 +26,7 @@ export const users = pgTable("users", {
   lastLoginAt: epoch("last_login_at"),
   ...timestamps,
 }, (table) => [
+  uniqueIndex("users_username_uq").on(table.username),
   uniqueIndex("users_email_uq").on(table.email),
   uniqueIndex("users_phone_uq").on(table.phoneE164),
 ]);

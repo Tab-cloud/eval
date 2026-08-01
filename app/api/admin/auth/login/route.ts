@@ -1,5 +1,5 @@
 import {
-  authenticateEmail,
+  authenticateUsername,
   clearFailedLogins,
   createSession,
   isLoginBlocked,
@@ -15,20 +15,20 @@ export async function POST(request: Request) {
   const rejected = rejectCrossSiteWrite(request);
   if (rejected) return rejected;
 
-  let payload: { email?: unknown; password?: unknown };
+  let payload: { username?: unknown; password?: unknown };
   try {
     payload = await request.json();
   } catch {
     return Response.json({ error: "请求格式无效。" }, { status: 400 });
   }
 
-  const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+  const username = typeof payload.username === "string" ? payload.username.trim().toLowerCase() : "";
   const password = typeof payload.password === "string" ? payload.password : "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 6 || password.length > 128) {
+  if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) || password.length < 6 || password.length > 128) {
     return invalidCredentials();
   }
 
-  const attemptKey = await loginAttemptKey(`admin:${email}`, request);
+  const attemptKey = await loginAttemptKey(`admin:${username}`, request);
   if (await isLoginBlocked(attemptKey)) {
     return Response.json(
       { error: "登录尝试过多，请在 15 分钟后重试。" },
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const user = await authenticateEmail(email, password);
+  const user = await authenticateUsername(username, password);
   if (!user || !ADMIN_ROLES.has(user.role)) {
     await recordFailedLogin(attemptKey);
     return invalidCredentials();
@@ -45,13 +45,13 @@ export async function POST(request: Request) {
   await clearFailedLogins(attemptKey);
   const token = await createSession(user);
   return Response.json(
-    { user: { email: user.email, displayName: user.displayName, role: user.role } },
+    { user: { username: user.username, displayName: user.displayName, role: user.role } },
     { headers: { "Set-Cookie": sessionCookie(token, isSecureRequest(request)) } },
   );
 }
 
 function invalidCredentials() {
-  return Response.json({ error: "管理员账号或密码错误。" }, { status: 401 });
+  return Response.json({ error: "管理员用户名或密码错误。" }, { status: 401 });
 }
 
 function isSecureRequest(request: Request) {

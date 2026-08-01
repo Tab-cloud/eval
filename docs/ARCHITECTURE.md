@@ -54,9 +54,9 @@ PostgreSQL 保存租户、用户、手机号、成员关系、短信挑战、OAu
 - 中文浏览器登录：管理员预绑定中国大陆手机号，阿里云短信发送 6 位一次性验证码；验证码只保存带部署 Pepper 的哈希，5 分钟过期并限制发送及验证频率。
 - 英文浏览器登录：Google OpenID Connect 授权码流程，使用 state、nonce 和 PKCE；仅允许已存在且处于启用状态的组织邮箱完成身份绑定。
 - 两种入口最终签发同一种服务端会话与 HttpOnly Cookie；登录流程不会自动创建租户、账号或角色。
-- 管理员入口：`/admin/auth/login` 使用独立账号密码认证，成功后仍在服务端校验 `tenant_admin` 或 `platform_admin`；未登录访问 `/admin` 不会进入普通用户登录页。
+- 管理员入口：`/admin/auth/login` 使用独立用户名密码认证，用户名存储在 `users.username` 并保持唯一；成功后仍在服务端校验 `tenant_admin` 或 `platform_admin`，未登录访问 `/admin` 不会进入普通用户登录页。
 - 普通用户的旧邮箱密码接口默认关闭，仅可在受控本地环境显式设置 `EVAL_ENABLE_PASSWORD_LOGIN=true`；生产环境不得开启。
-- 管理员密码入口具有同源写入保护、按账号与来源组合的失败次数限制，并使用 HTTPS 感知的 HttpOnly 会话 Cookie；普通角色即使密码正确也不能建立管理员会话。
+- 管理员密码入口具有同源写入保护、按用户名与来源组合的失败次数限制，并使用 HTTPS 感知的 HttpOnly 会话 Cookie；普通角色即使密码正确也不能建立管理员会话。管理员密码只保存 PBKDF2 哈希，创建租户管理员时必须同时设置唯一用户名与初始密码。
 - API 调用：Bearer API Key，数据库只保存不可逆哈希。
 - 租户：从登录会话或 API Key 反查，不信任请求头中的租户 ID。
 - RBAC：`platform_admin`、`tenant_admin`、`developer`、`auditor`、`viewer`。

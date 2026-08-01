@@ -8,7 +8,7 @@ import { useTheme } from "../../../ui/useTheme";
 
 export function AdminLogin() {
   const pageRef = useRef<HTMLElement>(null);
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -24,7 +24,7 @@ export function AdminLogin() {
       const response = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username, password }),
       });
       const payload = await response.json() as { error?: string };
       if (!response.ok) {
@@ -82,17 +82,20 @@ export function AdminLogin() {
           <div className="admin-auth-form-heading">
             <span>欢迎回来</span>
             <h2>管理员登录</h2>
-            <p>使用已配置管理员权限的账号和密码进入控制室。</p>
+            <p>使用已配置管理员权限的用户名和密码进入控制室。</p>
           </div>
           <label>
-            <span>管理员账号</span>
+            <span>管理员用户名</span>
             <input
-              type="email"
-              name="email"
-              value={email}
-              onChange={event => setEmail(event.target.value)}
-              placeholder="admin@company.com"
+              type="text"
+              name="username"
+              value={username}
+              onChange={event => setUsername(event.target.value.toLowerCase())}
+              placeholder="输入管理员用户名"
               autoComplete="username"
+              minLength={3}
+              maxLength={32}
+              pattern="[a-z0-9][a-z0-9._-]{2,31}"
               autoFocus
               required
             />

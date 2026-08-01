@@ -6,6 +6,7 @@ const PASSWORD_ITERATIONS = 210_000;
 
 export type AuthenticatedUser = {
   id: string;
+  username?: string;
   email: string;
   phoneE164?: string;
   displayName: string;
@@ -17,19 +18,23 @@ export type AuthenticatedUser = {
 const seededAccounts = [
   {
     id: "usr_eval_user",
+    username: null,
     email: "user@eval.local",
     displayName: "演示用户",
     role: "developer",
     salt: "HP5L6ky7eu1zEFaVSx5agw==",
     passwordHash: "GYL+wH0VL8Jyg5BvGj4DPp1aXQSwJv0oFzy31F6mQak=",
+    previousPasswordHash: null,
   },
   {
     id: "usr_eval_admin",
+    username: "vben",
     email: "admin@eval.local",
     displayName: "系统管理员",
     role: "tenant_admin",
-    salt: "SOXeiOtQQPP3gzRkt4eZlg==",
-    passwordHash: "pz1cMU0k3cFNTyag50o3bNznxpygeE4J3LX6WckbLvk=",
+    salt: "upPuPdNBDMhCJNpXiAODwQ==",
+    passwordHash: "m5TQhCIJoXAPEh1c38JvH74fNHtiYx3QAUqqzDMmLkM=",
+    previousPasswordHash: "pz1cMU0k3cFNTyag50o3bNznxpygeE4J3LX6WckbLvk=",
   },
 ] as const;
 
@@ -57,7 +62,9 @@ async function initializeSchema() {
     "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_uq ON tenants (slug)",
     "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS username text",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 text",
+    "CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (username)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_uq ON users (phone_e164)",
     "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
@@ -91,10 +98,21 @@ async function initializeSchema() {
   ];
   for (const account of seededAccounts) {
     seedStatements.push(
-      db.prepare("INSERT INTO users (id, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.email, account.displayName, now, now),
+      db.prepare("INSERT INTO users (id, username, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.username, account.email, account.displayName, now, now),
       db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(`mem_${account.id}`, tenantId, account.id, account.role, now, now),
       db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.passwordHash, account.salt, PASSWORD_ITERATIONS, now),
     );
+    if (account.username) {
+      seedStatements.push(
+        db.prepare("UPDATE users SET username = ?, updated_at = ? WHERE id = ? AND username IS NULL").bind(account.username, now, account.id),
+      );
+    }
+    if (account.previousPasswordHash) {
+      seedStatements.push(
+        db.prepare("UPDATE password_credentials SET password_hash = ?, password_salt = ?, iterations = ?, updated_at = ? WHERE user_id = ? AND password_hash = ?")
+          .bind(account.passwordHash, account.salt, PASSWORD_ITERATIONS, now, account.id, account.previousPasswordHash),
+      );
+    }
   }
   await db.batch(seedStatements);
 }
@@ -111,6 +129,25 @@ export async function authenticateEmail(email: string, password: string): Promis
     WHERE lower(u.email) = lower(?)
     LIMIT 1
   `).bind(email).first<Record<string, string | number>>();
+  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  const valid = await verifyPassword(password, String(row.password_salt), Number(row.iterations), String(row.password_hash));
+  if (!valid) return null;
+  return mapUser(row);
+}
+
+export async function authenticateUsername(username: string, password: string): Promise<AuthenticatedUser | null> {
+  await ensureAuthSchema();
+  const row = await database().prepare(`
+    SELECT u.id, u.username, u.email, u.phone_e164, u.display_name, u.status,
+           c.password_hash, c.password_salt, c.iterations,
+           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    FROM users u
+    JOIN password_credentials c ON c.user_id = u.id
+    JOIN memberships m ON m.user_id = u.id
+    JOIN tenants t ON t.id = m.tenant_id
+    WHERE u.username = ?
+    LIMIT 1
+  `).bind(username).first<Record<string, string | number>>();
   if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
   const valid = await verifyPassword(password, String(row.password_salt), Number(row.iterations), String(row.password_hash));
   if (!valid) return null;
@@ -294,6 +331,7 @@ async function verifyPassword(password: string, saltBase64: string, iterations: 
 function mapUser(row: Record<string, string | number>): AuthenticatedUser {
   return {
     id: String(row.id),
+    ...(row.username ? { username: String(row.username) } : {}),
     email: String(row.email),
     ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
     displayName: String(row.display_name),

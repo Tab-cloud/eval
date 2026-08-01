@@ -22,22 +22,34 @@ test("keeps the public landing page and protected consoles separated", async () 
   assert.match(adminLoginPage, /<AdminLogin\s*\/>/);
 });
 
-test("admin has a dedicated password login that never grants normal users control-plane access", async () => {
-  const [page, client, route, css] = await Promise.all([
+test("admin has a dedicated username login that never grants normal users control-plane access", async () => {
+  const [page, client, route, core, store, schema, migration, css] = await Promise.all([
     source("../app/admin/auth/login/page.tsx"),
     source("../app/admin/auth/login/AdminLogin.tsx"),
     source("../app/api/admin/auth/login/route.ts"),
+    source("../app/auth/core.ts"),
+    source("../app/admin/store.ts"),
+    source("../db/schema.ts"),
+    source("../drizzle/0004_fluffy_lady_bullseye.sql"),
     source("../app/admin/auth/login/style.css"),
   ]);
   assert.match(page, /getSessionUser/);
   assert.match(client, /\/api\/admin\/auth\/login/);
+  assert.match(client, /JSON\.stringify\(\{ username, password \}\)/);
   assert.match(client, /location\.href = "\/admin"/);
-  assert.match(route, /authenticateEmail/);
+  assert.match(route, /authenticateUsername/);
+  assert.doesNotMatch(route, /authenticateEmail/);
   assert.match(route, /tenant_admin/);
   assert.match(route, /platform_admin/);
   assert.match(route, /isLoginBlocked/);
   assert.match(route, /rejectCrossSiteWrite/);
   assert.match(route, /x-forwarded-proto/);
+  assert.match(core, /WHERE u\.username = \?/);
+  assert.match(core, /verifyPassword/);
+  assert.match(store, /createPasswordHash/);
+  assert.match(schema, /username: text\("username"\)/);
+  assert.match(migration, /ADD COLUMN "username" text/);
+  assert.match(migration, /users_username_uq/);
   assert.match(css, /@media \(max-width: 600px\)/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });

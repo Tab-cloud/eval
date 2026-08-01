@@ -1,5 +1,5 @@
 import type { PostgresDatabase } from "../../db/postgres";
-import { authDatabase, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
+import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
 import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
 import { normalizeSemver } from "../releases/public";
@@ -40,7 +40,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const db = authDatabase();
   const tenantId = user.tenantId;
   const [users, llms, artifacts, releases, plans, audits] = await Promise.all([
-    db.prepare("SELECT u.id, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
+    db.prepare("SELECT u.id, u.username, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, display_name AS displayName, provider, model_id AS modelId, base_url AS baseUrl, secret_ref AS secretRef, status, requests_per_minute AS requestsPerMinute, updated_at AS updatedAt FROM llm_configs WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, updater_signature IS NOT NULL AS signed, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
@@ -78,13 +78,26 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const email = text(input.email).toLowerCase();
     const displayName = text(input.displayName);
     const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
+    const username = text(input.username).toLowerCase();
+    const password = text(input.password);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2) throw new Error("请填写有效邮箱和姓名。");
+    if (role === "tenant_admin" && (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) || password.length < 12 || password.length > 128)) {
+      throw new Error("管理员账号需要 3–32 位用户名和至少 12 位初始密码。");
+    }
     const id = `usr_${crypto.randomUUID()}`;
-    await db.batch([
-      db.prepare("INSERT INTO users (id, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").bind(id, email, displayName, now, now),
+    const statements = [
+      db.prepare("INSERT INTO users (id, username, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(id, role === "tenant_admin" ? username : null, email, displayName, now, now),
       db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(`mem_${crypto.randomUUID()}`, user.tenantId, id, role, now, now),
-    ]);
-    await recordAudit(db, user, "user.create", "user", id, { email, role });
+    ];
+    if (role === "tenant_admin") {
+      const credential = await createPasswordHash(password);
+      statements.push(
+        db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)")
+          .bind(id, credential.passwordHash, credential.salt, credential.iterations, now),
+      );
+    }
+    await db.batch(statements);
+    await recordAudit(db, user, "user.create", "user", id, { email, username: role === "tenant_admin" ? username : null, role });
     return { id };
   }
   if (action === "update_user") {
