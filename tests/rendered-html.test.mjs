@@ -55,14 +55,25 @@ test("admin has a dedicated username login that never grants normal users contro
 });
 
 test("admin control room exposes governed modules and audit logs without a side navigation", async () => {
-  const [consoleSource, css] = await Promise.all([
+  const [consoleSource, store, css] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
+    source("../app/admin/store.ts"),
     source("../app/admin/style.css"),
   ]);
   for (const label of ["运营看板", "用户管理", "LLM 配置", "工具源文件", "版本升级", "收费配置"]) {
     assert.match(consoleSource, new RegExp(label));
   }
   assert.match(consoleSource, /审计日志/);
+  assert.match(consoleSource, /真实网关流量/);
+  assert.match(consoleSource, /上线清单/);
+  assert.match(consoleSource, /模型运行质量/);
+  assert.match(consoleSource, /最近调用/);
+  assert.match(consoleSource, /data\.readiness/);
+  assert.match(store, /FROM gateway_requests WHERE tenant_id = \?/);
+  assert.match(store, /requests30d/);
+  assert.match(store, /successRate/);
+  assert.match(store, /averageLatency/);
+  assert.match(store, /tokens30d/);
   assert.match(consoleSource, /<header className="admin-bar"/);
   assert.doesNotMatch(consoleSource, /sidebar|side-nav|sider/i);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);

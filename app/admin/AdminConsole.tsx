@@ -8,7 +8,11 @@ import { AuthSettingsView, type AuthSettingsSnapshot } from "./AuthSettingsView"
 
 type AdminUser = { id: string; email: string; phoneE164?: string | null; displayName: string; tenantId: string; tenantName: string; role: string };
 type Snapshot = {
-  metrics: { users: number; activeUsers: number; llms: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number };
+  metrics: { users: number; activeUsers: number; llms: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; requests30d: number; todayRequests: number; successRate: number | null; averageLatency: number; tokens30d: number; activeKeys: number };
+  readiness: { users: boolean; identity: boolean; llms: boolean; apiKeys: boolean; artifacts: boolean; releases: boolean; billing: boolean };
+  dailyUsage: Array<{ day: number; requests: number; successful: number; averageLatency: number; tokens: number }>;
+  topModels: Array<{ modelName: string; requests: number; successRate: number | null; averageLatency: number; tokens: number }>;
+  recentRequests: Array<{ id: string; endpoint: string; statusCode: number; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; modelName: string; keyPrefix: string }>;
   users: Array<{ id: string; username?: string | null; email: string; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
   llms: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; secretRef: string; status: string; requestsPerMinute: number }>;
   artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; platform: string; architecture: string; status: string; createdAt: number }>;
@@ -82,7 +86,7 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
       {notice && <div className="admin-notice success"><Icon name="check"/>{notice}<button onClick={() => setNotice("")}>×</button></div>}
       {error && <div className="admin-notice error">{error}<button onClick={() => setError("")}>×</button></div>}
       {!data ? <div className="admin-loading"><i/><span>正在读取控制面数据</span></div> : <>
-        {active === "dashboard" && <DashboardView data={data}/>} 
+        {active === "dashboard" && <DashboardView data={data} onNavigate={setActive}/>}
         {active === "users" && <UsersView data={data} busy={busy} action={action}/>} 
         {active === "users" && <PhoneBindingPanel data={data} busy={busy} action={action}/>}
         {active === "identity" && <AuthSettingsView settings={data.authSettings} busy={busy} action={action}/>}
@@ -97,9 +101,49 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
   </main>;
 }
 
-function DashboardView({ data }: { data: Snapshot }) {
-  const stats = [[data.metrics.users,"组织用户"],[data.metrics.llms,"LLM 接入"],[data.metrics.artifacts,"工具源文件"],[data.metrics.publishedReleases,"公开版本"],[data.metrics.activePlans,"生效套餐"]];
-  return <div className="admin-dashboard"><section className="admin-hero"><div><p><i/>SYSTEM GOVERNANCE ONLINE</p><h2>看见平台。<br/><em>控制每一次变化。</em></h2><span>用户、模型、发布与商业策略在一个可审计的控制平面中完成配置。</span></div><aside><small>CONTROL INDEX</small><strong>{String(data.metrics.activeUsers).padStart(2,"0")}</strong><p>活跃成员</p><i/></aside></section><section className="admin-stat-strip">{stats.map(([value,label],index)=><article key={label}><span>0{index+1}</span><strong>{value}</strong><small>{label}</small></article>)}</section><section className="admin-insight-grid"><article><p>配置完整度</p><h3>{data.metrics.llms && data.metrics.activePlans ? "运营链路已建立" : "等待完成核心配置"}</h3><div className="admin-progress"><i style={{width:`${Math.min(100,25+data.metrics.llms*15+data.metrics.activePlans*20+data.metrics.publishedReleases*20)}%`}}/></div></article><article><p>发布状态</p><h3>{data.metrics.publishedReleases ? `${data.metrics.publishedReleases} 个版本正在公开分发` : "尚未发布正式版本"}</h3><span>只有绑定实际安装包的版本才能进入发布链路。</span></article></section></div>;
+function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (module: string) => void }) {
+  const readiness = [
+    { key: "users", module: "users", label: "组织与管理员", detail: `${data.metrics.activeUsers} 位活跃成员`, ready: data.readiness.users },
+    { key: "identity", module: "identity", label: "登录身份服务", detail: "阿里云短信或 Google OIDC", ready: data.readiness.identity },
+    { key: "llms", module: "llms", label: "模型与部署密钥", detail: `${data.metrics.llms} 个模型配置`, ready: data.readiness.llms },
+    { key: "apiKeys", module: "console", label: "网关 API 密钥", detail: `${data.metrics.activeKeys} 个活跃密钥`, ready: data.readiness.apiKeys },
+    { key: "artifacts", module: "artifacts", label: "已签名工具产物", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
+    { key: "releases", module: "releases", label: "公开升级版本", detail: `${data.metrics.publishedReleases} 个公开版本`, ready: data.readiness.releases },
+    { key: "billing", module: "billing", label: "生效收费套餐", detail: `${data.metrics.activePlans} 个生效套餐`, ready: data.readiness.billing },
+  ];
+  const completed = readiness.filter(item => item.ready).length;
+  const score = Math.round(completed / readiness.length * 100);
+  const stats: Array<[string, string]> = [
+    [compactNumber(data.metrics.requests30d), "30 天请求"],
+    [compactNumber(data.metrics.todayRequests), "24 小时请求"],
+    [data.metrics.successRate === null ? "—" : `${data.metrics.successRate}%`, "成功率"],
+    [data.metrics.averageLatency ? `${data.metrics.averageLatency} ms` : "—", "平均延迟"],
+    [compactNumber(data.metrics.tokens30d), "30 天 Token"],
+  ];
+  const maxRequests = Math.max(1, ...data.dailyUsage.map(item => item.requests));
+  const weeklyRequests = data.dailyUsage.reduce((total,item)=>total+item.requests,0);
+  return <div className="admin-dashboard">
+    <section className="admin-hero"><div><p><i/>SYSTEM GOVERNANCE ONLINE</p><h2>{completed === readiness.length ? <>控制平面。<br/><em>已经就绪。</em></> : <>从配置开始。<br/><em>直到真实运行。</em></>}</h2><span>所有指标来自当前组织的 PostgreSQL 数据。缺少真实配置时明确显示待完成，不填充演示数据。</span></div><aside><small>READINESS / 07</small><strong>{String(score).padStart(2,"0")}<sup>%</sup></strong><p>{completed} / {readiness.length} 条运营链路已完成</p><i style={{width:`${score}%`}}/></aside></section>
+    <section className="admin-stat-strip">{stats.map(([value,label],index)=><article key={label}><span>0{index+1}</span><strong>{value}</strong><small>{label}</small></article>)}</section>
+    <section className="admin-dashboard-grid">
+      <article className="admin-usage-panel">
+        <header><div><p>REQUEST SIGNAL / 7D</p><h3>真实网关流量</h3></div><span>{data.metrics.activeKeys} 个活跃 API 密钥</span></header>
+        {weeklyRequests ? <div className="admin-usage-chart" aria-label="最近七天网关请求趋势">{data.dailyUsage.map(item => <div key={item.day}><span>{item.requests}</span><i style={{height:`${Math.max(6,item.requests/maxRequests*100)}%`}}/><small>{formatUsageDay(item.day)}</small></div>)}</div> : <div className="admin-zero-state"><Icon name="chart"/><h4>尚无网关请求</h4><p>接入 LLM 并在用户控制台创建 API 密钥后，这里将显示真实请求趋势。</p><a href="/console">前往用户控制台 <Icon name="arrow"/></a></div>}
+      </article>
+      <article className="admin-readiness-panel">
+        <header><div><p>LAUNCH SEQUENCE</p><h3>上线清单</h3></div><strong>{completed}/{readiness.length}</strong></header>
+        <div>{readiness.map((item,index)=><button key={item.key} className={item.ready ? "complete" : ""} onClick={()=>item.module === "console" ? location.href="/console" : onNavigate(item.module)}><span>{String(index+1).padStart(2,"0")}</span><i>{item.ready ? <Icon name="check"/> : <Icon name="arrow"/>}</i><b>{item.label}</b><small>{item.ready ? "已完成" : item.detail}</small></button>)}</div>
+      </article>
+    </section>
+    <section className="admin-model-operations">
+      <header><div><p>MODEL OPERATIONS / 30D</p><h3>模型运行质量</h3></div><span>请求、成功率、延迟与 Token 均来自网关日志</span></header>
+      {data.topModels.length ? <div>{data.topModels.map((model,index)=><article key={model.modelName}><span>{String(index+1).padStart(2,"0")}</span><b>{model.modelName}</b><strong>{compactNumber(model.requests)}<small>请求</small></strong><strong>{model.successRate === null ? "—" : `${model.successRate}%`}<small>成功率</small></strong><strong>{model.averageLatency} ms<small>平均延迟</small></strong><strong>{compactNumber(model.tokens)}<small>Token</small></strong></article>)}</div> : <div className="admin-model-empty"><span>NO LIVE MODEL SIGNAL</span><p>完成模型配置并产生第一笔真实调用后，这里会形成模型质量排名。</p><button onClick={()=>onNavigate("llms")}>配置 LLM <Icon name="arrow"/></button></div>}
+    </section>
+    <section className="admin-recent-requests">
+      <header><div><p>LIVE REQUEST LEDGER</p><h3>最近调用</h3></div><span>仅显示当前组织最近 8 次调用</span></header>
+      {data.recentRequests.length ? <div>{data.recentRequests.map(request=><article key={request.id}><span className={`request-state ${request.statusCode >= 200 && request.statusCode < 400 ? "ok" : "error"}`}><i/>{request.statusCode}</span><b>{request.modelName}<small>{request.endpoint}</small></b><code>{request.latencyMs} ms</code><code>{compactNumber(request.inputTokens + request.outputTokens)} tokens</code><code>{request.keyPrefix}…</code><time>{formatRelativeTime(request.createdAt)}</time></article>)}</div> : <div className="admin-request-empty">暂无真实调用记录</div>}
+    </section>
+  </div>;
 }
 
 function UsersView({ data, busy, action }: ViewProps) {
@@ -149,6 +193,9 @@ function AdminLedger({headings,children}:{headings:string[];children:React.React
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
 function adminDescription(id:string){return ({dashboard:"跨用户、模型、发布与商业配置的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置中文短信与英文 Google 登录，并检查部署凭据完整度。",llms:"配置供应商、模型路由地址、密钥引用与速率边界。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义套餐价格、席位、请求额度与商业权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
+function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
+function formatUsageDay(day:number){return new Date(day*86400000).toLocaleDateString("zh-CN",{month:"numeric",day:"numeric"})}
+function formatRelativeTime(value:number){const seconds=Math.max(0,Math.floor(Date.now()/1000-value));if(seconds<60)return "刚刚";if(seconds<3600)return `${Math.floor(seconds/60)} 分钟前`;if(seconds<86400)return `${Math.floor(seconds/3600)} 小时前`;return new Date(value*1000).toLocaleDateString("zh-CN")}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
 function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","auth.providers.save":"保存登录配置","llm.save":"保存模型","llm.status":"模型状态","llm.test":"模型测试","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","api_key.create":"创建 API Key","api_key.revoke":"撤销 API Key","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}

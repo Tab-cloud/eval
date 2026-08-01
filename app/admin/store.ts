@@ -32,6 +32,10 @@ async function initializeAdminSchema() {
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
+    "CREATE TABLE IF NOT EXISTS api_keys (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, owner_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, name text NOT NULL, prefix text NOT NULL, secret_hash text NOT NULL, scopes jsonb NOT NULL, expires_at bigint, last_used_at bigint, revoked_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS api_keys_tenant_idx ON api_keys (tenant_id)",
+    "CREATE TABLE IF NOT EXISTS gateway_requests (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, api_key_id text NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, model_config_id text REFERENCES llm_configs(id), endpoint text NOT NULL, status_code integer NOT NULL, latency_ms integer NOT NULL, input_tokens integer DEFAULT 0 NOT NULL, output_tokens integer DEFAULT 0 NOT NULL, error_code text, created_at bigint NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS gateway_requests_tenant_time_idx ON gateway_requests (tenant_id, created_at)",
   ].map(sql => db.prepare(sql)));
 }
 
@@ -39,27 +43,109 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
   const tenantId = user.tenantId;
-  const [users, llms, artifacts, releases, plans, audits] = await Promise.all([
+  const now = Math.floor(Date.now() / 1000);
+  const monthStart = now - 30 * 86400;
+  const currentDay = Math.floor(now / 86400);
+  const weekStart = (currentDay - 6) * 86400;
+  const dayStart = now - 86400;
+  const [users, llms, artifacts, releases, plans, audits, gatewaySummary, dailyUsage, topModels, recentRequests, activeKeys] = await Promise.all([
     db.prepare("SELECT u.id, u.username, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, display_name AS displayName, provider, model_id AS modelId, base_url AS baseUrl, secret_ref AS secretRef, status, requests_per_minute AS requestsPerMinute, updated_at AS updatedAt FROM llm_configs WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, updater_signature IS NOT NULL AS signed, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, request_limit AS requestLimit, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
+    db.prepare(`SELECT COUNT(*) AS requests,
+      COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS today_requests,
+      COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
+      COALESCE(ROUND(AVG(latency_ms)), 0) AS average_latency,
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+      FROM gateway_requests WHERE tenant_id = ? AND created_at >= ?`).bind(dayStart, tenantId, monthStart).first<Record<string, number | string>>(),
+    db.prepare(`SELECT CAST(created_at / 86400 AS BIGINT) AS day,
+      COUNT(*) AS requests,
+      COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
+      COALESCE(ROUND(AVG(latency_ms)), 0) AS average_latency,
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+      FROM gateway_requests WHERE tenant_id = ? AND created_at >= ?
+      GROUP BY day ORDER BY day`).bind(tenantId, weekStart).all(),
+    db.prepare(`SELECT COALESCE(l.display_name, '已移除模型') AS model_name,
+      COUNT(*) AS requests,
+      COALESCE(SUM(CASE WHEN r.status_code >= 200 AND r.status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
+      COALESCE(ROUND(AVG(r.latency_ms)), 0) AS average_latency,
+      COALESCE(SUM(r.input_tokens + r.output_tokens), 0) AS tokens
+      FROM gateway_requests r LEFT JOIN llm_configs l ON l.id = r.model_config_id
+      WHERE r.tenant_id = ? AND r.created_at >= ?
+      GROUP BY l.id, l.display_name ORDER BY requests DESC LIMIT 5`).bind(tenantId, monthStart).all(),
+    db.prepare(`SELECT r.id, r.endpoint, r.status_code AS "statusCode", r.latency_ms AS "latencyMs",
+      r.input_tokens AS "inputTokens", r.output_tokens AS "outputTokens", r.created_at AS "createdAt",
+      COALESCE(l.display_name, '已移除模型') AS "modelName", COALESCE(k.prefix, '—') AS "keyPrefix"
+      FROM gateway_requests r LEFT JOIN llm_configs l ON l.id = r.model_config_id LEFT JOIN api_keys k ON k.id = r.api_key_id
+      WHERE r.tenant_id = ? ORDER BY r.created_at DESC LIMIT 8`).bind(tenantId).all(),
+    db.prepare("SELECT COUNT(*) AS count FROM api_keys WHERE tenant_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(tenantId, now).first<Record<string, number | string>>(),
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
   const authSettings = providerSettingsSnapshot(await tenantProviderSettings(tenantId));
+  const llmRows = llms.results as Array<Record<string, unknown>>;
+  const artifactRows = artifacts.results as Array<Record<string, unknown>>;
+  const releaseRows = releases.results as Array<Record<string, unknown>>;
+  const planRows = plans.results as Array<Record<string, unknown>>;
+  const requests = Number(gatewaySummary?.requests ?? 0);
+  const successful = Number(gatewaySummary?.successful ?? 0);
+  const activeUsers = userRows.filter(item => item.status === "active").length;
+  const configuredLlms = llmRows.filter(item => item.status === "active" && typeof item.secretRef === "string" && Boolean(process.env[item.secretRef])).length;
+  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed).length;
+  const publishedReleases = releaseRows.filter(item => item.status === "published").length;
+  const activePlans = planRows.filter(item => item.status === "active").length;
+  const activeKeyCount = Number(activeKeys?.count ?? 0);
+  const dailyRows = new Map((dailyUsage.results as Array<Record<string, unknown>>).map(item => [Number(item.day), item]));
   return {
     currentUser: user,
     metrics: {
       users: userRows.length,
-      activeUsers: userRows.filter(item => item.status === "active").length,
+      activeUsers,
       llms: llms.results.length,
       artifacts: artifacts.results.length,
-      publishedReleases: (releases.results as Array<Record<string, unknown>>).filter(item => item.status === "published").length,
-      activePlans: (plans.results as Array<Record<string, unknown>>).filter(item => item.status === "active").length,
+      publishedReleases,
+      activePlans,
       auditEvents: audits.results.length,
+      requests30d: requests,
+      todayRequests: Number(gatewaySummary?.today_requests ?? 0),
+      successRate: requests ? Math.round(successful / requests * 10000) / 100 : null,
+      averageLatency: Number(gatewaySummary?.average_latency ?? 0),
+      tokens30d: Number(gatewaySummary?.tokens ?? 0),
+      activeKeys: activeKeyCount,
     },
+    readiness: {
+      users: activeUsers > 0,
+      identity: authSettings.smsConfigured || authSettings.googleConfigured,
+      llms: configuredLlms > 0,
+      apiKeys: activeKeyCount > 0,
+      artifacts: signedArtifacts > 0,
+      releases: publishedReleases > 0,
+      billing: activePlans > 0,
+    },
+    dailyUsage: Array.from({ length: 7 }, (_, index) => {
+      const day = currentDay - 6 + index;
+      const item = dailyRows.get(day);
+      return {
+        day,
+        requests: Number(item?.requests ?? 0),
+        successful: Number(item?.successful ?? 0),
+        averageLatency: Number(item?.average_latency ?? 0),
+        tokens: Number(item?.tokens ?? 0),
+      };
+    }),
+    topModels: (topModels.results as Array<Record<string, unknown>>).map(item => {
+      const modelRequests = Number(item.requests);
+      return {
+        modelName: String(item.model_name),
+        requests: modelRequests,
+        successRate: modelRequests ? Math.round(Number(item.successful) / modelRequests * 10000) / 100 : null,
+        averageLatency: Number(item.average_latency),
+        tokens: Number(item.tokens),
+      };
+    }),
+    recentRequests: recentRequests.results,
     users: userRows,
     llms: llms.results,
     artifacts: artifacts.results,
