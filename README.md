@@ -36,9 +36,10 @@ npm run dev
 
 - `user@eval.local`：普通开发者
 - `admin@eval.local`：租户管理员
-- 初始密码均为 `123456`，仅在本地同时设置 `EVAL_ENABLE_PASSWORD_LOGIN=true` 时可使用旧密码接口
+- 初始密码均为 `123456`；管理员可在本地通过 `/admin/auth/login` 登录
+- `EVAL_ENABLE_PASSWORD_LOGIN=true` 只用于启用普通用户的旧邮箱密码接口，不影响独立管理员登录入口
 
-生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false` 和 `EVAL_ENABLE_PASSWORD_LOGIN=false`，并通过正式初始化流程创建管理员账号。
+生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false` 和 `EVAL_ENABLE_PASSWORD_LOGIN=false`，并通过正式初始化流程创建具有密码凭据的管理员账号，禁止继续使用示例账号和密码。
 
 ## 数据库
 
@@ -62,7 +63,8 @@ npm run db:migrate
 - `/`：公开落地页与公开下载
 - `/login`：中文界面使用手机号与阿里云短信验证码；英文界面使用管理员预置邮箱的 Google 登录
 - `/console`：用户控制台
-- `/admin`：租户管理员控制室
+- `/admin/auth/login`：管理员专用账号密码登录
+- `/admin`：租户管理员控制室；未登录时自动跳转到管理员专用登录页
 - `/docs`：开发者接口文档
 - `/api/v1/models`：模型目录
 - `/api/v1/chat/completions`：Chat Completions 中转

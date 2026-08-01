@@ -58,6 +58,8 @@ GOOGLE_OAUTH_CLIENT_SECRET=replace-with-web-client-secret
 OPENAI_API_KEY=replace-with-real-secret
 ```
 
+`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有密码凭据的 `tenant_admin` 或 `platform_admin` 账号；不要启用或保留示例 `admin@eval.local / 123456` 账号。
+
 保护环境文件：
 
 ```bash

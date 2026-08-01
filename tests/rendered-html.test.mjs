@@ -5,11 +5,12 @@ import test from "node:test";
 const source = path => readFile(new URL(path, import.meta.url), "utf8");
 
 test("keeps the public landing page and protected consoles separated", async () => {
-  const [home, consolePage, adminPage, authServer] = await Promise.all([
+  const [home, consolePage, adminPage, authServer, adminLoginPage] = await Promise.all([
     source("../app/page.tsx"),
     source("../app/console/page.tsx"),
     source("../app/admin/page.tsx"),
     source("../app/auth/server.ts"),
+    source("../app/admin/auth/login/page.tsx"),
   ]);
   assert.match(home, /<AgentLanding\s*\/>/);
   assert.match(consolePage, /requireEmailSession/);
@@ -17,6 +18,28 @@ test("keeps the public landing page and protected consoles separated", async () 
   assert.match(authServer, /tenant_admin/);
   assert.match(authServer, /platform_admin/);
   assert.match(authServer, /redirect\("\/console"\)/);
+  assert.match(authServer, /redirect\("\/admin\/auth\/login"\)/);
+  assert.match(adminLoginPage, /<AdminLogin\s*\/>/);
+});
+
+test("admin has a dedicated password login that never grants normal users control-plane access", async () => {
+  const [page, client, route, css] = await Promise.all([
+    source("../app/admin/auth/login/page.tsx"),
+    source("../app/admin/auth/login/AdminLogin.tsx"),
+    source("../app/api/admin/auth/login/route.ts"),
+    source("../app/admin/auth/login/style.css"),
+  ]);
+  assert.match(page, /getSessionUser/);
+  assert.match(client, /\/api\/admin\/auth\/login/);
+  assert.match(client, /location\.href = "\/admin"/);
+  assert.match(route, /authenticateEmail/);
+  assert.match(route, /tenant_admin/);
+  assert.match(route, /platform_admin/);
+  assert.match(route, /isLoginBlocked/);
+  assert.match(route, /rejectCrossSiteWrite/);
+  assert.match(route, /x-forwarded-proto/);
+  assert.match(css, /@media \(max-width: 600px\)/);
+  assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
 
 test("admin control room exposes governed modules and audit logs without a side navigation", async () => {
