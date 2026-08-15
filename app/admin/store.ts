@@ -2,6 +2,7 @@ import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
 import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
+import { cleanText, contentSlug, ensureContentSchema, publicContentTenantSlug } from "../content/store";
 import { normalizeSemver } from "../releases/public";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -16,10 +17,9 @@ export function ensureAdminSchema() {
 
 async function initializeAdminSchema() {
   await ensureAuthSchema();
+  await ensureContentSchema();
   const db = authDatabase();
   await db.batch([
-    "CREATE TABLE IF NOT EXISTS llm_configs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, display_name text NOT NULL, provider text NOT NULL, model_id text NOT NULL, base_url text NOT NULL, secret_ref text NOT NULL, status text NOT NULL, requests_per_minute integer NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS llm_configs_tenant_idx ON llm_configs (tenant_id)",
     "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS updater_signature text",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
@@ -28,14 +28,10 @@ async function initializeAdminSchema() {
     "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS release_versions_tenant_idx ON release_versions (tenant_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
-    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, request_limit bigint NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
-    "CREATE TABLE IF NOT EXISTS api_keys (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, owner_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, name text NOT NULL, prefix text NOT NULL, secret_hash text NOT NULL, scopes jsonb NOT NULL, expires_at bigint, last_used_at bigint, revoked_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS api_keys_tenant_idx ON api_keys (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS gateway_requests (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, api_key_id text NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, model_config_id text REFERENCES llm_configs(id), endpoint text NOT NULL, status_code integer NOT NULL, latency_ms integer NOT NULL, input_tokens integer DEFAULT 0 NOT NULL, output_tokens integer DEFAULT 0 NOT NULL, error_code text, created_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS gateway_requests_tenant_time_idx ON gateway_requests (tenant_id, created_at)",
   ].map(sql => db.prepare(sql)));
 }
 
@@ -43,116 +39,71 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
   const tenantId = user.tenantId;
-  const now = Math.floor(Date.now() / 1000);
-  const monthStart = now - 30 * 86400;
-  const currentDay = Math.floor(now / 86400);
-  const weekStart = (currentDay - 6) * 86400;
-  const dayStart = now - 86400;
-  const [users, llms, artifacts, releases, plans, audits, gatewaySummary, dailyUsage, topModels, recentRequests, activeKeys] = await Promise.all([
+  const [users, artifacts, releases, plans, audits, blogPosts, forumTopics, forumReplies] = await Promise.all([
     db.prepare("SELECT u.id, u.username, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT id, display_name AS displayName, provider, model_id AS modelId, base_url AS baseUrl, secret_ref AS secretRef, status, requests_per_minute AS requestsPerMinute, updated_at AS updatedAt FROM llm_configs WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, updater_signature IS NOT NULL AS signed, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
     db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, request_limit AS requestLimit, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
+    db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
-    db.prepare(`SELECT COUNT(*) AS requests,
-      COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS today_requests,
-      COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
-      COALESCE(ROUND(AVG(latency_ms)), 0) AS average_latency,
-      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-      FROM gateway_requests WHERE tenant_id = ? AND created_at >= ?`).bind(dayStart, tenantId, monthStart).first<Record<string, number | string>>(),
-    db.prepare(`SELECT CAST(created_at / 86400 AS BIGINT) AS day,
-      COUNT(*) AS requests,
-      COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
-      COALESCE(ROUND(AVG(latency_ms)), 0) AS average_latency,
-      COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-      FROM gateway_requests WHERE tenant_id = ? AND created_at >= ?
-      GROUP BY day ORDER BY day`).bind(tenantId, weekStart).all(),
-    db.prepare(`SELECT COALESCE(l.display_name, '已移除模型') AS model_name,
-      COUNT(*) AS requests,
-      COALESCE(SUM(CASE WHEN r.status_code >= 200 AND r.status_code < 400 THEN 1 ELSE 0 END), 0) AS successful,
-      COALESCE(ROUND(AVG(r.latency_ms)), 0) AS average_latency,
-      COALESCE(SUM(r.input_tokens + r.output_tokens), 0) AS tokens
-      FROM gateway_requests r LEFT JOIN llm_configs l ON l.id = r.model_config_id
-      WHERE r.tenant_id = ? AND r.created_at >= ?
-      GROUP BY l.id, l.display_name ORDER BY requests DESC LIMIT 5`).bind(tenantId, monthStart).all(),
-    db.prepare(`SELECT r.id, r.endpoint, r.status_code AS "statusCode", r.latency_ms AS "latencyMs",
-      r.input_tokens AS "inputTokens", r.output_tokens AS "outputTokens", r.created_at AS "createdAt",
-      COALESCE(l.display_name, '已移除模型') AS "modelName", COALESCE(k.prefix, '—') AS "keyPrefix"
-      FROM gateway_requests r LEFT JOIN llm_configs l ON l.id = r.model_config_id LEFT JOIN api_keys k ON k.id = r.api_key_id
-      WHERE r.tenant_id = ? ORDER BY r.created_at DESC LIMIT 8`).bind(tenantId).all(),
-    db.prepare("SELECT COUNT(*) AS count FROM api_keys WHERE tenant_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(tenantId, now).first<Record<string, number | string>>(),
+    db.prepare(`SELECT p.id, p.title, p.slug, p.excerpt, p.body, p.status, p.published_at AS publishedAt,
+      p.updated_at AS updatedAt, u.display_name AS authorName
+      FROM blog_posts p JOIN users u ON u.id = p.author_id
+      WHERE p.tenant_id = ? ORDER BY p.created_at DESC LIMIT 100`).bind(tenantId).all(),
+    db.prepare(`SELECT t.id, t.title, t.slug, t.category, t.status, t.pinned, t.created_at AS createdAt,
+      t.last_activity_at AS lastActivityAt, u.display_name AS authorName,
+      COUNT(r.id) FILTER (WHERE r.status = 'visible') AS replyCount
+      FROM forum_topics t JOIN users u ON u.id = t.author_id
+      LEFT JOIN forum_replies r ON r.topic_id = t.id AND r.tenant_id = t.tenant_id
+      WHERE t.tenant_id = ? GROUP BY t.id, u.display_name
+      ORDER BY t.pinned DESC, t.last_activity_at DESC LIMIT 100`).bind(tenantId).all(),
+    db.prepare(`SELECT r.id, r.topic_id AS topicId, r.body, r.status, r.created_at AS createdAt,
+      t.title AS topicTitle, u.display_name AS authorName
+      FROM forum_replies r JOIN forum_topics t ON t.id = r.topic_id JOIN users u ON u.id = r.author_id
+      WHERE r.tenant_id = ? ORDER BY r.created_at DESC LIMIT 50`).bind(tenantId).all(),
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
   const authSettings = providerSettingsSnapshot(await tenantProviderSettings(tenantId));
-  const llmRows = llms.results as Array<Record<string, unknown>>;
   const artifactRows = artifacts.results as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
-  const requests = Number(gatewaySummary?.requests ?? 0);
-  const successful = Number(gatewaySummary?.successful ?? 0);
   const activeUsers = userRows.filter(item => item.status === "active").length;
-  const configuredLlms = llmRows.filter(item => item.status === "active" && typeof item.secretRef === "string" && Boolean(process.env[item.secretRef])).length;
   const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
   const activePlans = planRows.filter(item => item.status === "active").length;
-  const activeKeyCount = Number(activeKeys?.count ?? 0);
-  const dailyRows = new Map((dailyUsage.results as Array<Record<string, unknown>>).map(item => [Number(item.day), item]));
   return {
     currentUser: user,
     metrics: {
       users: userRows.length,
       activeUsers,
-      llms: llms.results.length,
       artifacts: artifacts.results.length,
       publishedReleases,
       activePlans,
       auditEvents: audits.results.length,
-      requests30d: requests,
-      todayRequests: Number(gatewaySummary?.today_requests ?? 0),
-      successRate: requests ? Math.round(successful / requests * 10000) / 100 : null,
-      averageLatency: Number(gatewaySummary?.average_latency ?? 0),
-      tokens30d: Number(gatewaySummary?.tokens ?? 0),
-      activeKeys: activeKeyCount,
+      blogPosts: blogPosts.results.length,
+      forumTopics: forumTopics.results.length,
+      forumReplies: forumReplies.results.length,
     },
     readiness: {
       users: activeUsers > 0,
-      identity: authSettings.smsConfigured || authSettings.googleConfigured,
-      llms: configuredLlms > 0,
-      apiKeys: activeKeyCount > 0,
+      identity: authSettings.smsConfigured || authSettings.googleConfigured || authSettings.githubConfigured,
+      content: blogPosts.results.length > 0 || forumTopics.results.length > 0,
       artifacts: signedArtifacts > 0,
       releases: publishedReleases > 0,
       billing: activePlans > 0,
     },
-    dailyUsage: Array.from({ length: 7 }, (_, index) => {
-      const day = currentDay - 6 + index;
-      const item = dailyRows.get(day);
-      return {
-        day,
-        requests: Number(item?.requests ?? 0),
-        successful: Number(item?.successful ?? 0),
-        averageLatency: Number(item?.average_latency ?? 0),
-        tokens: Number(item?.tokens ?? 0),
-      };
-    }),
-    topModels: (topModels.results as Array<Record<string, unknown>>).map(item => {
-      const modelRequests = Number(item.requests);
-      return {
-        modelName: String(item.model_name),
-        requests: modelRequests,
-        successRate: modelRequests ? Math.round(Number(item.successful) / modelRequests * 10000) / 100 : null,
-        averageLatency: Number(item.average_latency),
-        tokens: Number(item.tokens),
-      };
-    }),
-    recentRequests: recentRequests.results,
     users: userRows,
-    llms: llms.results,
     artifacts: artifacts.results,
     releases: releases.results,
     plans: plans.results,
     audits: audits.results,
     authSettings,
+    content: {
+      publicTenant: user.tenantId && user.tenantName ? publicContentTenantSlug() === await tenantSlug(tenantId) : false,
+      publicTenantSlug: publicContentTenantSlug(),
+      blogPosts: blogPosts.results,
+      forumTopics: forumTopics.results,
+      forumReplies: forumReplies.results,
+    },
   };
 }
 
@@ -231,44 +182,68 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
       googleClientIdRef: settings.googleClientIdRef,
       googleClientSecretRef: settings.googleClientSecretRef,
       hostedDomainRestricted: Boolean(settings.googleAllowedHostedDomain),
+      githubEnabled: settings.githubEnabled,
+      githubClientIdRef: settings.githubClientIdRef,
+      githubClientSecretRef: settings.githubClientSecretRef,
     });
     return providerSettingsSnapshot(settings);
   }
-  if (action === "save_llm") {
-    const id = text(input.id) || `llm_${crypto.randomUUID()}`;
-    const displayName = text(input.displayName), provider = text(input.provider), modelId = text(input.modelId), baseUrl = text(input.baseUrl), secretRef = text(input.secretRef);
-    const rpm = Math.max(1, number(input.requestsPerMinute, 60));
-    if (!displayName || !provider || !modelId || !/^https:\/\//.test(baseUrl) || !/^[A-Z][A-Z0-9_]{2,63}$/.test(secretRef)) throw new Error("模型名称、HTTPS 地址和密钥引用格式不正确。");
-    await db.prepare("INSERT INTO llm_configs (id, tenant_id, display_name, provider, model_id, base_url, secret_ref, status, requests_per_minute, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, provider=excluded.provider, model_id=excluded.model_id, base_url=excluded.base_url, secret_ref=excluded.secret_ref, requests_per_minute=excluded.requests_per_minute, updated_at=excluded.updated_at WHERE tenant_id=excluded.tenant_id").bind(id, user.tenantId, displayName, provider, modelId, baseUrl, secretRef, rpm, now, now).run();
-    await recordAudit(db, user, "llm.save", "llm_config", id, { provider, modelId, rpm });
-    return { id };
-  }
-  if (action === "set_llm_status") {
+  if (action === "save_blog_post") {
     const id = text(input.id);
-    const status = allowed(text(input.status), ["active", "maintenance", "disabled"], "maintenance");
-    const result = await db.prepare("UPDATE llm_configs SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, now, id, user.tenantId).run();
-    if (!result.meta.changes) throw new Error("模型配置不存在。");
-    await recordAudit(db, user, "llm.status", "llm_config", id, { status });
+    const title = cleanText(input.title);
+    const excerpt = cleanText(input.excerpt);
+    const body = cleanText(input.body);
+    const status = allowed(text(input.status), ["draft", "published", "archived"], "draft");
+    if (title.length < 4 || title.length > 140) throw new Error("博客标题需要 4–140 个字符。");
+    if (excerpt.length < 10 || excerpt.length > 320) throw new Error("博客摘要需要 10–320 个字符。");
+    if (body.length < 40 || body.length > 50_000) throw new Error("博客正文需要 40–50,000 个字符。");
+    if (id) {
+      const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ? AND tenant_id = ?")
+        .bind(id, user.tenantId).first<{ status: string; published_at: number | null }>();
+      if (!existing) throw new Error("博客文章不存在或不属于当前组织。");
+      const publishedAt = status === "published" ? (existing.status === "published" && existing.published_at ? existing.published_at : now) : existing.published_at;
+      await db.prepare("UPDATE blog_posts SET title = ?, excerpt = ?, body = ?, status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
+        .bind(title, excerpt, body, status, publishedAt, now, id, user.tenantId).run();
+      await recordAudit(db, user, "blog.post.update", "blog_post", id, { status, titleLength: title.length, bodyLength: body.length });
+      return { id };
+    }
+    const postId = `post_${crypto.randomUUID()}`;
+    const slug = contentSlug(title, "article");
+    await db.prepare("INSERT INTO blog_posts (id, tenant_id, author_id, title, slug, excerpt, body, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(postId, user.tenantId, user.id, title, slug, excerpt, body, status, status === "published" ? now : null, now, now).run();
+    await recordAudit(db, user, "blog.post.create", "blog_post", postId, { status, titleLength: title.length, bodyLength: body.length });
+    return { id: postId, slug };
+  }
+  if (action === "set_blog_status") {
+    const id = text(input.id);
+    const status = allowed(text(input.status), ["draft", "published", "archived"], "draft");
+    const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ? AND tenant_id = ?")
+      .bind(id, user.tenantId).first<{ status: string; published_at: number | null }>();
+    if (!existing) throw new Error("博客文章不存在或不属于当前组织。");
+    const publishedAt = status === "published" ? (existing.status === "published" && existing.published_at ? existing.published_at : now) : existing.published_at;
+    await db.prepare("UPDATE blog_posts SET status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
+      .bind(status, publishedAt, now, id, user.tenantId).run();
+    await recordAudit(db, user, "blog.post.status", "blog_post", id, { status });
     return { id, status };
   }
-  if (action === "test_llm") {
+  if (action === "moderate_forum_topic") {
     const id = text(input.id);
-    const config = await db.prepare("SELECT base_url, secret_ref FROM llm_configs WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ base_url: string; secret_ref: string }>();
-    if (!config) throw new Error("模型配置不存在。");
-    const secret = process.env[config.secret_ref];
-    if (typeof secret !== "string" || !secret) throw new Error(`部署环境尚未配置 ${config.secret_ref}。`);
-    let target: URL;
-    try { target = new URL("models", config.base_url.endsWith("/") ? config.base_url : `${config.base_url}/`); } catch { throw new Error("模型地址无效。"); }
-    const started = Date.now();
-    let response: Response;
-    try {
-      response = await fetch(target, { headers: { Authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(15_000) });
-    } catch { throw new Error("无法连接模型上游。"); }
-    const healthy = response.ok;
-    await db.prepare("UPDATE llm_configs SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(healthy ? "active" : "maintenance", now, id, user.tenantId).run();
-    await recordAudit(db, user, "llm.test", "llm_config", id, { healthy, statusCode: response.status, latencyMs: Date.now() - started });
-    if (!healthy) throw new Error(`上游健康检查失败（HTTP ${response.status}）。`);
-    return { id, healthy, latencyMs: Date.now() - started };
+    const status = allowed(text(input.status), ["open", "locked", "hidden"], "open");
+    const pinned = input.pinned === true;
+    const result = await db.prepare("UPDATE forum_topics SET status = ?, pinned = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
+      .bind(status, pinned, now, id, user.tenantId).run();
+    if (!result.meta.changes) throw new Error("论坛主题不存在或不属于当前组织。");
+    await recordAudit(db, user, "forum.topic.moderate", "forum_topic", id, { status, pinned });
+    return { id, status, pinned };
+  }
+  if (action === "moderate_forum_reply") {
+    const id = text(input.id);
+    const status = allowed(text(input.status), ["visible", "hidden"], "visible");
+    const result = await db.prepare("UPDATE forum_replies SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
+      .bind(status, now, id, user.tenantId).run();
+    if (!result.meta.changes) throw new Error("论坛回复不存在或不属于当前组织。");
+    await recordAudit(db, user, "forum.reply.moderate", "forum_reply", id, { status });
+    return { id, status };
   }
   if (action === "create_release") {
     const artifactId = text(input.artifactId), version = text(input.version), notes = text(input.notes);
@@ -301,11 +276,11 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
   if (action === "save_plan") {
     const id = text(input.id) || `plan_${crypto.randomUUID()}`;
     const name = text(input.name), currency = allowed(text(input.currency), ["CNY", "USD"], "CNY");
-    const monthlyPriceCents = Math.max(0, number(input.monthlyPriceCents, 0)), requestLimit = Math.max(0, number(input.requestLimit, 0)), seatLimit = Math.max(1, number(input.seatLimit, 1));
+    const monthlyPriceCents = Math.max(0, number(input.monthlyPriceCents, 0)), seatLimit = Math.max(1, number(input.seatLimit, 1));
     const features = Array.isArray(input.features) ? input.features.map(text).filter(Boolean).slice(0, 12) : text(input.features).split("\n").map(item => item.trim()).filter(Boolean).slice(0, 12);
     if (!name) throw new Error("请输入套餐名称。");
-    await db.prepare("INSERT INTO billing_plans (id, tenant_id, name, monthly_price_cents, currency, request_limit, seat_limit, features, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents, currency=excluded.currency, request_limit=excluded.request_limit, seat_limit=excluded.seat_limit, features=excluded.features, updated_at=excluded.updated_at WHERE tenant_id=excluded.tenant_id").bind(id, user.tenantId, name, monthlyPriceCents, currency, requestLimit, seatLimit, JSON.stringify(features), now, now).run();
-    await recordAudit(db, user, "billing_plan.save", "billing_plan", id, { currency, monthlyPriceCents, requestLimit, seatLimit });
+    await db.prepare("INSERT INTO billing_plans (id, tenant_id, name, monthly_price_cents, currency, seat_limit, features, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents, currency=excluded.currency, seat_limit=excluded.seat_limit, features=excluded.features, updated_at=excluded.updated_at WHERE tenant_id=excluded.tenant_id").bind(id, user.tenantId, name, monthlyPriceCents, currency, seatLimit, JSON.stringify(features), now, now).run();
+    await recordAudit(db, user, "billing_plan.save", "billing_plan", id, { currency, monthlyPriceCents, seatLimit });
     return { id };
   }
   if (action === "set_plan_status") {
@@ -326,4 +301,9 @@ function allowed<T extends string>(value: string, values: readonly T[], fallback
 async function recordAudit(db: PostgresDatabase, user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>) {
   await db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, action, resourceType, resourceId, JSON.stringify(metadata), Math.floor(Date.now() / 1000)).run();
+}
+
+async function tenantSlug(tenantId: string) {
+  const row = await authDatabase().prepare("SELECT slug FROM tenants WHERE id = ?").bind(tenantId).first<{ slug: string }>();
+  return row?.slug ?? "";
 }

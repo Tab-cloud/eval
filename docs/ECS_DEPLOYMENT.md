@@ -44,6 +44,7 @@ DATABASE_IDLE_TIMEOUT_MS=30000
 APP_ORIGIN=https://eval.zailink.space
 EVAL_PUBLIC_RELEASE_TENANT_SLUG=connecting-hangzhou
 EVAL_IDENTITY_TENANT_SLUG=connecting-hangzhou
+EVAL_PUBLIC_CONTENT_TENANT_SLUG=connecting-hangzhou
 ARTIFACT_STORAGE_PATH=/srv/eval-web/artifacts
 EVAL_ENABLE_SEEDED_ACCOUNTS=false
 EVAL_ENABLE_PASSWORD_LOGIN=false
@@ -55,10 +56,13 @@ ALIYUN_SMS_TEMPLATE_CODE_KEY=code
 AUTH_SMS_CODE_PEPPER=至少32位随机字符串
 GOOGLE_OAUTH_CLIENT_ID=replace-with-web-client-id
 GOOGLE_OAUTH_CLIENT_SECRET=replace-with-web-client-secret
-OPENAI_API_KEY=replace-with-real-secret
+GITHUB_OAUTH_CLIENT_ID=replace-with-oauth-app-client-id
+GITHUB_OAUTH_CLIENT_SECRET=replace-with-oauth-app-client-secret
 ```
 
 `EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `tenant_admin` 或 `platform_admin` 角色的账号；不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
+
+桌面账号绑定复用 `APP_ORIGIN` 指定的 HTTPS 站点，并通过 `/device` 完成浏览器确认。部署新版本前必须执行数据库迁移，创建 `desktop_auth_requests`、`desktop_sessions` 及 OAuth `return_path` 字段；不得将桌面令牌、设备码或会话明文写入日志。
 
 保护环境文件：
 
@@ -67,7 +71,7 @@ sudo chown root:eval-web /etc/eval-web/eval-web.env
 sudo chmod 0640 /etc/eval-web/eval-web.env
 ```
 
-不要把数据库密码、证书或 LLM 密钥提交到 Git。
+不要把数据库密码、证书、短信凭据或 OAuth Secret 提交到 Git。
 
 阿里云短信签名和验证码模板必须先审核通过，RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，并把授权回调 URI 精确配置为：
 
@@ -76,6 +80,16 @@ https://eval.zailink.space/api/auth/google/callback
 ```
 
 如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。管理员需先在用户管理中创建邮箱账号，并为中文登录绑定手机号。
+
+在 GitHub 的 Developer settings 中创建 OAuth App，只申请 `user:email`，并把 Authorization callback URL 精确配置为：
+
+```text
+https://eval.zailink.space/api/auth/github/callback
+```
+
+GitHub 登录同时显示在中文和英文登录页。管理员仍需先创建邮箱用户；只有 GitHub 返回的已验证邮箱与当前身份租户中的活动用户匹配时才会建立会话。
+
+`EVAL_PUBLIC_CONTENT_TENANT_SLUG` 指定公开博客的唯一内容组织。论坛不使用这个变量，始终按登录成员的当前组织隔离。部署包含论坛/博客功能的版本前必须运行迁移，创建 `blog_posts`、`forum_topics` 与 `forum_replies`；上线后由该组织管理员在“内容中心”发布第一篇博客并治理论坛内容。
 
 ## 构建与首次启动
 
@@ -114,7 +128,6 @@ Nginx 模板已经包含：
 - `eval.zailink.space` 的 HTTP 到 HTTPS 跳转。
 - `Host`、`X-Forwarded-Proto` 与真实客户端 IP。
 - 128 MB 上传上限。
-- LLM 流式接口关闭响应缓冲。
 - Node 服务只通过 `127.0.0.1:41738` 访问。
 
 安全组只开放 80/443；41738 和 PostgreSQL 端口不向公网开放。

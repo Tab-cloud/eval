@@ -68,7 +68,7 @@ export function AdminLogin() {
         <div className="admin-auth-index"><span>AUTHORIZATION / 01</span><i/><span>RESTRICTED ACCESS</span></div>
         <div className="admin-auth-signal"><i/>ADMINISTRATIVE IDENTITY</div>
         <h1 id="admin-auth-title">进入控制层。<br/><em>管理每一次变化。</em></h1>
-        <p>面向平台管理员的独立入口。用户、模型、工具版本与商业配置，均在可审计的权限边界内完成。</p>
+        <p>面向平台管理员的独立入口。用户、登录方式、社区内容、工具版本与产品套餐，均在可审计的权限边界内完成。</p>
         <div className="admin-auth-points">
           <span><Icon name="shield"/><b>管理员角色校验</b><small>仅限授权控制平面账号</small></span>
           <span><Icon name="clock"/><b>登录风险控制</b><small>失败限制与安全会话</small></span>

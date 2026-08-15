@@ -1,4 +1,5 @@
 import { beginGoogleAuthorization, GoogleConfigurationError } from "../../../../auth/google";
+import { safeReturnPath } from "../../../../auth/return-path";
 
 export async function GET(request: Request) {
   try {
@@ -13,6 +14,9 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const reason = error instanceof GoogleConfigurationError ? "google_not_configured" : "google_unavailable";
-    return Response.redirect(new URL(`/login?lang=en&error=${reason}`, request.url));
+    const url = new URL(request.url);
+    const returnPath = safeReturnPath(url.searchParams.get("returnTo"));
+    const locale = url.searchParams.get("lang") === "zh" ? "zh" : "en";
+    return Response.redirect(new URL(`/login?lang=${locale}&error=${reason}&returnTo=${encodeURIComponent(returnPath)}`, request.url));
   }
 }

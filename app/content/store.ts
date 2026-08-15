@@ -1,0 +1,233 @@
+import { authDatabase, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
+import { identityTenantSlug } from "../auth/provider-settings";
+
+export const forumCategories = ["general", "hardware", "firmware", "agents"] as const;
+export type ForumCategory = typeof forumCategories[number];
+
+export type ForumTopicSummary = {
+  id: string;
+  slug: string;
+  title: string;
+  body: string;
+  category: ForumCategory;
+  status: "open" | "locked";
+  pinned: boolean;
+  authorName: string;
+  authorId: string;
+  replyCount: number;
+  lastActivityAt: number;
+  createdAt: number;
+};
+
+export type ForumReply = {
+  id: string;
+  body: string;
+  authorName: string;
+  authorId: string;
+  createdAt: number;
+};
+
+export type BlogPostSummary = {
+  id: string;
+  slug: string;
+  title: string;
+  excerpt: string;
+  body: string;
+  authorName: string;
+  publishedAt: number;
+  updatedAt: number;
+};
+
+let contentSchemaInitialization: Promise<void> | null = null;
+
+export function ensureContentSchema() {
+  contentSchemaInitialization ??= initializeContentSchema().catch(error => {
+    contentSchemaInitialization = null;
+    throw error;
+  });
+  return contentSchemaInitialization;
+}
+
+async function initializeContentSchema() {
+  await ensureAuthSchema();
+  const statements = [
+    "CREATE TABLE IF NOT EXISTS forum_topics (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, author_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, title text NOT NULL, slug text NOT NULL, body text NOT NULL, category text DEFAULT 'general' NOT NULL, status text DEFAULT 'open' NOT NULL, pinned boolean DEFAULT false NOT NULL, last_activity_at bigint NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS forum_topics_tenant_slug_uq ON forum_topics (tenant_id, slug)",
+    "CREATE INDEX IF NOT EXISTS forum_topics_tenant_activity_idx ON forum_topics (tenant_id, last_activity_at)",
+    "CREATE INDEX IF NOT EXISTS forum_topics_author_time_idx ON forum_topics (author_id, created_at)",
+    "CREATE TABLE IF NOT EXISTS forum_replies (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, topic_id text NOT NULL REFERENCES forum_topics(id) ON DELETE CASCADE, author_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, body text NOT NULL, status text DEFAULT 'visible' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS forum_replies_topic_time_idx ON forum_replies (topic_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS forum_replies_tenant_time_idx ON forum_replies (tenant_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS forum_replies_author_time_idx ON forum_replies (author_id, created_at)",
+    "CREATE TABLE IF NOT EXISTS blog_posts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, author_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, title text NOT NULL, slug text NOT NULL, excerpt text NOT NULL, body text NOT NULL, status text DEFAULT 'draft' NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS blog_posts_tenant_slug_uq ON blog_posts (tenant_id, slug)",
+    "CREATE INDEX IF NOT EXISTS blog_posts_tenant_status_time_idx ON blog_posts (tenant_id, status, published_at)",
+  ];
+  await authDatabase().batch(statements.map(sql => authDatabase().prepare(sql)));
+}
+
+export function publicContentTenantSlug() {
+  return process.env.EVAL_PUBLIC_CONTENT_TENANT_SLUG?.trim()
+    || process.env.EVAL_PUBLIC_RELEASE_TENANT_SLUG?.trim()
+    || identityTenantSlug();
+}
+
+export async function forumOverview(user: AuthenticatedUser, category?: string) {
+  await ensureContentSchema();
+  const selected = forumCategories.includes(category as ForumCategory) ? category as ForumCategory : null;
+  const db = authDatabase();
+  const topicsQuery = `
+    SELECT t.id, t.slug, t.title, LEFT(t.body, 600) AS body, t.category, t.status, t.pinned,
+           t.author_id AS authorId, u.display_name AS authorName,
+           t.last_activity_at AS lastActivityAt, t.created_at AS createdAt,
+           COUNT(r.id) AS replyCount
+    FROM forum_topics t
+    JOIN users u ON u.id = t.author_id
+    LEFT JOIN forum_replies r ON r.topic_id = t.id AND r.tenant_id = t.tenant_id AND r.status = 'visible'
+    WHERE t.tenant_id = ? AND t.status <> 'hidden'${selected ? " AND t.category = ?" : ""}
+    GROUP BY t.id, u.display_name
+    ORDER BY t.pinned DESC, t.last_activity_at DESC
+    LIMIT 100
+  `;
+  const [topics, counts] = await Promise.all([
+    db.prepare(topicsQuery).bind(...(selected ? [user.tenantId, selected] : [user.tenantId])).all<ForumTopicSummary>(),
+    db.prepare("SELECT category, COUNT(*) AS count FROM forum_topics WHERE tenant_id = ? AND status <> 'hidden' GROUP BY category")
+      .bind(user.tenantId).all<{ category: ForumCategory; count: number }>(),
+  ]);
+  const categoryCounts = Object.fromEntries(forumCategories.map(item => [item, 0])) as Record<ForumCategory, number>;
+  for (const row of counts.results) categoryCounts[row.category] = Number(row.count);
+  return { topics: topics.results.map(mapForumTopic), categoryCounts, selectedCategory: selected };
+}
+
+export async function forumTopic(user: AuthenticatedUser, slug: string) {
+  await ensureContentSchema();
+  const db = authDatabase();
+  const topic = await db.prepare(`
+    SELECT t.id, t.slug, t.title, t.body, t.category, t.status, t.pinned,
+           t.author_id AS authorId, u.display_name AS authorName,
+           t.last_activity_at AS lastActivityAt, t.created_at AS createdAt,
+           (SELECT COUNT(*) FROM forum_replies r WHERE r.topic_id = t.id AND r.tenant_id = t.tenant_id AND r.status = 'visible') AS replyCount
+    FROM forum_topics t JOIN users u ON u.id = t.author_id
+    WHERE t.tenant_id = ? AND t.slug = ? AND t.status <> 'hidden'
+    LIMIT 1
+  `).bind(user.tenantId, slug).first<ForumTopicSummary>();
+  if (!topic) return null;
+  const replies = await db.prepare(`
+    SELECT r.id, r.body, r.author_id AS authorId, u.display_name AS authorName, r.created_at AS createdAt
+    FROM forum_replies r JOIN users u ON u.id = r.author_id
+    WHERE r.tenant_id = ? AND r.topic_id = ? AND r.status = 'visible'
+    ORDER BY r.created_at ASC LIMIT 500
+  `).bind(user.tenantId, topic.id).all<ForumReply>();
+  return { topic: mapForumTopic(topic), replies: replies.results.map(mapForumReply) };
+}
+
+export async function createForumTopic(user: AuthenticatedUser, input: Record<string, unknown>) {
+  await ensureContentSchema();
+  const title = cleanText(input.title);
+  const body = cleanText(input.body);
+  const category = forumCategories.includes(input.category as ForumCategory) ? input.category as ForumCategory : "general";
+  if (title.length < 4 || title.length > 120) throw new Error("主题标题需要 4–120 个字符。");
+  if (body.length < 20 || body.length > 10_000) throw new Error("主题正文需要 20–10,000 个字符。");
+  const db = authDatabase();
+  const now = epochSeconds();
+  const recent = await db.prepare("SELECT COUNT(*) AS count FROM forum_topics WHERE tenant_id = ? AND author_id = ? AND created_at >= ?")
+    .bind(user.tenantId, user.id, now - 3600).first<{ count: number }>();
+  if (Number(recent?.count ?? 0) >= 5) throw new Error("每小时最多发布 5 个主题，请稍后再试。");
+  const id = `topic_${crypto.randomUUID()}`;
+  const slug = contentSlug(title, "topic");
+  await db.batch([
+    db.prepare("INSERT INTO forum_topics (id, tenant_id, author_id, title, slug, body, category, status, pinned, last_activity_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', false, ?, ?, ?)")
+      .bind(id, user.tenantId, user.id, title, slug, body, category, now, now, now),
+    auditStatement(user, "forum.topic.create", "forum_topic", id, { category, titleLength: title.length, bodyLength: body.length }, now),
+  ]);
+  return { id, slug };
+}
+
+export async function createForumReply(user: AuthenticatedUser, topicId: string, input: Record<string, unknown>) {
+  await ensureContentSchema();
+  const body = cleanText(input.body);
+  if (body.length < 2 || body.length > 5_000) throw new Error("回复需要 2–5,000 个字符。");
+  const db = authDatabase();
+  const now = epochSeconds();
+  const [topic, recent] = await Promise.all([
+    db.prepare("SELECT id, slug, status FROM forum_topics WHERE id = ? AND tenant_id = ?").bind(topicId, user.tenantId).first<{ id: string; slug: string; status: string }>(),
+    db.prepare("SELECT COUNT(*) AS count FROM forum_replies WHERE tenant_id = ? AND author_id = ? AND created_at >= ?")
+      .bind(user.tenantId, user.id, now - 3600).first<{ count: number }>(),
+  ]);
+  if (!topic || topic.status === "hidden") throw new Error("主题不存在。");
+  if (topic.status === "locked") throw new Error("该主题已锁定，不能继续回复。");
+  if (Number(recent?.count ?? 0) >= 30) throw new Error("每小时最多发布 30 条回复，请稍后再试。");
+  const id = `reply_${crypto.randomUUID()}`;
+  await db.batch([
+    db.prepare("INSERT INTO forum_replies (id, tenant_id, topic_id, author_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'visible', ?, ?)")
+      .bind(id, user.tenantId, topicId, user.id, body, now, now),
+    db.prepare("UPDATE forum_topics SET last_activity_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND status = 'open'")
+      .bind(now, now, topicId, user.tenantId),
+    auditStatement(user, "forum.reply.create", "forum_reply", id, { topicId, bodyLength: body.length }, now),
+  ]);
+  return { id, slug: topic.slug };
+}
+
+export async function publishedBlogPosts(limit = 50) {
+  await ensureContentSchema();
+  const now = epochSeconds();
+  const rows = await authDatabase().prepare(`
+    SELECT p.id, p.slug, p.title, p.excerpt, '' AS body, u.display_name AS authorName,
+           p.published_at AS publishedAt, p.updated_at AS updatedAt
+    FROM blog_posts p
+    JOIN tenants t ON t.id = p.tenant_id
+    JOIN users u ON u.id = p.author_id
+    WHERE t.slug = ? AND t.status = 'active' AND p.status = 'published' AND p.published_at IS NOT NULL AND p.published_at <= ?
+    ORDER BY p.published_at DESC LIMIT ?
+  `).bind(publicContentTenantSlug(), now, Math.min(Math.max(limit, 1), 100)).all<BlogPostSummary>();
+  return rows.results.map(mapBlogPost);
+}
+
+export async function publishedBlogPost(slug: string) {
+  await ensureContentSchema();
+  const now = epochSeconds();
+  const row = await authDatabase().prepare(`
+    SELECT p.id, p.slug, p.title, p.excerpt, p.body, u.display_name AS authorName,
+           p.published_at AS publishedAt, p.updated_at AS updatedAt
+    FROM blog_posts p
+    JOIN tenants t ON t.id = p.tenant_id
+    JOIN users u ON u.id = p.author_id
+    WHERE t.slug = ? AND t.status = 'active' AND p.slug = ? AND p.status = 'published'
+      AND p.published_at IS NOT NULL AND p.published_at <= ?
+    LIMIT 1
+  `).bind(publicContentTenantSlug(), slug, now).first<BlogPostSummary>();
+  return row ? mapBlogPost(row) : null;
+}
+
+export function contentSlug(title: string, fallback: string) {
+  const base = title.normalize("NFKD").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || fallback;
+  return `${base}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+export function cleanText(value: unknown) {
+  return typeof value === "string" ? value.replaceAll("\0", "").replace(/\r\n?/g, "\n").trim() : "";
+}
+
+function auditStatement(user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>, now: number) {
+  return authDatabase().prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, action, resourceType, resourceId, JSON.stringify(metadata), now);
+}
+
+function mapForumTopic(row: ForumTopicSummary): ForumTopicSummary {
+  return { ...row, pinned: Boolean(row.pinned), replyCount: Number(row.replyCount), lastActivityAt: Number(row.lastActivityAt), createdAt: Number(row.createdAt) };
+}
+
+function mapForumReply(row: ForumReply): ForumReply {
+  return { ...row, createdAt: Number(row.createdAt) };
+}
+
+function mapBlogPost(row: BlogPostSummary): BlogPostSummary {
+  return { ...row, publishedAt: Number(row.publishedAt), updatedAt: Number(row.updatedAt) };
+}
+
+function epochSeconds() {
+  return Math.floor(Date.now() / 1000);
+}

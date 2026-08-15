@@ -62,45 +62,6 @@ export const authSessions = pgTable("auth_sessions", {
   index("auth_sessions_user_idx").on(table.userId),
 ]);
 
-export const apiKeys = pgTable("api_keys", {
-  id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  prefix: text("prefix").notNull(),
-  secretHash: text("secret_hash").notNull(),
-  scopes: jsonb("scopes").$type<string[]>().notNull(),
-  expiresAt: epoch("expires_at"),
-  lastUsedAt: epoch("last_used_at"),
-  revokedAt: epoch("revoked_at"),
-  ...timestamps,
-}, (table) => [
-  index("api_keys_tenant_idx").on(table.tenantId),
-  uniqueIndex("api_keys_hash_uq").on(table.secretHash),
-]);
-
-export const models = pgTable("models", {
-  id: text("id").primaryKey(),
-  provider: text("provider").notNull(),
-  upstreamModel: text("upstream_model").notNull(),
-  displayName: text("display_name").notNull(),
-  capabilities: jsonb("capabilities").$type<string[]>().notNull(),
-  status: text("status", { enum: ["active", "maintenance", "disabled"] }).notNull(),
-  ...timestamps,
-}, (table) => [uniqueIndex("models_provider_name_uq").on(table.provider, table.upstreamModel)]);
-
-export const tenantModelGrants = pgTable("tenant_model_grants", {
-  id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  modelId: text("model_id").notNull().references(() => models.id, { onDelete: "cascade" }),
-  requestsPerMinute: integer("requests_per_minute").notNull().default(60),
-  monthlyTokenLimit: bigint("monthly_token_limit", { mode: "number" }),
-  ...timestamps,
-}, (table) => [
-  uniqueIndex("tenant_model_grant_uq").on(table.tenantId, table.modelId),
-  index("model_grants_tenant_idx").on(table.tenantId),
-]);
-
 export const auditLogs = pgTable("audit_logs", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
@@ -123,19 +84,6 @@ export const releases = pgTable("releases", {
   visibility: text("visibility", { enum: ["public", "tenant", "internal"] }).notNull(),
   ...timestamps,
 }, (table) => [index("releases_tenant_idx").on(table.tenantId)]);
-
-export const llmConfigs = pgTable("llm_configs", {
-  id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  displayName: text("display_name").notNull(),
-  provider: text("provider").notNull(),
-  modelId: text("model_id").notNull(),
-  baseUrl: text("base_url").notNull(),
-  secretRef: text("secret_ref").notNull(),
-  status: text("status", { enum: ["active", "maintenance", "disabled"] }).notNull().default("active"),
-  requestsPerMinute: integer("requests_per_minute").notNull().default(60),
-  ...timestamps,
-}, (table) => [index("llm_configs_tenant_idx").on(table.tenantId)]);
 
 export const agentArtifacts = pgTable("agent_artifacts", {
   id: text("id").primaryKey(),
@@ -178,29 +126,11 @@ export const billingPlans = pgTable("billing_plans", {
   name: text("name").notNull(),
   monthlyPriceCents: integer("monthly_price_cents").notNull(),
   currency: text("currency", { enum: ["CNY", "USD"] }).notNull().default("CNY"),
-  requestLimit: bigint("request_limit", { mode: "number" }).notNull(),
   seatLimit: integer("seat_limit").notNull(),
   features: jsonb("features").$type<string[]>().notNull(),
   status: text("status", { enum: ["active", "archived"] }).notNull().default("active"),
   ...timestamps,
 }, (table) => [index("billing_plans_tenant_idx").on(table.tenantId)]);
-
-export const gatewayRequests = pgTable("gateway_requests", {
-  id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  apiKeyId: text("api_key_id").notNull().references(() => apiKeys.id, { onDelete: "cascade" }),
-  modelConfigId: text("model_config_id").references(() => llmConfigs.id),
-  endpoint: text("endpoint", { enum: ["chat.completions", "responses"] }).notNull(),
-  statusCode: integer("status_code").notNull(),
-  latencyMs: integer("latency_ms").notNull(),
-  inputTokens: integer("input_tokens").notNull().default(0),
-  outputTokens: integer("output_tokens").notNull().default(0),
-  errorCode: text("error_code"),
-  createdAt: epoch("created_at").notNull(),
-}, (table) => [
-  index("gateway_requests_tenant_time_idx").on(table.tenantId, table.createdAt),
-  index("gateway_requests_key_time_idx").on(table.apiKeyId, table.createdAt),
-]);
 
 export const authLoginAttempts = pgTable("auth_login_attempts", {
   keyHash: text("key_hash").primaryKey(),
@@ -230,13 +160,52 @@ export const authSmsRateLimits = pgTable("auth_sms_rate_limits", {
 
 export const authOauthStates = pgTable("auth_oauth_states", {
   stateHash: text("state_hash").primaryKey(),
+  provider: text("provider", { enum: ["google", "github"] }).notNull().default("google"),
+  locale: text("locale", { enum: ["zh", "en"] }).notNull().default("en"),
   codeVerifier: text("code_verifier").notNull(),
   nonce: text("nonce").notNull(),
   redirectUri: text("redirect_uri").notNull(),
+  returnPath: text("return_path").notNull().default("/console"),
   expiresAt: epoch("expires_at").notNull(),
   consumedAt: epoch("consumed_at"),
   createdAt: epoch("created_at").notNull(),
 });
+
+export const desktopAuthRequests = pgTable("desktop_auth_requests", {
+  id: text("id").primaryKey(),
+  deviceCodeHash: text("device_code_hash").notNull(),
+  userCodeHash: text("user_code_hash").notNull(),
+  sourceHash: text("source_hash").notNull(),
+  deviceName: text("device_name").notNull(),
+  clientVersion: text("client_version").notNull(),
+  status: text("status", { enum: ["pending", "approved", "denied"] }).notNull(),
+  userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+  tenantId: text("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
+  expiresAt: epoch("expires_at").notNull(),
+  approvedAt: epoch("approved_at"),
+  consumedAt: epoch("consumed_at"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("desktop_auth_device_code_uq").on(table.deviceCodeHash),
+  uniqueIndex("desktop_auth_user_code_uq").on(table.userCodeHash),
+  index("desktop_auth_source_time_idx").on(table.sourceHash, table.createdAt),
+]);
+
+export const desktopSessions = pgTable("desktop_sessions", {
+  id: text("id").primaryKey(),
+  tokenHash: text("token_hash").notNull(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  deviceName: text("device_name").notNull(),
+  clientVersion: text("client_version").notNull(),
+  expiresAt: epoch("expires_at").notNull(),
+  revokedAt: epoch("revoked_at"),
+  lastUsedAt: epoch("last_used_at"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("desktop_sessions_token_uq").on(table.tokenHash),
+  index("desktop_sessions_user_idx").on(table.userId),
+]);
 
 export const authOidcIdentities = pgTable("auth_oidc_identities", {
   id: text("id").primaryKey(),
@@ -264,5 +233,56 @@ export const authProviderSettings = pgTable("auth_provider_settings", {
   googleClientIdRef: text("google_client_id_ref").notNull().default("GOOGLE_OAUTH_CLIENT_ID"),
   googleClientSecretRef: text("google_client_secret_ref").notNull().default("GOOGLE_OAUTH_CLIENT_SECRET"),
   googleAllowedHostedDomain: text("google_allowed_hosted_domain"),
+  githubEnabled: boolean("github_enabled").notNull().default(false),
+  githubClientIdRef: text("github_client_id_ref").notNull().default("GITHUB_OAUTH_CLIENT_ID"),
+  githubClientSecretRef: text("github_client_secret_ref").notNull().default("GITHUB_OAUTH_CLIENT_SECRET"),
   ...timestamps,
 });
+
+export const forumTopics = pgTable("forum_topics", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  slug: text("slug").notNull(),
+  body: text("body").notNull(),
+  category: text("category", { enum: ["general", "hardware", "firmware", "agents"] }).notNull().default("general"),
+  status: text("status", { enum: ["open", "locked", "hidden"] }).notNull().default("open"),
+  pinned: boolean("pinned").notNull().default(false),
+  lastActivityAt: epoch("last_activity_at").notNull(),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("forum_topics_tenant_slug_uq").on(table.tenantId, table.slug),
+  index("forum_topics_tenant_activity_idx").on(table.tenantId, table.lastActivityAt),
+  index("forum_topics_author_time_idx").on(table.authorId, table.createdAt),
+]);
+
+export const forumReplies = pgTable("forum_replies", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  topicId: text("topic_id").notNull().references(() => forumTopics.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  body: text("body").notNull(),
+  status: text("status", { enum: ["visible", "hidden"] }).notNull().default("visible"),
+  ...timestamps,
+}, (table) => [
+  index("forum_replies_topic_time_idx").on(table.topicId, table.createdAt),
+  index("forum_replies_tenant_time_idx").on(table.tenantId, table.createdAt),
+  index("forum_replies_author_time_idx").on(table.authorId, table.createdAt),
+]);
+
+export const blogPosts = pgTable("blog_posts", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  slug: text("slug").notNull(),
+  excerpt: text("excerpt").notNull(),
+  body: text("body").notNull(),
+  status: text("status", { enum: ["draft", "published", "archived"] }).notNull().default("draft"),
+  publishedAt: epoch("published_at"),
+  ...timestamps,
+}, (table) => [
+  uniqueIndex("blog_posts_tenant_slug_uq").on(table.tenantId, table.slug),
+  index("blog_posts_tenant_status_time_idx").on(table.tenantId, table.status, table.publishedAt),
+]);

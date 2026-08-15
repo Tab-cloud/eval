@@ -16,20 +16,20 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase,
     title: { default: "Eval Agent", template: "%s · Eval Agent" },
-    description: "面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。",
+    description: "面向硬件研发团队的 Agent 工具、工程社区与可治理执行平台。",
     icons: { icon: "/favicon.svg" },
     openGraph: {
       type: "website",
       locale: "zh_CN",
       siteName: "Eval Agent",
       title: "Eval Agent · 让硬件开发开始行动",
-      description: "连接专业 Agent、工程工具与模型，让硬件研发进入一条可治理、可追踪的执行链。",
+      description: "连接专业 Agent 与工程工具，让硬件研发进入一条可治理、可追踪的执行链。",
       images: [{ url: socialImage, width: 1200, height: 630, alt: "Eval Agent" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "Eval Agent · 让硬件开发开始行动",
-      description: "面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。",
+      description: "面向硬件研发团队的 Agent 工具、工程社区与可治理执行平台。",
       images: [socialImage],
     },
   };

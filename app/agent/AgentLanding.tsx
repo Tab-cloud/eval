@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 type PublicRelease = {
@@ -25,7 +26,7 @@ const strengths = [
 
 const workflow = [
   { index: "01", verb: "Understand", zh: "需求与器件语境", en: "Requirements and device context" },
-  { index: "02", verb: "Architect", zh: "任务分解与模型路由", en: "Task planning and model routing" },
+  { index: "02", verb: "Architect", zh: "任务分解与执行编排", en: "Task planning and execution orchestration" },
   { index: "03", verb: "Execute", zh: "工具调用与工程产出", en: "Tool execution and engineering output" },
   { index: "04", verb: "Verify", zh: "编译、调试与自省修复", en: "Build, debug and reflective repair" },
   { index: "05", verb: "Deliver", zh: "报告、文档与可追溯结果", en: "Reports, docs and traceable delivery" },
@@ -34,16 +35,16 @@ const workflow = [
 const audiences = [
   { zh: ["固件与硬件工程师", "少查资料，少切工具，把时间留给真正的工程判断。"], en: ["Firmware & hardware engineers", "Search less, switch tools less, and preserve time for real engineering judgment."] },
   { zh: ["嵌入式研发团队", "把隐性的专家经验固化为可复用工作流和权限策略。"], en: ["Embedded product teams", "Turn tacit expert knowledge into reusable workflows and permission policies."] },
-  { zh: ["实验室与技术负责人", "看见任务、成本、模型健康和每次工具执行的证据。"], en: ["Lab & engineering leaders", "See tasks, cost, model health, and evidence from every tool execution."] },
-  { zh: ["AI 工具构建者", "用开放的 Agent、Tool、Skill 与 Provider 架构继续扩展。"], en: ["AI tool builders", "Extend an open architecture of agents, tools, skills and providers."] },
+  { zh: ["实验室与技术负责人", "看见任务、成本、运行状态和每次工具执行的证据。"], en: ["Lab & engineering leaders", "See tasks, cost, runtime health, and evidence from every tool execution."] },
+  { zh: ["AI 工具构建者", "用开放的 Agent、Tool 与 Skill 架构继续扩展。"], en: ["AI tool builders", "Extend an open architecture of agents, tools and skills."] },
 ];
 
 const runtimeScenes = [
-  { act: "01", zh: [<>原理图<br/>理解</>, "视觉 / 硬件分析", "分析中", "硬件工程师正在读取原理图与数据手册，建立器件和引脚关系。", "视觉模型 · 就绪"], en: [<>Schematic<br/>Intelligence</>, "VISION / HARDWARE", "ANALYZING", "The hardware agent is reading schematics and datasheets to map devices and pins.", "VISION · READY"], checkpoint: "08:39:04", stage: 0 },
-  { act: "02", zh: [<>系统<br/>规划</>, "规划 / 任务编排", "编排中", "架构师正在拆解目标、选择专业 Agent，并建立可恢复的执行计划。", "推理模型 · 健康"], en: [<>System<br/>Planning</>, "PLAN / ORCHESTRATOR", "DIRECTING", "The architect is decomposing the goal, selecting specialists and building a recoverable plan.", "REASON · HEALTHY"], checkpoint: "08:40:36", stage: 1 },
-  { act: "03", zh: [<>固件<br/>执行</>, "执行 / AGENT 链", "运行中", "固件工程师正在调用编译工具，验证 STM32H7 构建输出。", "代码模型 · 健康"], en: [<>Firmware<br/>Execution</>, "LIVE / AGENT CHAIN", "RUNNING", "The firmware agent is compiling and validating the STM32H7 build output.", "CODE · HEALTHY"], checkpoint: "08:42:19", stage: 2 },
-  { act: "04", zh: [<>调试<br/>自省</>, "验证 / 自省修复", "修复中", "调试工程师正在分析编译错误，并启动自动反思与修复循环。", "推理模型 · 健康"], en: [<>Debug<br/>Reflection</>, "VERIFY / SELF-CRITIC", "REPAIRING", "The debug agent is analyzing build errors and launching a reflective repair loop.", "REASON · HEALTHY"], checkpoint: "08:46:31", stage: 3 },
-  { act: "05", zh: [<>验证<br/>交付</>, "报告 / 工作流", "已完成", "测试结果、变更记录与工程报告已经汇总，等待团队确认交付。", "通用模型 · 就绪"], en: [<>Verified<br/>Delivery</>, "REPORT / WORKFLOW", "COMPLETE", "Test results, change records and the engineering report are ready for team approval.", "GENERAL · READY"], checkpoint: "08:51:12", stage: 4 },
+  { act: "01", zh: [<>原理图<br/>理解</>, "视觉 / 硬件分析", "分析中", "硬件工程师正在读取原理图与数据手册，建立器件和引脚关系。", "视觉分析 · 就绪"], en: [<>Schematic<br/>Intelligence</>, "VISION / HARDWARE", "ANALYZING", "The hardware agent is reading schematics and datasheets to map devices and pins.", "VISION · READY"], checkpoint: "08:39:04", stage: 0 },
+  { act: "02", zh: [<>系统<br/>规划</>, "规划 / 任务编排", "编排中", "架构师正在拆解目标、选择专业 Agent，并建立可恢复的执行计划。", "任务规划 · 健康"], en: [<>System<br/>Planning</>, "PLAN / ORCHESTRATOR", "DIRECTING", "The architect is decomposing the goal, selecting specialists and building a recoverable plan.", "PLANNING · HEALTHY"], checkpoint: "08:40:36", stage: 1 },
+  { act: "03", zh: [<>固件<br/>执行</>, "执行 / AGENT 链", "运行中", "固件工程师正在调用编译工具，验证 STM32H7 构建输出。", "工程执行 · 健康"], en: [<>Firmware<br/>Execution</>, "LIVE / AGENT CHAIN", "RUNNING", "The firmware agent is compiling and validating the STM32H7 build output.", "EXECUTION · HEALTHY"], checkpoint: "08:42:19", stage: 2 },
+  { act: "04", zh: [<>调试<br/>自省</>, "验证 / 自省修复", "修复中", "调试工程师正在分析编译错误，并启动自动反思与修复循环。", "自省修复 · 健康"], en: [<>Debug<br/>Reflection</>, "VERIFY / SELF-CRITIC", "REPAIRING", "The debug agent is analyzing build errors and launching a reflective repair loop.", "REPAIR · HEALTHY"], checkpoint: "08:46:31", stage: 3 },
+  { act: "05", zh: [<>验证<br/>交付</>, "报告 / 工作流", "已完成", "测试结果、变更记录与工程报告已经汇总，等待团队确认交付。", "交付流程 · 就绪"], en: [<>Verified<br/>Delivery</>, "REPORT / WORKFLOW", "COMPLETE", "Test results, change records and the engineering report are ready for team approval.", "DELIVERY · READY"], checkpoint: "08:51:12", stage: 4 },
 ];
 
 function BrandMark() {
@@ -119,9 +120,10 @@ export function AgentLanding() {
 
     <header className="agent-nav">
       <a className="agent-logo" href="#top" aria-label="Eval Agent 首页"><BrandMark/><span><b>Eval</b><small>Agent System</small></span></a>
-      <nav aria-label={isZh ? "落地页导航" : "Landing navigation"}><a href="#difference">{isZh ? "为何不同" : "Difference"}</a><a href="#system">{isZh ? "系统能力" : "System"}</a><a href="#audience">{isZh ? "适用人群" : "For whom"}</a><a href="#downloads">{isZh ? "下载" : "Download"}</a></nav>
+      <nav aria-label={isZh ? "落地页导航" : "Landing navigation"}><a href="#difference">{isZh ? "为何不同" : "Difference"}</a><a href="#system">{isZh ? "系统能力" : "System"}</a><a href="#audience">{isZh ? "适用人群" : "For whom"}</a><a href="#downloads">{isZh ? "下载" : "Download"}</a><Link href="/blog">{isZh ? "博客" : "Blog"}</Link><Link href="/forum">{isZh ? "论坛" : "Forum"}</Link></nav>
       <div className="agent-nav-actions"><button className="language-switch" onClick={toggleLocale} aria-label={isZh ? "切换到英文" : "Switch to Chinese"}>{isZh ? "EN" : "中文"}</button><button className="theme-switch" onClick={toggleTheme}>{theme === "dark" ? "LIGHT" : "DARK"}</button><a href="/login">{isZh ? "登录" : "Sign in"} <span className="css-arrow" aria-hidden="true"/></a></div>
     </header>
+    <nav className="agent-mobile-content" aria-label={isZh ? "移动端内容导航" : "Mobile content navigation"}><Link href="/blog">{isZh ? "团队博客" : "Blog"}</Link><Link href="/forum">{isZh ? "工程论坛" : "Forum"}</Link></nav>
 
     <main id="top">
       <section className="agent-hero">
@@ -130,7 +132,7 @@ export function AgentLanding() {
         <div className="agent-hero-copy" data-reveal>
           <p className="agent-kicker"><i/> EVAL AGENT · ENGINEERING, DIRECTED.</p>
           <h1>{isZh ? <>让硬件开发<br/><em>开始行动。</em></> : <>Make hardware<br/><em>move.</em></>}</h1>
-          <p className="agent-lede">{isZh ? <>从一张原理图，到一块真正运行的板。<br/>Eval 让专业 Agent、工程工具和模型协同进入同一条执行链。</> : <>From a schematic to a board that truly runs.<br/>Eval unifies specialist agents, engineering tools and models into one execution chain.</>}</p>
+          <p className="agent-lede">{isZh ? <>从一张原理图，到一块真正运行的板。<br/>Eval 让专业 Agent 与工程工具进入同一条执行链。</> : <>From a schematic to a board that truly runs.<br/>Eval unifies specialist agents and engineering tools into one execution chain.</>}</p>
           <div className="agent-hero-actions"><a className="agent-primary" href="/login">{isZh ? "开始使用" : "Start building"} <span className="css-arrow" aria-hidden="true"/></a><a className="agent-secondary" href="#system"><i/>{isZh ? "观看系统如何工作" : "See how the system works"}</a></div>
         </div>
         <div className="agent-runtime" data-reveal aria-roledescription="carousel" aria-label="Eval Agent 工程场景">
@@ -144,7 +146,7 @@ export function AgentLanding() {
               <div className="runtime-head"><span>{content[1]}</span><b>{content[2]}</b></div>
               <div className="runtime-focus"><small>{isZh ? "当前阶段" : "CURRENT ACT"}</small><strong>{scene.act}</strong><h2>{content[0]}</h2><p>{content[3]}</p></div>
               <div className="runtime-progress">{[0,1,2,3,4].map(step => <i key={step} className={step === scene.stage ? "active" : step < scene.stage ? "complete" : ""}/>)}</div>
-              <div className="runtime-foot"><span>{isZh ? "模型路由" : "MODEL ROUTE"}<br/><b>{content[4]}</b></span><span>{isZh ? "检查点" : "CHECKPOINT"}<br/><b>{scene.checkpoint}</b></span></div>
+              <div className="runtime-foot"><span>{isZh ? "执行状态" : "RUNTIME STATUS"}<br/><b>{content[4]}</b></span><span>{isZh ? "检查点" : "CHECKPOINT"}<br/><b>{scene.checkpoint}</b></span></div>
             </article>})}</div>
           </div>
           <div className="runtime-controls"><button className="runtime-prev" onClick={() => changeRuntime(-1)} aria-label={isZh ? "上一个工程场景" : "Previous scene"}><i/></button><div>{runtimeScenes.map((scene, index) => <button key={scene.act} className={index === activeRuntime ? "active" : ""} onClick={() => setActiveRuntime(index)} aria-label={isZh ? `查看场景 ${index + 1}` : `View scene ${index + 1}`}/>)}</div><button className="runtime-next" onClick={() => changeRuntime(1)} aria-label={isZh ? "下一个工程场景" : "Next scene"}><i/></button></div>
@@ -168,7 +170,7 @@ export function AgentLanding() {
           <article className="agent-cast" data-reveal><div className="card-label">THE CAST / 17 AGENTS</div><h3>{isZh ? "一个任务，召集一支工程团队。" : "One task. An engineering team assembled."}</h3><div className="cast-credits"><span>ARCHITECT</span><b>{isZh ? "系统架构师" : "System architect"}</b><span>FIRMWARE</span><b>{isZh ? "固件工程师" : "Firmware engineer"}</b><span>HARDWARE</span><b>{isZh ? "硬件工程师" : "Hardware engineer"}</b><span>DEBUG</span><b>{isZh ? "调试工程师" : "Debug engineer"}</b><span>TEST</span><b>{isZh ? "测试工程师" : "Test engineer"}</b><span>DOC</span><b>{isZh ? "文档工程师" : "Documentation engineer"}</b></div></article>
           <article className="tool-frame" data-reveal><div className="card-label">REAL TOOL EXECUTION</div><div className="terminal-bar"><span/><span/><span/><b>eval / build</b></div><div className="terminal-copy"><p><i>01</i><span className="dim">agent</span> firmware-engineer</p><p><i>02</i><span className="dim">tool</span> compile firmware</p><p><i>03</i><span className="blue">build</span> 148 objects · 0 errors</p><p><i>04</i><span className="dim">tool</span> swd_debug verify</p><p><i>05</i><span className="green">result</span> target responding</p><p className="cursor-line"><i>06</i><span>checkpoint saved</span><b/></p></div></article>
           <article className="control-frame" data-reveal><div className="card-label">GOVERNED AUTONOMY</div><h3>{isZh ? "自主，但从不失控。" : "Autonomous. Never uncontrolled."}</h3><div className="control-rings"><span>FULL ACCESS</span><span>AUTO EDIT</span><span>CONFIRM</span><span>PLAN</span></div><p>{isZh ? "四级执行范围、工具级 allow / ask / deny、敏感数据脱敏与凭证安全存储。" : "Four execution scopes, tool-level allow / ask / deny, sensitive-data redaction and secure credential storage."}</p></article>
-          <article className="resilience-frame" data-reveal><div className="card-label">RESILIENCE LAYER</div><h3>{isZh ? "长任务，也能稳稳抵达。" : "Long-running work that still arrives."}</h3><div className="resilience-stats"><span><b>70%</b>{isZh ? "上下文预警" : "context warning"}</span><span><b>80%</b>{isZh ? "自动压缩" : "auto compaction"}</span><span><b>3×</b>{isZh ? "模型容灾" : "model fallback"}</span></div><p>{isZh ? "上下文压力管理、健康模型路由、自动检查点与自省修复共同托住复杂任务。" : "Context pressure control, healthy model routing, automatic checkpoints and reflective repair support complex work."}</p></article>
+          <article className="resilience-frame" data-reveal><div className="card-label">RESILIENCE LAYER</div><h3>{isZh ? "长任务，也能稳稳抵达。" : "Long-running work that still arrives."}</h3><div className="resilience-stats"><span><b>70%</b>{isZh ? "上下文预警" : "context warning"}</span><span><b>80%</b>{isZh ? "自动压缩" : "auto compaction"}</span><span><b>3×</b>{isZh ? "任务恢复" : "task recovery"}</span></div><p>{isZh ? "上下文压力管理、自动恢复、自动检查点与自省修复共同托住复杂任务。" : "Context pressure control, automatic recovery, checkpoints and reflective repair support complex work."}</p></article>
         </div>
       </section>
 

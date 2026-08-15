@@ -60,20 +60,17 @@ test("admin control room exposes governed modules and audit logs without a side 
     source("../app/admin/store.ts"),
     source("../app/admin/style.css"),
   ]);
-  for (const label of ["运营看板", "用户管理", "LLM 配置", "工具源文件", "版本升级", "收费配置"]) {
+  for (const label of ["运营看板", "用户管理", "登录与身份", "内容中心", "工具源文件", "版本升级", "收费配置"]) {
     assert.match(consoleSource, new RegExp(label));
   }
   assert.match(consoleSource, /审计日志/);
-  assert.match(consoleSource, /真实网关流量/);
+  assert.match(consoleSource, /公开内容运营/);
   assert.match(consoleSource, /上线清单/);
-  assert.match(consoleSource, /模型运行质量/);
-  assert.match(consoleSource, /最近调用/);
   assert.match(consoleSource, /data\.readiness/);
-  assert.match(store, /FROM gateway_requests WHERE tenant_id = \?/);
-  assert.match(store, /requests30d/);
-  assert.match(store, /successRate/);
-  assert.match(store, /averageLatency/);
-  assert.match(store, /tokens30d/);
+  assert.match(store, /FROM blog_posts/);
+  assert.match(store, /FROM forum_topics/);
+  assert.match(store, /FROM release_versions/);
+  assert.doesNotMatch(store, /llm_configs|gateway_requests|api_keys/);
   assert.match(consoleSource, /<header className="admin-bar"/);
   assert.doesNotMatch(consoleSource, /sidebar|side-nav|sider/i);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
@@ -97,36 +94,29 @@ test("published downloads require a real stored artifact", async () => {
   assert.doesNotMatch(upload, /\.dmg|\.deb|\.rpm/);
 });
 
-test("API keys derive tenant identity on the server and never trust a tenant header", async () => {
-  const [auth, store] = await Promise.all([
-    source("../app/api/v1/_shared/auth.ts"),
-    source("../app/console/store.ts"),
+test("LLM API relay routes, storage, settings, and sales copy are structurally removed", async () => {
+  const deleted = [
+    "../app/gateway/proxy.ts",
+    "../app/api/v1/_shared/auth.ts",
+    "../app/api/v1/chat/completions/route.ts",
+    "../app/api/v1/responses/route.ts",
+    "../app/api/v1/models/route.ts",
+    "../app/api/console/api-keys/route.ts",
+    "../app/api/console/api-keys/[id]/route.ts",
+  ];
+  await Promise.all(deleted.map(path => assert.rejects(source(path), error => error?.code === "ENOENT")));
+  const [schema, adminStore, consoleStore, adminUi, dashboard, docs, config, nginx, migration] = await Promise.all([
+    source("../db/schema.ts"), source("../app/admin/store.ts"), source("../app/console/store.ts"),
+    source("../app/admin/AdminConsole.tsx"), source("../app/ui/Dashboard.tsx"), source("../app/docs/page.tsx"),
+    source("../.env.example"), source("../deploy/nginx/eval.zailink.space.conf"), source("../drizzle/0008_mushy_songbird.sql"),
   ]);
-  assert.match(auth, /secret_hash/);
-  assert.match(auth, /tenant_id/);
-  assert.match(auth, /revoked_at/);
-  assert.match(auth, /expires_at/);
-  assert.doesNotMatch(auth, /x-luban-tenant/i);
-  assert.match(store, /SHA-256|sha256/);
-  assert.match(store, /models:invoke/);
-  assert.match(store, /api_key\.revoke/);
-});
-
-test("gateway exposes real OpenAI-compatible proxy routes and records requests", async () => {
-  const [proxy, chat, responses, modelCatalog] = await Promise.all([
-    source("../app/gateway/proxy.ts"),
-    source("../app/api/v1/chat/completions/route.ts"),
-    source("../app/api/v1/responses/route.ts"),
-    source("../app/api/v1/models/route.ts"),
-  ]);
-  assert.match(chat, /chat\.completions/);
-  assert.match(responses, /responses/);
-  assert.match(proxy, /Authorization.*Bearer/);
-  assert.match(proxy, /gateway_requests/);
-  assert.match(proxy, /RATE_LIMITED/);
-  assert.match(proxy, /X-Eval-Request-Id/);
-  assert.match(modelCatalog, /llm_configs/);
-  assert.doesNotMatch(modelCatalog, /const catalog/);
+  const activeProduct = [schema, adminStore, consoleStore, adminUi, dashboard, docs, config, nginx].join("\n");
+  assert.doesNotMatch(activeProduct, /llm_configs|gateway_requests|api_keys|OPENAI_API_KEY|OpenAI-compatible|chat\/completions/);
+  assert.doesNotMatch(schema, /requestLimit|request_limit|tenantModelGrants|gatewayRequests/);
+  for (const table of ["gateway_requests", "tenant_model_grants", "api_keys", "llm_configs", "models"]) assert.match(migration, new RegExp(`DROP TABLE "${table}"`));
+  assert.match(migration, /DROP COLUMN "request_limit"/);
+  assert.match(dashboard, /publishedReleases/);
+  assert.match(adminUi, /产品套餐/);
 });
 
 test("browser writes are same-origin protected and login attempts are limited", async () => {
@@ -150,8 +140,12 @@ test("console reads real snapshots and does not ship the former fixed metrics", 
     source("../app/console/store.ts"),
   ]);
   assert.match(dashboard, /\/api\/console\/snapshot/);
-  assert.match(dashboard, /\/api\/console\/api-keys/);
-  assert.match(snapshot, /gateway_requests/);
+  assert.match(dashboard, /\/forum/);
+  assert.match(dashboard, /\/blog/);
+  assert.match(snapshot, /release_versions/);
+  assert.match(snapshot, /forum_topics/);
+  assert.match(snapshot, /blog_posts/);
+  assert.doesNotMatch(dashboard + snapshot, /api-keys|gateway_requests|llm_configs/);
   assert.doesNotMatch(dashboard, /1\.84M|\$8,429|12\.6M/);
 });
 
@@ -183,21 +177,25 @@ test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
   assert.match(service, /ReadWritePaths=\/srv\/eval-web\/artifacts \/opt\/eval-web\/current\/\.next\/cache/);
   assert.match(nginx, /server_name eval\.zailink\.space/);
   assert.match(nginx, /X-Forwarded-Proto/);
-  assert.match(nginx, /proxy_buffering off/);
+  assert.doesNotMatch(nginx, /chat\/completions|responses|proxy_buffering off/);
   assert.match(hosting, /PostgreSQL/);
   assert.doesNotMatch(hosting, /\bD1\b|\bR2\b|Cloudflare Workers/);
   assert.match(deployment, /systemctl enable --now eval-web/);
   assert.doesNotMatch(deployment, /docker|container/i);
 });
 
-test("locale selects phone SMS for Chinese and Google identity for English", async () => {
+test("locale selects phone SMS and the configured external identity entry points", async () => {
   const login = await source("../app/login/page.tsx");
   assert.match(login, /\/api\/auth\/sms\/send/);
   assert.match(login, /\/api\/auth\/sms\/login/);
-  assert.match(login, /\/api\/auth\/google\/start/);
+  assert.match(login, /`\/api\/auth\/\$\{provider\}\/start/);
+  assert.match(login, /oauthHref\("google"\)/);
+  assert.match(login, /oauthHref\("github"\)/);
   assert.match(login, /localStorage\.getItem\("eval-locale"\)/);
   assert.match(login, /locale === "zh"/);
   assert.match(login, /Continue with Google/);
+  assert.match(login, /Continue with GitHub/);
+  assert.match(login, /使用 GitHub 登录/);
   assert.match(login, /手机号验证/);
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });
@@ -244,13 +242,39 @@ test("Google sign-in uses OIDC protections and only links pre-provisioned users"
   assert.match(schema, /authOidcIdentities/);
 });
 
-test("admin identity settings store only deployment references and drive both login providers", async () => {
-  const [consoleUi, identityUi, settings, store, google, sms, schema, config] = await Promise.all([
+test("GitHub sign-in uses state, PKCE, verified emails, and no repository scope", async () => {
+  const [github, start, callback, authCore, schema, config] = await Promise.all([
+    source("../app/auth/github.ts"),
+    source("../app/api/auth/github/start/route.ts"),
+    source("../app/api/auth/github/callback/route.ts"),
+    source("../app/auth/core.ts"),
+    source("../db/schema.ts"),
+    source("../.env.example"),
+  ]);
+  assert.match(github, /https:\/\/github\.com\/login\/oauth\/authorize/);
+  assert.match(github, /https:\/\/github\.com\/login\/oauth\/access_token/);
+  assert.match(github, /code_challenge_method:\s*"S256"/);
+  assert.match(github, /scope:\s*"user:email"/);
+  assert.match(github, /api\.github\.com\/user\/emails/);
+  assert.match(github, /item\.verified === true/);
+  assert.doesNotMatch(github, /(?:^|[\s"'])repo(?=$|[\s"'])|write:org/);
+  assert.doesNotMatch(github, /INSERT INTO users/);
+  assert.match(start, /beginGitHubAuthorization/);
+  assert.match(callback, /finishGitHubAuthorization/);
+  assert.match(authCore, /findOrLinkGitHubUser/);
+  assert.match(schema, /githubEnabled/);
+  assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
+  assert.match(config, /GITHUB_OAUTH_CLIENT_SECRET/);
+});
+
+test("admin identity settings store only deployment references and drive all login providers", async () => {
+  const [consoleUi, identityUi, settings, store, google, github, sms, schema, config] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
     source("../app/admin/AuthSettingsView.tsx"),
     source("../app/auth/provider-settings.ts"),
     source("../app/admin/store.ts"),
     source("../app/auth/google.ts"),
+    source("../app/auth/github.ts"),
     source("../app/auth/aliyun-sms.ts"),
     source("../db/schema.ts"),
     source("../.env.example"),
@@ -259,14 +283,91 @@ test("admin identity settings store only deployment references and drive both lo
   assert.match(consoleUi, /AuthSettingsView/);
   assert.match(identityUi, /aliyunAccessKeySecretRef/);
   assert.match(identityUi, /googleClientSecretRef/);
+  assert.match(identityUi, /githubClientSecretRef/);
+  assert.match(identityUi, /githubCallbackUrl/);
   assert.doesNotMatch(identityUi, /name="(?:accessKeySecret|clientSecret)"/);
   assert.match(settings, /process\.env\[reference\]/);
   assert.match(settings, /saveTenantProviderSettings/);
   assert.match(store, /auth\.providers\.save/);
   assert.match(google, /identityProviderSettings/);
+  assert.match(github, /identityProviderSettings/);
   assert.match(sms, /tenantProviderSettings/);
   assert.match(schema, /authProviderSettings/);
   assert.match(config, /EVAL_IDENTITY_TENANT_SLUG/);
+  assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
+});
+
+test("public blog exposes only published posts from the configured content tenant", async () => {
+  const [indexPage, articlePage, contentStore, schema, migration, config] = await Promise.all([
+    source("../app/blog/page.tsx"),
+    source("../app/blog/[slug]/page.tsx"),
+    source("../app/content/store.ts"),
+    source("../db/schema.ts"),
+    source("../drizzle/0007_curved_echo.sql"),
+    source("../.env.example"),
+  ]);
+  assert.match(indexPage, /publishedBlogPosts/);
+  assert.match(articlePage, /publishedBlogPost/);
+  assert.match(contentStore, /t\.slug = \?/);
+  assert.match(contentStore, /p\.status = 'published'/);
+  assert.match(contentStore, /p\.published_at IS NOT NULL/);
+  assert.match(contentStore, /publicContentTenantSlug/);
+  assert.doesNotMatch(indexPage + articlePage, /dangerouslySetInnerHTML/);
+  assert.match(schema, /blogPosts/);
+  assert.match(migration, /CREATE TABLE "blog_posts"/);
+  assert.match(config, /EVAL_PUBLIC_CONTENT_TENANT_SLUG/);
+});
+
+test("forum is session-protected, tenant-bound, rate-limited, and same-origin written", async () => {
+  const [forumPage, topicPage, contentStore, topicRoute, replyRoute, schema, migration, css] = await Promise.all([
+    source("../app/forum/page.tsx"),
+    source("../app/forum/[slug]/page.tsx"),
+    source("../app/content/store.ts"),
+    source("../app/api/forum/topics/route.ts"),
+    source("../app/api/forum/topics/[id]/replies/route.ts"),
+    source("../db/schema.ts"),
+    source("../drizzle/0007_curved_echo.sql"),
+    source("../app/content/style.css"),
+  ]);
+  assert.match(forumPage, /requireEmailSession/);
+  assert.match(topicPage, /requireEmailSession/);
+  assert.match(contentStore, /t\.tenant_id = \?/);
+  assert.match(contentStore, /r\.tenant_id = \?/);
+  assert.match(contentStore, /每小时最多发布 5 个主题/);
+  assert.match(contentStore, /每小时最多发布 30 条回复/);
+  assert.match(topicRoute, /rejectCrossSiteWrite/);
+  assert.match(replyRoute, /rejectCrossSiteWrite/);
+  assert.match(topicRoute + replyRoute, /getSessionUser/);
+  assert.doesNotMatch(forumPage + topicPage, /dangerouslySetInnerHTML/);
+  assert.match(schema, /forumTopics/);
+  assert.match(schema, /forumReplies/);
+  assert.match(migration, /CREATE TABLE "forum_topics"/);
+  assert.match(migration, /CREATE TABLE "forum_replies"/);
+  assert.match(css, /@media \(max-width: 760px\)/);
+  assert.match(css, /prefers-reduced-motion:\s*reduce/);
+});
+
+test("admin content center publishes blogs and moderates tenant forum content with audits", async () => {
+  const [consoleUi, contentUi, store, landing] = await Promise.all([
+    source("../app/admin/AdminConsole.tsx"),
+    source("../app/admin/ContentSettingsView.tsx"),
+    source("../app/admin/store.ts"),
+    source("../app/agent/AgentLanding.tsx"),
+  ]);
+  assert.match(consoleUi, /内容中心/);
+  assert.match(consoleUi, /ContentSettingsView/);
+  assert.match(contentUi, /save_blog_post/);
+  assert.match(contentUi, /moderate_forum_topic/);
+  assert.match(contentUi, /moderate_forum_reply/);
+  assert.match(store, /WHERE p\.tenant_id = \?/);
+  assert.match(store, /WHERE t\.tenant_id = \?/);
+  assert.match(store, /WHERE r\.tenant_id = \?/);
+  assert.match(store, /blog\.post\.(?:create|update)/);
+  assert.match(store, /forum\.topic\.moderate/);
+  assert.match(store, /forum\.reply\.moderate/);
+  assert.match(landing, /href="\/blog"/);
+  assert.match(landing, /href="\/forum"/);
+  assert.match(landing, /agent-mobile-content/);
 });
 
 test("desktop updater exposes only signed releases from the public release tenant", async () => {
@@ -292,4 +393,32 @@ test("desktop updater exposes only signed releases from the public release tenan
   assert.match(upload, /updater_signature/);
   assert.match(schema, /updaterSignature/);
   assert.match(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
+});
+
+test("desktop account binding uses browser approval and hashed revocable device sessions", async () => {
+  const [desktop, schema, approve, token, me, devicePage, login, google] = await Promise.all([
+    source("../app/auth/desktop.ts"),
+    source("../db/schema.ts"),
+    source("../app/api/auth/desktop/approve/route.ts"),
+    source("../app/api/auth/desktop/token/route.ts"),
+    source("../app/api/auth/desktop/me/route.ts"),
+    source("../app/device/page.tsx"),
+    source("../app/login/page.tsx"),
+    source("../app/auth/google.ts"),
+  ]);
+  assert.match(desktop, /device_code_hash/);
+  assert.match(desktop, /user_code_hash/);
+  assert.match(desktop, /token_hash/);
+  assert.match(desktop, /MAX_REQUESTS_PER_HOUR/);
+  assert.match(desktop, /eval_dt_/);
+  assert.doesNotMatch(desktop, /password/i);
+  assert.match(schema, /desktopAuthRequests/);
+  assert.match(schema, /desktopSessions/);
+  assert.match(approve, /rejectCrossSiteWrite/);
+  assert.match(approve, /cookieToken/);
+  assert.match(token, /exchangeDesktopAuthorization/);
+  assert.match(me, /bearerToken/);
+  assert.match(devicePage, /getSessionUser/);
+  assert.match(login, /returnTo/);
+  assert.match(google, /return_path/);
 });

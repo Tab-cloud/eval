@@ -5,23 +5,47 @@ import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Icon } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
+import { safeReturnPath } from "../auth/return-path";
 import "./style.css";
 
 type Locale = "zh" | "en";
 
-const googleErrors: Record<string, string> = {
-  google_cancelled: "Google sign-in was cancelled.",
-  google_failed: "Google could not verify this sign-in. Please try again.",
-  google_not_configured: "Google sign-in has not been configured for this environment.",
-  google_unavailable: "Google sign-in is temporarily unavailable.",
-  invalid_state: "This sign-in request has expired. Please start again.",
-  expired_state: "This sign-in request has expired. Please start again.",
-  token_exchange_failed: "Google could not complete this sign-in.",
-  missing_id_token: "Google did not return a valid identity.",
-  invalid_id_token: "Google returned an invalid identity.",
-  invalid_identity: "This Google identity could not be verified.",
-  hosted_domain_denied: "This Google Workspace domain is not allowed.",
-  account_not_provisioned: "This email has not been invited by an administrator.",
+const providerErrors: Record<Locale, Record<string, string>> = {
+  zh: {
+    github_cancelled: "GitHub 登录已取消。",
+    github_failed: "GitHub 无法验证本次登录，请重试。",
+    github_not_configured: "当前环境尚未完成 GitHub 登录配置。",
+    github_unavailable: "GitHub 登录暂时不可用。",
+    github_identity_unavailable: "暂时无法读取 GitHub 账号信息。",
+    verified_email_required: "该 GitHub 账号没有可用于登录的已验证邮箱。",
+    invalid_state: "登录请求已过期，请重新开始。",
+    expired_state: "登录请求已过期，请重新开始。",
+    token_exchange_failed: "第三方身份服务无法完成本次登录。",
+    invalid_identity: "第三方账号身份无法通过验证。",
+    account_not_provisioned: "该邮箱尚未由管理员加入组织。",
+    provider_failed: "第三方账号登录失败，请重试。",
+  },
+  en: {
+    google_cancelled: "Google sign-in was cancelled.",
+    google_failed: "Google could not verify this sign-in. Please try again.",
+    google_not_configured: "Google sign-in has not been configured for this environment.",
+    google_unavailable: "Google sign-in is temporarily unavailable.",
+    github_cancelled: "GitHub sign-in was cancelled.",
+    github_failed: "GitHub could not verify this sign-in. Please try again.",
+    github_not_configured: "GitHub sign-in has not been configured for this environment.",
+    github_unavailable: "GitHub sign-in is temporarily unavailable.",
+    github_identity_unavailable: "GitHub account information is temporarily unavailable.",
+    verified_email_required: "This GitHub account has no verified email available for sign-in.",
+    invalid_state: "This sign-in request has expired. Please start again.",
+    expired_state: "This sign-in request has expired. Please start again.",
+    token_exchange_failed: "The identity provider could not complete this sign-in.",
+    missing_id_token: "Google did not return a valid identity.",
+    invalid_id_token: "Google returned an invalid identity.",
+    invalid_identity: "This identity could not be verified.",
+    hosted_domain_denied: "This Google Workspace domain is not allowed.",
+    account_not_provisioned: "This email has not been invited by an administrator.",
+    provider_failed: "Third-party sign-in failed. Please try again.",
+  },
 };
 
 export default function LoginPage() {
@@ -34,6 +58,7 @@ export default function LoginPage() {
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [returnTo, setReturnTo] = useState("/console");
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
@@ -43,7 +68,8 @@ export default function LoginPage() {
       setLocale(selected);
       document.documentElement.lang = selected === "zh" ? "zh-CN" : "en";
       const reason = query.get("error");
-      if (reason) setError(googleErrors[reason] ?? googleErrors.google_failed);
+      if (reason) setError(providerErrors[selected][reason] ?? providerErrors[selected].provider_failed);
+      setReturnTo(safeReturnPath(query.get("returnTo")));
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
@@ -61,7 +87,9 @@ export default function LoginPage() {
     setNotice("");
     localStorage.setItem("eval-locale", next);
     document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
-    history.replaceState(null, "", `/login?lang=${next}`);
+    const query = new URLSearchParams({ lang: next });
+    if (returnTo !== "/console") query.set("returnTo", returnTo);
+    history.replaceState(null, "", `/login?${query.toString()}`);
   };
 
   const sendCode = async () => {
@@ -106,7 +134,7 @@ export default function LoginPage() {
         setError(payload.error ?? "登录失败，请稍后再试。");
         return;
       }
-      location.href = "/console";
+      location.href = returnTo;
     } catch {
       setError("暂时无法连接登录服务，请稍后再试。");
     } finally {
@@ -115,6 +143,10 @@ export default function LoginPage() {
   };
 
   const isChinese = locale === "zh";
+  const oauthHref = (provider: "google" | "github") => `/api/auth/${provider}/start?${new URLSearchParams({
+    lang: locale,
+    returnTo,
+  }).toString()}`;
   return (
     <main className="login-page" ref={pageRef} onPointerMove={event => {
       pageRef.current?.style.setProperty("--cursor-x", `${event.clientX}px`);
@@ -136,16 +168,16 @@ export default function LoginPage() {
           <div className="login-kicker"><i/>EVAL AGENT ACCESS</div>
           {isChinese ? <>
             <h1>工程，始于<br/><em>可信的执行。</em></h1>
-            <p>登录你的团队空间，继续管理 Agent、模型、工具权限与每一次工程执行。</p>
+            <p>登录你的团队空间，继续使用 Agent、工程工具、社区内容与每一次工程执行记录。</p>
           </> : <>
             <h1>Engineering,<br/><em>made accountable.</em></h1>
-            <p>Enter your team workspace to govern agents, models, tool permissions, and every engineering run.</p>
+            <p>Enter your team workspace for agents, engineering tools, community knowledge, and every recorded run.</p>
           </>}
         </div>
         <div className="trust">
           <span><Icon name="shield"/>{isChinese ? "工具级权限控制" : "Tool-level control"}</span>
           <span><Icon name="chart"/>{isChinese ? "完整执行记录" : "Complete run history"}</span>
-          <span><Icon name="route"/>{isChinese ? "模型健康与容灾" : "Model resilience"}</span>
+          <span><Icon name="route"/>{isChinese ? "任务恢复与检查点" : "Task recovery"}</span>
         </div>
         <div className="login-copy-foot"><span>SECURE CONTROL PLANE</span><p>{isChinese ? "身份、权限与工程证据在同一条可信链路中完成验证。" : "Identity, access, and engineering evidence are verified across one trusted control plane."}</p></div>
       </section>
@@ -171,14 +203,17 @@ export default function LoginPage() {
             {notice && <div className="login-notice" role="status">{notice}</div>}
             {error && <div className="login-error" role="alert">{error}</div>}
             <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在验证…" : <>安全登录 <Icon name="arrow"/></>}</button>
-            <small className="policy">验证码由阿里云短信服务发送。未被管理员绑定的手机号不会创建账号，也不会透露账号是否存在。</small>
+            <div className="identity-divider"><span>或使用第三方账号</span></div>
+            <a className="oauth-login github-login" href={oauthHref("github")}><GitHubMark/><span>使用 GitHub 登录</span><Icon name="arrow"/></a>
+            <small className="policy">短信或 GitHub 登录都只接受管理员预先绑定的组织账号，不会在登录时自动创建用户、租户或角色。</small>
           </form> : <div className="google-method">
-            <div className="eyebrow">GOOGLE IDENTITY</div>
+            <div className="eyebrow">ORGANIZATION IDENTITY</div>
             <h2>Sign in to Eval Agent</h2>
-            <p>Use the Google email address provisioned by your administrator.</p>
+            <p>Use a Google or GitHub email address provisioned by your administrator.</p>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <a className="google-login" href="/api/auth/google/start"><GoogleMark/><span>Continue with Google</span><Icon name="arrow"/></a>
-            <div className="login-security-note"><Icon name="shield"/><span>Google verifies your identity. Eval grants access only after the email matches an active organization account.</span></div>
+            <a className="oauth-login google-login" href={oauthHref("google")}><GoogleMark/><span>Continue with Google</span><Icon name="arrow"/></a>
+            <a className="oauth-login github-login" href={oauthHref("github")}><GitHubMark/><span>Continue with GitHub</span><Icon name="arrow"/></a>
+            <div className="login-security-note"><Icon name="shield"/><span>The identity provider verifies your account. Eval grants access only after a verified email matches an active organization user.</span></div>
             <small className="policy">No workspace is created during sign-in. Tenant membership and permissions remain controlled by your Eval administrator.</small>
           </div>}
         </div>
@@ -194,5 +229,11 @@ function GoogleMark() {
     <path fill="#34A853" d="M12 21.75c2.46 0 4.52-.81 6.03-2.21l-2.94-2.28c-.82.55-1.86.87-3.09.87-2.37 0-4.38-1.6-5.1-3.75l-3.04 2.35A9.12 9.12 0 0 0 12 21.75Z"/>
     <path fill="#FBBC05" d="M6.9 14.38A5.5 5.5 0 0 1 6.61 12c0-.83.14-1.64.39-2.38L3.96 7.27A9.75 9.75 0 0 0 2.99 12c0 1.56.37 3.03.97 4.73l2.94-2.35Z"/>
     <path fill="#EA4335" d="M12 5.87c1.34 0 2.54.46 3.49 1.36l2.61-2.61C16.52 3.15 14.46 2.25 12 2.25a9.12 9.12 0 0 0-8.14 5.02L6.9 9.62C7.62 7.47 9.63 5.87 12 5.87Z"/>
+  </svg>;
+}
+
+function GitHubMark() {
+  return <svg className="github-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.11.79-.25.79-.56v-2.24c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.29-5.27-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.47.11-3.05 0 0 .97-.31 3.16 1.18a10.96 10.96 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.64 1.58.24 2.76.12 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.71 5.38-5.29 5.67.42.36.79 1.06.79 2.14v3.18c0 .31.21.68.8.56A11.5 11.5 0 0 0 12 .7Z"/>
   </svg>;
 }

@@ -1,339 +1,102 @@
 "use client";
 
 import Image from "next/image";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { useTheme } from "./useTheme";
 
-type DashboardUser = { email: string; displayName: string; tenantName: string; role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer" };
+type DashboardUser = {
+  email: string;
+  displayName: string;
+  tenantName: string;
+  role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer";
+};
+
 type ConsoleSnapshot = {
   generatedAt: number;
-  metrics: { requests: number; todayRequests: number; tokens: number; averageLatency: number; successRate: number | null; activeMembers: number; totalMembers: number; activeModels: number; activeKeys: number };
-  models: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; status: string; requestsPerMinute: number; updatedAt: number }>;
-  keys: Array<{ id: string; name: string; prefix: string; scopes: string[]; expiresAt: number | null; lastUsedAt: number | null; revokedAt: number | null; createdAt: number; ownerName: string }>;
-  recentRequests: Array<{ id: string; endpoint: string; statusCode: number; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; modelName: string; keyPrefix: string }>;
-  releases: Array<{ id: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string }>;
+  metrics: {
+    activeMembers: number;
+    totalMembers: number;
+    publishedReleases: number;
+    forumTopics: number;
+    forumReplies: number;
+    publishedPosts: number;
+    activeDesktopSessions: number;
+  };
+  releases: Array<{ id: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string; sizeBytes: number }>;
+  forumTopics: Array<{ id: string; title: string; slug: string; category: string; status: string; pinned: boolean; lastActivityAt: number; authorName: string; replyCount: number }>;
+  blogPosts: Array<{ id: string; title: string; slug: string; excerpt: string; publishedAt: number | null; authorName: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
-  dailyUsage: Array<{ day: number; requests: number }>;
 };
 
-const nav: { id: string; label: string; icon: IconName }[] = [
+const nav: Array<{ id: string; label: string; icon: IconName }> = [
   { id: "overview", label: "总览", icon: "grid" },
-  { id: "models", label: "模型", icon: "model" },
-  { id: "routes", label: "路由", icon: "route" },
-  { id: "keys", label: "API 密钥", icon: "key" },
-  { id: "users", label: "用户与组织", icon: "users" },
-  { id: "access", label: "权限策略", icon: "shield" },
-  { id: "analytics", label: "用量分析", icon: "chart" },
-  { id: "downloads", label: "下载中心", icon: "download" },
+  { id: "downloads", label: "下载", icon: "download" },
+  { id: "community", label: "社区", icon: "users" },
+  { id: "organization", label: "组织", icon: "shield" },
+  { id: "activity", label: "活动", icon: "clock" },
 ];
-
-const moduleCopy: Record<string, { chapter: string; kicker: string; title: string; description: string }> = {
-  models: { chapter: "MODEL FIELD", kicker: "模型集合", title: "选择智能，\n不被供应商束缚。", description: "这里只显示管理员已真实接入并授权给当前组织的模型。" },
-  routes: { chapter: "ROUTING LAYER", kicker: "请求入口", title: "每一次请求，\n都有真实去向。", description: "当前版本按请求模型精确路由；健康加权与故障转移将在产生真实运行数据后开放。" },
-  keys: { chapter: "CREDENTIAL VAULT", kicker: "访问凭证", title: "授权调用，\n不交出控制权。", description: "密钥只显示一次、仅保存哈希，并绑定当前组织、拥有者与最小权限范围。" },
-  users: { chapter: "ORGANIZATION", kicker: "用户与组织", title: "让协作扩张，\n让边界保持清晰。", description: "成员身份与组织边界由服务端会话和租户关系共同决定。" },
-  access: { chapter: "GOVERNANCE", kicker: "权限策略", title: "自主运行，\n始终处于治理之中。", description: "当前角色、密钥 Scope 与租户边界共同构成不可绕过的控制条件。" },
-  analytics: { chapter: "SIGNAL ROOM", kicker: "真实用量", title: "看见调用，\n再做成本决策。", description: "指标来自网关真实请求记录，不再展示推测或演示数据。" },
-  downloads: { chapter: "RELEASE VAULT", kicker: "工具发布", title: "把能力带回，\n你的工程现场。", description: "这里只展示管理员上传、绑定并正式发布的真实安装包。" },
-};
-
-function ParticleField() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-
-    type Particle = { x: number; y: number; vx: number; vy: number; radius: number; alpha: number; pulse: number; color: number };
-    let width = 0;
-    let height = 0;
-    let frame = 0;
-    let particles: Particle[] = [];
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const motionScale = reduceMotion ? .28 : 1;
-
-    const spawn = (): Particle => {
-      const side = Math.floor(Math.random() * 4);
-      const edgeX = Math.max(70, Math.min(190, width * .13));
-      const edgeY = Math.max(64, Math.min(150, height * .16));
-      let x = Math.random() * width;
-      let y = Math.random() * height;
-      if (side === 0) y = Math.random() * edgeY;
-      if (side === 1) x = width - Math.random() * edgeX;
-      if (side === 2) y = height - Math.random() * edgeY;
-      if (side === 3) x = Math.random() * edgeX;
-      const angle = Math.random() * Math.PI * 2;
-      const speed = .18 + Math.random() * .42;
-      return { x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, radius: 1.7 + Math.random() * 2.7, alpha: .38 + Math.random() * .48, pulse: Math.random() * Math.PI * 2, color: Math.floor(Math.random() * 3) };
-    };
-
-    const resize = () => {
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
-      canvas.width = Math.round(width * ratio);
-      canvas.height = Math.round(height * ratio);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      const count = reduceMotion ? width < 600 ? 14 : 32 : width < 600 ? 24 : 54;
-      particles = Array.from({ length: count }, spawn);
-    };
-
-    const render = (move: boolean) => {
-      context.clearRect(0, 0, width, height);
-      const dark = document.documentElement.dataset.theme === "dark";
-      const palette = dark ? ["#52bdff", "#e2f4ff", "#7cd2ff"] : ["#347bb5", "#7896af", "#5d9ed0"];
-      const edgeX = Math.max(70, Math.min(190, width * .13));
-      const edgeY = Math.max(64, Math.min(150, height * .16));
-
-      particles.forEach((particle, index) => {
-        if (move) {
-          particle.vx = Math.max(-.78, Math.min(.78, particle.vx + (Math.random() - .5) * .055 * motionScale));
-          particle.vy = Math.max(-.78, Math.min(.78, particle.vy + (Math.random() - .5) * .055 * motionScale));
-          particle.x += particle.vx * motionScale;
-          particle.y += particle.vy * motionScale;
-          particle.pulse += (.018 + (index % 5) * .002) * motionScale;
-          if (particle.x < 0 || particle.x > width) particle.vx *= -1;
-          if (particle.y < 0 || particle.y > height) particle.vy *= -1;
-          particle.x = Math.max(0, Math.min(width, particle.x));
-          particle.y = Math.max(0, Math.min(height, particle.y));
-          const enteredCenter = particle.x > edgeX && particle.x < width - edgeX && particle.y > edgeY && particle.y < height - edgeY;
-          if (enteredCenter) Object.assign(particle, spawn());
-        }
-
-        const pulse = .72 + Math.sin(particle.pulse) * .28;
-        context.beginPath();
-        context.fillStyle = palette[particle.color];
-        context.globalAlpha = particle.alpha * pulse;
-        context.shadowColor = palette[particle.color];
-        context.shadowBlur = dark ? 14 : 9;
-        context.arc(particle.x, particle.y, particle.radius * (.86 + pulse * .18), 0, Math.PI * 2);
-        context.fill();
-        if (index % 7 === 0) {
-          context.beginPath();
-          context.globalAlpha = particle.alpha * .2 * pulse;
-          context.lineWidth = 1;
-          context.strokeStyle = palette[particle.color];
-          context.arc(particle.x, particle.y, particle.radius * 2.7, 0, Math.PI * 2);
-          context.stroke();
-        }
-      });
-      context.globalAlpha = 1;
-      context.shadowBlur = 0;
-    };
-
-    const tick = () => {
-      render(true);
-      frame = window.requestAnimationFrame(tick);
-    };
-
-    resize();
-    tick();
-    const themeObserver = new MutationObserver(() => render(false));
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    window.addEventListener("resize", resize);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", resize);
-      themeObserver.disconnect();
-    };
-  }, []);
-
-  return <canvas ref={canvasRef} className="particle-field" aria-hidden="true"/>;
-}
-
-function Metric({ label, value, note, tone, featured = false }: { label: string; value: string; note: string; tone?: string; featured?: boolean }) {
-  return <article className={`metric-card surface${featured ? " featured" : ""}`}>
-    <div className="metric-top"><div className={`metric-symbol ${tone ?? ""}`}><span/></div><p>{label}</p></div>
-    <div className="metric-value"><strong>{value}</strong><small>{note}</small></div>
-    {featured && <div className="metric-bars" aria-hidden="true">{[42, 58, 46, 72, 65, 84, 76, 96].map((height, index) => <i key={index} style={{ height: `${height}%` }}/>)}</div>}
-  </article>;
-}
-
-function Overview({ snapshot, loading, onCreate, onNavigate }: { snapshot: ConsoleSnapshot | null; loading: boolean; onCreate: () => void; onNavigate: (id: string) => void }) {
-  const metrics = snapshot?.metrics;
-  const ready = Boolean(metrics?.activeModels && metrics?.activeKeys);
-  const recent = snapshot?.recentRequests ?? [];
-  const models = snapshot?.models ?? [];
-  const maxDaily = Math.max(1, ...(snapshot?.dailyUsage ?? []).map(item => Number(item.requests)));
-  return <>
-    <section className="overview-hero surface">
-      <div className="hero-refraction" aria-hidden="true"/>
-      <div className="hero-copy"><div className={`status-label${ready ? "" : " pending"}`}><span/>{loading ? "正在读取控制平面" : ready ? "网关已具备调用条件" : "等待完成模型与密钥配置"}</div><h1>一个入口。<br/>连接所有模型。</h1><p>所有数字均来自当前组织的真实配置和网关请求，不再使用演示指标。</p><div className="hero-actions"><button className="primary" onClick={onCreate}><Icon name="plus"/>创建 API 密钥</button><a className="plain-button" href="/docs">阅读开发文档 <Icon name="arrow"/></a></div></div>
-      <div className="gateway-card">
-        <div className="gateway-head"><span>Gateway</span><span className="availability">{ready ? "READY" : "SETUP"}</span></div>
-        <div className="gateway-score"><strong>{loading ? "—" : compact(metrics?.todayRequests ?? 0)}</strong><span>过去 24 小时请求</span></div>
-        <div className="gateway-list">
-          <div><span><i className={`dot ${metrics?.activeModels ? "green" : ""}`}/>模型配置</span><b>{metrics?.activeModels ?? 0}</b></div>
-          <div><span><i className={`dot ${metrics?.activeKeys ? "green" : ""}`}/>活动密钥</span><b>{metrics?.activeKeys ?? 0}</b></div>
-          <div><span><i className={`dot ${metrics?.requests ? "green" : ""}`}/>平均延迟</span><b>{metrics?.averageLatency ? `${metrics.averageLatency} ms` : "—"}</b></div>
-        </div>
-      </div>
-    </section>
-
-    <section className="content-section metrics-section">
-      <div className="section-intro"><div><p>真实态势</p><h2>{metrics?.requests ? "每一次调用，都已被记录。" : "从第一条真实调用开始。"}</h2></div><span>{snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "正在同步"}</span></div>
-      <div className="metric-grid">
-        <Metric label="30 日请求" value={loading ? "—" : compact(metrics?.requests ?? 0)} note="来自网关调用记录" tone="blue" featured/>
-        <Metric label="Token 用量" value={loading ? "—" : compact(metrics?.tokens ?? 0)} note="上游返回用量时记录" tone="graphite"/>
-        <Metric label="平均延迟" value={metrics?.averageLatency ? `${metrics.averageLatency} ms` : "—"} note="最近 30 天" tone="violet"/>
-        <Metric label="成功率" value={metrics?.successRate === null || metrics?.successRate === undefined ? "—" : `${metrics.successRate}%`} note="HTTP 2xx–3xx" tone="green"/>
-      </div>
-    </section>
-
-    <section className="content-section traffic-section">
-      <div className="section-intro"><div><p>流量脉络</p><h2>让每一次调用都清晰可见。</h2></div><span>过去 7 天 · 真实记录</span></div>
-      <div className="dashboard-grid"><article className="surface chart-card">
-        <div className="card-head"><div><p>请求趋势</p><h2>模型调用量</h2></div><div className="segmented"><button className="active">7 天</button></div></div>
-        <div className="chart-summary"><strong>{compact((snapshot?.dailyUsage ?? []).reduce((sum, item) => sum + Number(item.requests), 0))}</strong><span>过去 7 天</span></div>
-        {(snapshot?.dailyUsage.length ?? 0) > 0 ? <div className="real-chart" aria-label="过去七天的真实调用量">{snapshot!.dailyUsage.map(item => <i key={item.day} style={{ height: `${Math.max(8, Number(item.requests) / maxDaily * 100)}%` }} title={`${item.requests} 次请求`}/>)}</div> : <EmptyConsole text="尚无网关调用。创建密钥并完成第一次请求后，趋势会出现在这里。"/>}
-      </article>
-      <article className="surface activity-card">
-        <div className="card-head"><div><p>实时活动</p><h2>最近调用</h2></div><button className="round-button" aria-label="查看用量分析" onClick={() => onNavigate("analytics")}><Icon name="arrow"/></button></div>
-        {recent.length ? <div className="activity-list">{recent.slice(0,4).map(item => <div className="activity" key={item.id}><span className="activity-mark">{item.modelName[0]}</span><div><b>{item.modelName}</b><small>{item.endpoint} · {formatRelative(item.createdAt)}</small></div><code>{item.latencyMs} ms</code></div>)}</div> : <EmptyConsole text="还没有真实调用记录。"/>}
-      </article></div>
-    </section>
-
-    <section className="content-section models-section">
-      <div className="section-intro"><div><p>模型目录</p><h2>{models.length ? "已接入的模型，清晰可见。" : "尚未接入模型。"}</h2></div><button className="plain-button" onClick={() => onNavigate("models")}>管理模型 <Icon name="arrow"/></button></div>
-      <div className="surface models-card">
-        {models.length ? <div className="model-table"><div className="model-row model-header"><span>模型</span><span>状态</span><span>RPM</span><span>上游模型</span><span/></div>{models.map(model => <div className="model-row" key={model.id}><span className="model-name"><i className="blue">{model.displayName[0]}</i><span><b>{model.displayName}</b><small>{model.provider}</small></span></span><span className={`model-state ${model.status === "active" ? "online" : "maintenance"}`}><i/>{model.status === "active" ? "正常" : "维护"}</span><code>{model.requestsPerMinute}</code><span className="usage">{model.modelId}</span><button className="round-button small" aria-label={`查看 ${model.displayName}`} onClick={() => onNavigate("models")}><Icon name="chevron"/></button></div>)}</div> : <EmptyConsole text="管理员需要先在控制室配置模型地址和部署密钥引用。"/>}
-      </div>
-    </section>
-  </>;
-}
-
-function Coming({ id, snapshot, onCreateKey, onRevokeKey }: { id: string; snapshot: ConsoleSnapshot | null; onCreateKey: () => void; onRevokeKey: (id: string) => void }) {
-  const item = nav.find(entry => entry.id === id) ?? nav[0];
-  const detail = moduleCopy[id] ?? moduleCopy.models;
-  const { stats, rows } = moduleData(id, snapshot);
-  return <section className="subpage cinematic-subpage">
-    <div className="subpage-chapter"><span>CONTROL ROOM</span><i/><span>{detail.chapter}</span></div>
-    <div className="subhero surface"><div className="subhero-copy"><p>{detail.kicker}</p><h1>{detail.title.split("\n").map((line, index) => <span key={line}>{line}{index === 0 && <br/>}</span>)}</h1><strong>{detail.description}</strong></div><div className="subhero-signal"><div className="subicon"><Icon name={item.icon}/></div><small>MODULE / {item.id.toUpperCase()}</small><b>ONLINE</b></div></div>
-    <div className="sub-stat-grid">{stats.map(([value, label], index) => <article className="surface" key={label}><span>0{index + 1}</span><strong>{value}</strong><small>{label}</small></article>)}</div>
-    <div className="sub-ledger"><div className="sub-ledger-head"><span>LIVE DIRECTORY</span><span>STATUS / NOW</span></div>{rows.length ? rows.map(([name, meta, state, resourceId], index) => <article key={`${name}-${index}`}><span>0{index + 1}</span><h2>{name}</h2><p>{meta}</p><b><i/>{state}</b>{id === "keys" && resourceId && state !== "已撤销" ? <button aria-label={`撤销 ${name}`} onClick={() => onRevokeKey(resourceId)}><Icon name="logout"/></button> : <span/>}</article>) : <EmptyConsole text={id === "keys" ? "尚未创建 API 密钥。" : "当前组织暂无真实数据。"}/>}</div>
-    {id === "keys" && <button className="primary subpage-action" onClick={onCreateKey}><Icon name="plus"/>创建 API 密钥</button>}
-  </section>;
-}
-
-function EmptyConsole({ text }: { text: string }) {
-  return <div className="console-empty"><i/><p>{text}</p></div>;
-}
-
-type DataRow = [string, string, string, string?];
-function moduleData(id: string, snapshot: ConsoleSnapshot | null): { stats: [string, string][]; rows: DataRow[] } {
-  const metrics = snapshot?.metrics;
-  if (id === "models") return {
-    stats: [[String(metrics?.activeModels ?? 0), "活动模型"], [String(snapshot?.models.length ?? 0), "全部配置"], [String(new Set((snapshot?.models ?? []).map(item => item.provider)).size), "供应商"]],
-    rows: (snapshot?.models ?? []).map(item => [item.displayName, `${item.provider} · ${item.modelId}`, item.status === "active" ? "可调用" : "维护"]),
-  };
-  if (id === "keys") return {
-    stats: [[String(metrics?.activeKeys ?? 0), "活动密钥"], [String(snapshot?.keys.length ?? 0), "全部密钥"], ["HASHED", "存储方式"]],
-    rows: (snapshot?.keys ?? []).map(item => [item.name, `${item.prefix}… · ${item.scopes.join(", ")}`, item.revokedAt ? "已撤销" : item.expiresAt && item.expiresAt < Date.now()/1000 ? "已过期" : item.lastUsedAt ? formatRelative(item.lastUsedAt) : "尚未使用", item.id]),
-  };
-  if (id === "users") return { stats: [[String(metrics?.totalMembers ?? 0), "组织成员"], [String(metrics?.activeMembers ?? 0), "活动成员"], ["SERVER", "租户边界"]], rows: [] };
-  if (id === "access") return { stats: [["5", "系统角色"], [String(snapshot?.audits.length ?? 0), "近期审计"], ["ENFORCED", "服务端校验"]], rows: (snapshot?.audits ?? []).slice(0,8).map(item => [item.action, item.resourceType, formatRelative(item.createdAt)]) };
-  if (id === "analytics") return { stats: [[compact(metrics?.requests ?? 0), "30 日请求"], [compact(metrics?.tokens ?? 0), "Token"], [metrics?.successRate == null ? "—" : `${metrics.successRate}%`, "成功率"]], rows: (snapshot?.recentRequests ?? []).map(item => [item.modelName, `${item.inputTokens + item.outputTokens} tokens`, `${item.statusCode} · ${item.latencyMs} ms`]) };
-  if (id === "downloads") return { stats: [[String(snapshot?.releases.filter(item => item.status === "published").length ?? 0), "公开版本"], [String(snapshot?.releases.length ?? 0), "版本记录"], ["ECS", "持久存储"]], rows: (snapshot?.releases ?? []).map(item => [`v${item.version}`, `${item.format} · ${item.fileName}`, item.status === "published" ? "已发布" : "草稿"]) };
-  return { stats: [[String(metrics?.activeModels ?? 0), "精确路由模型"], [String(metrics?.requests ?? 0), "已记录请求"], ["NEXT", "健康加权路由"]], rows: (snapshot?.models ?? []).map(item => [item.displayName, item.modelId, `${item.requestsPerMinute} RPM`]) };
-}
-
-function compact(value: number) {
-  return Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-function formatTime(value: number) { return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }
-function formatRelative(value: number) {
-  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - value));
-  if (seconds < 60) return "刚刚";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
-  return new Date(value * 1000).toLocaleDateString("zh-CN");
-}
 
 export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
   const [active, setActive] = useState("overview");
-  const [modal, setModal] = useState(false);
-  const [search, setSearch] = useState(false);
-  const [toast, setToast] = useState("");
-  const [governanceOpen, setGovernanceOpen] = useState(false);
-  const [mobileMenu, setMobileMenu] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [logoutLoading, setLogoutLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
-  const [snapshotLoading, setSnapshotLoading] = useState(true);
-  const [keySaving, setKeySaving] = useState(false);
-  const [createdSecret, setCreatedSecret] = useState("");
-  const [passwordModal, setPasswordModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState("");
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [logoutLoading, setLogoutLoading] = useState(false);
   const { theme, toggleTheme } = useTheme();
-  const refreshSnapshot = useCallback(async () => {
+
+  const refresh = useCallback(async () => {
     try {
       const response = await fetch("/api/console/snapshot", { cache: "no-store" });
-      if (!response.ok) throw new Error("snapshot failed");
+      if (!response.ok) throw new Error();
       setSnapshot(await response.json());
     } catch {
-      setToast("控制平面数据同步失败，请稍后重试");
+      setToast("控制台数据同步失败，请稍后重试");
     } finally {
-      setSnapshotLoading(false);
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setSearch(true); }
-      if (event.key === "Escape") { setModal(false); setPasswordModal(false); setSearch(false); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-  useEffect(() => {
-    const initial = window.setTimeout(() => void refreshSnapshot(), 0);
-    const timer = window.setInterval(() => void refreshSnapshot(), 30_000);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(timer);
-    };
-  }, [refreshSnapshot]);
+    const initial = window.setTimeout(() => void refresh(), 0);
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
+  }, [refresh]);
 
-  const saveKey = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (keySaving) return;
-    setKeySaving(true);
-    const form = new FormData(event.currentTarget);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const logout = async () => {
+    if (logoutLoading) return;
+    setLogoutLoading(true);
     try {
-      const response = await fetch("/api/console/api-keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.get("name"), scopes: form.getAll("scopes"), expiresInDays: Number(form.get("expiresInDays")) }),
-      });
-      const payload = await response.json() as { key?: { secret: string }; error?: string };
-      if (!response.ok || !payload.key) throw new Error(payload.error || "创建密钥失败。");
-      setCreatedSecret(payload.key.secret);
-      await refreshSnapshot();
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "创建密钥失败。");
-    } finally {
-      setKeySaving(false);
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error();
+      location.href = "/login";
+    } catch {
+      setToast("退出失败，请稍后重试");
+      setLogoutLoading(false);
     }
   };
-  const revokeKey = async (id: string) => {
-    if (!window.confirm("撤销后该密钥将立即失效，且无法恢复。确定继续吗？")) return;
-    const response = await fetch(`/api/console/api-keys/${id}`, { method: "DELETE" });
-    const payload = await response.json() as { error?: string };
-    setToast(response.ok ? "API 密钥已撤销" : payload.error || "撤销失败");
-    if (response.ok) await refreshSnapshot();
-  };
-  const closeKeyModal = () => { setModal(false); setCreatedSecret(""); };
+
   const updatePassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (passwordSaving) return;
     setPasswordSaving(true);
     const form = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentPassword: form.get("currentPassword"), nextPassword: form.get("nextPassword") }) });
+      const response = await fetch("/api/auth/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: form.get("currentPassword"), nextPassword: form.get("nextPassword") }),
+      });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error || "密码修改失败。");
       location.href = "/login";
@@ -342,51 +105,89 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
       setPasswordSaving(false);
     }
   };
-  const navigate = (id: string) => { setActive(id); setGovernanceOpen(false); setMobileMenu(false); setAccountOpen(false); };
-  const logout = async () => {
-    if (logoutLoading) return;
-    setLogoutLoading(true);
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error("logout failed");
-      location.href = "/login";
-    } catch {
-      setToast("退出失败，请稍后重试");
-      setLogoutLoading(false);
-    }
-  };
-  const governanceActive = ["keys", "users", "access"].includes(active);
-  const avatarText = currentUser.displayName.slice(0, 2).toUpperCase();
-  const roleLabel = currentUser.role === "tenant_admin" ? "租户管理员" : currentUser.role === "platform_admin" ? "平台管理员" : currentUser.role === "developer" ? "开发者" : currentUser.role === "auditor" ? "审计员" : "查看者";
+
+  const roleLabel = currentUser.role === "platform_admin" ? "平台管理员" : currentUser.role === "tenant_admin" ? "租户管理员" : currentUser.role === "developer" ? "开发者" : currentUser.role === "auditor" ? "审计员" : "查看者";
   const isAdmin = currentUser.role === "tenant_admin" || currentUser.role === "platform_admin";
 
-  return <div className="shell">
-    <ParticleField/>
-    <header className="topbar">
-      <div className="topbar-inner">
-        <button className="brand top-brand" onClick={() => navigate("overview")} aria-label="返回总览"><span className="console-brand-mark"><Image src="/favicon.svg" alt="" width={24} height={24}/></span><span><b>Eval</b><small>Control Room</small></span></button>
-        <nav className="topnav" aria-label="主要导航">
-          <button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}>总览</button>
-          <button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}>模型</button>
-          <button className={active === "routes" ? "active" : ""} onClick={() => navigate("routes")}>路由</button>
-          <div className="nav-group"><button className={governanceActive ? "active" : ""} onClick={() => setGovernanceOpen(open => !open)}>治理 <Icon name="chevron"/></button>{governanceOpen && <div className="nav-popover"><p>访问与组织</p>{nav.filter(item => ["keys", "users", "access"].includes(item.id)).map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => navigate(item.id)}><span className="nav-popover-icon"><Icon name={item.icon}/></span><span><b>{item.label}</b><small>{item.id === "keys" ? "凭证与调用范围" : item.id === "users" ? "成员、团队与邀请" : "角色和资源边界"}</small></span><Icon name="chevron"/></button>)}</div>}</div>
-          <button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}>分析</button>
-          <button className={active === "downloads" ? "active" : ""} onClick={() => navigate("downloads")}>下载</button>
-        </nav>
-        <div className="header-actions"><button className="command-trigger" onClick={() => setSearch(true)}><Icon name="search"/><span>搜索</span><kbd>⌘ K</kbd></button><span className="region"><i/>CN East</span><button className="round-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button><button className="round-button" aria-label="查看近期审计" onClick={() => navigate("access")}><Icon name="bell"/>{snapshot?.audits.length ? <i className="notify"/> : null}</button><button className={`avatar account-button${accountOpen ? " active" : ""}`} onClick={() => setAccountOpen(open => !open)} aria-expanded={accountOpen} aria-haspopup="menu" aria-label={`${currentUser.displayName}，${roleLabel}`}>{avatarText}</button>{accountOpen && <div className="account-popover" role="menu"><div className="account-popover-head"><span className="avatar">{avatarText}</span><div><b>{currentUser.displayName}</b><small>{currentUser.email}</small></div></div><div className="account-context"><span>当前组织</span><b>{currentUser.tenantName}</b><small>{roleLabel}</small></div>{isAdmin && <a className="account-admin-link" href="/admin" role="menuitem"><Icon name="shield"/><span><b>管理员控制室</b><small>用户、模型、发布与收费配置</small></span><Icon name="arrow"/></a>}<button className="account-password" onClick={() => { setAccountOpen(false); setPasswordModal(true); }} role="menuitem"><Icon name="key"/><span>修改登录密码</span><Icon name="arrow"/></button><button className="account-logout" onClick={() => void logout()} disabled={logoutLoading} role="menuitem"><Icon name="logout"/><span>{logoutLoading ? "正在退出…" : "退出登录"}</span><Icon name="arrow"/></button></div>}</div>
+  return <div className="workspace-shell">
+    <header className="workspace-header">
+      <button className="workspace-brand" onClick={() => setActive("overview")} aria-label="返回总览">
+        <Image src="/favicon.svg" width={28} height={28} alt=""/><span><b>Eval Agent</b><small>Workspace</small></span>
+      </button>
+      <nav aria-label="主要导航">{nav.map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/>{item.label}</button>)}</nav>
+      <div className="workspace-actions">
+        <Link href="/docs">使用指南</Link>
+        <button className="workspace-icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
+        <button className="workspace-avatar" onClick={() => setAccountOpen(value => !value)} aria-expanded={accountOpen}>{currentUser.displayName.slice(0, 2).toUpperCase()}</button>
+        {accountOpen && <div className="workspace-account">
+          <strong>{currentUser.displayName}</strong><span>{currentUser.email}</span><small>{currentUser.tenantName} · {roleLabel}</small>
+          {isAdmin && <Link href="/admin"><Icon name="shield"/>管理员平台</Link>}
+          <button onClick={() => { setAccountOpen(false); setPasswordOpen(true); }}><Icon name="key"/>修改密码</button>
+          <button onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "正在退出…" : "退出登录"}</button>
+        </div>}
       </div>
     </header>
-    <main>
-      <div className="content"><div className="console-rail"><span>EVAL / EMBEDDED INTELLIGENCE CONTROL PLANE</span><span>CN EAST · LIVE</span></div><div className="page-title"><div><p>{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</p><h2>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h2></div>{active === "overview" && <div className="sync"><Icon name="clock"/>{snapshotLoading ? "正在同步" : "真实数据"}</div>}</div>{active === "overview" ? <Overview snapshot={snapshot} loading={snapshotLoading} onCreate={() => { setCreatedSecret(""); setModal(true); }} onNavigate={navigate}/> : <Coming id={active} snapshot={snapshot} onCreateKey={() => { setCreatedSecret(""); setModal(true); }} onRevokeKey={id => void revokeKey(id)}/>}<footer><span>EVAL AGENT / CONTROL ROOM</span><span>{currentUser.tenantName}</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer></div>
+
+    <main className="workspace-main">
+      <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
+      {active === "overview" && <Overview snapshot={snapshot}/>}
+      {active === "downloads" && <Downloads snapshot={snapshot}/>}
+      {active === "community" && <Community snapshot={snapshot}/>}
+      {active === "organization" && <Organization snapshot={snapshot} user={currentUser} roleLabel={roleLabel}/>}
+      {active === "activity" && <Activity snapshot={snapshot}/>}
     </main>
 
-    <nav className="mobile-dock" aria-label="移动端导航"><button className={active === "overview" ? "active" : ""} onClick={() => navigate("overview")}><Icon name="grid"/><span>总览</span></button><button className={active === "models" ? "active" : ""} onClick={() => navigate("models")}><Icon name="model"/><span>模型</span></button><button className={active === "routes" ? "active" : ""} onClick={() => navigate("routes")}><Icon name="route"/><span>路由</span></button><button className={active === "analytics" ? "active" : ""} onClick={() => navigate("analytics")}><Icon name="chart"/><span>分析</span></button><button className={mobileMenu || ["keys","users","access","downloads"].includes(active) ? "active" : ""} onClick={() => setMobileMenu(true)}><Icon name="more"/><span>更多</span></button></nav>
+    <nav className="workspace-mobile-nav" aria-label="移动端导航">{nav.map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav>
 
-    {mobileMenu && <div className="overlay mobile-menu-overlay" onMouseDown={event => event.currentTarget === event.target && setMobileMenu(false)}><div className="mobile-menu"><div className="mobile-menu-handle"/><div className="mobile-menu-head"><div><p>Eval Control Room</p><h2>更多功能</h2></div><button onClick={() => setMobileMenu(false)} aria-label="关闭">×</button></div><div className="mobile-menu-grid">{nav.filter(item => ["keys","users","access","downloads"].includes(item.id)).map(item => <button key={item.id} onClick={() => navigate(item.id)}><span><Icon name={item.icon}/></span><b>{item.label}</b><small>{item.id === "keys" ? "凭证管理" : item.id === "users" ? "团队成员" : item.id === "access" ? "角色权限" : "客户端与 SDK"}</small></button>)}</div><div className="mobile-account"><div className="avatar">{avatarText}</div><div><b>{currentUser.displayName}</b><small>{currentUser.tenantName} · {roleLabel}</small></div>{isAdmin && <a className="mobile-admin-link" href="/admin"><Icon name="shield"/>管理</a>}<button className="mobile-logout" onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "退出中" : "退出登录"}</button></div></div></div>}
-
-    {modal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && closeKeyModal()}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="key"/></div><button onClick={closeKeyModal} aria-label="关闭">×</button></div><p className="modal-kicker">凭证管理</p><h2>{createdSecret ? "保存你的密钥" : "创建 API 密钥"}</h2>{createdSecret ? <div className="secret-once"><p>这是唯一一次完整显示。关闭后无法再次查看。</p><code>{createdSecret}</code><button className="primary full" onClick={() => { void navigator.clipboard.writeText(createdSecret); setToast("密钥已复制"); }}><Icon name="key"/>复制密钥</button><button className="plain-button full" onClick={closeKeyModal}>我已安全保存</button></div> : <form onSubmit={event => void saveKey(event)}><p>密钥只会完整显示一次。租户由服务端根据密钥反查，不接受客户端指定。</p><label>密钥名称<input name="name" autoFocus defaultValue="Production Gateway" required minLength={2} maxLength={64}/></label><fieldset className="scope-fields"><legend>权限范围</legend><label><input name="scopes" type="checkbox" value="models:read" defaultChecked/>读取模型目录</label><label><input name="scopes" type="checkbox" value="models:invoke" defaultChecked/>调用已授权模型</label><label><input name="scopes" type="checkbox" value="usage:read"/>读取用量</label></fieldset><label>有效期<select name="expiresInDays" defaultValue="90"><option value="30">30 天</option><option value="90">90 天</option><option value="365">1 年</option><option value="0">永不过期</option></select></label><div className="scope-note"><Icon name="shield"/><span><b>最小权限原则</b><small>建议为生产、测试与本地开发分别创建密钥。</small></span></div><button className="primary full" disabled={keySaving}>{keySaving ? "正在创建…" : "创建密钥"} <Icon name="arrow"/></button></form>}</div></div>}
-    {passwordModal && <div className="overlay" onMouseDown={event => event.currentTarget === event.target && setPasswordModal(false)}><div className="modal"><div className="modal-top"><div className="subicon"><Icon name="shield"/></div><button onClick={() => setPasswordModal(false)} aria-label="关闭">×</button></div><p className="modal-kicker">账号安全</p><h2>修改登录密码</h2><form onSubmit={event => void updatePassword(event)}><p>修改后会撤销所有已登录会话，需要使用新密码重新登录。</p><label>当前密码<input name="currentPassword" type="password" autoComplete="current-password" required/></label><label>新密码<input name="nextPassword" type="password" autoComplete="new-password" minLength={10} required placeholder="至少 10 位，包含字母与数字"/></label><button className="primary full" disabled={passwordSaving}>{passwordSaving ? "正在更新…" : "更新密码并退出"} <Icon name="arrow"/></button></form></div></div>}
-    {search && <div className="overlay search-overlay" onMouseDown={event => event.currentTarget === event.target && setSearch(false)}><div className="command"><div><Icon name="search"/><input autoFocus placeholder="搜索模型、团队、文档或命令"/></div><p>快速前往</p>{nav.slice(0, 5).map(item => <button key={item.id} onClick={() => { setActive(item.id); setSearch(false); }}><Icon name={item.icon}/><span>{item.label}</span><kbd>↵</kbd></button>)}</div></div>}
-    {toast && <div className="toast"><Icon name="check"/>{toast}</div>}
+    {passwordOpen && <div className="workspace-overlay" onMouseDown={event => event.currentTarget === event.target && setPasswordOpen(false)}><div className="workspace-modal"><button className="workspace-modal-close" onClick={() => setPasswordOpen(false)} aria-label="关闭">×</button><small>ACCOUNT SECURITY</small><h2>修改登录密码</h2><p>修改成功后会撤销已登录会话，需要使用新密码重新登录。</p><form onSubmit={event => void updatePassword(event)}><label>当前密码<input name="currentPassword" type="password" autoComplete="current-password" required/></label><label>新密码<input name="nextPassword" type="password" autoComplete="new-password" minLength={10} required placeholder="至少 10 位，包含字母与数字"/></label><button disabled={passwordSaving}>{passwordSaving ? "正在更新…" : "更新密码并退出"}<Icon name="arrow"/></button></form></div></div>}
+    {toast && <div className="workspace-toast"><Icon name="check"/>{toast}</div>}
   </div>;
 }
+
+function Overview({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
+  const metrics = snapshot?.metrics;
+  const latest = snapshot?.releases.find(item => item.status === "published");
+  return <>
+    <section className="workspace-hero">
+      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程社区，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与团队成员沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
+      <aside><span>PRODUCT STATUS</span><strong>{latest ? `v${latest.version}` : "—"}</strong><small>{latest ? `${latest.channel.toUpperCase()} · 已发布` : "等待首个公开版本"}</small><i/></aside>
+    </section>
+    <section className="workspace-metrics">
+      <Metric icon="download" value={metrics?.publishedReleases ?? 0} label="已发布版本"/>
+      <Metric icon="users" value={(metrics?.forumTopics ?? 0) + (metrics?.forumReplies ?? 0)} label="社区讨论"/>
+      <Metric icon="spark" value={metrics?.publishedPosts ?? 0} label="博客文章"/>
+      <Metric icon="terminal" value={metrics?.activeDesktopSessions ?? 0} label="我的活动设备"/>
+    </section>
+    <section className="workspace-columns">
+      <article className="workspace-panel"><PanelHead eyebrow="LATEST RELEASES" title="最新版本" href="/docs" link="安装指南"/><ReleaseList releases={snapshot?.releases.slice(0, 4) ?? []}/></article>
+      <article className="workspace-panel"><PanelHead eyebrow="COMMUNITY" title="最近讨论" href="/forum" link="查看论坛"/><TopicList topics={snapshot?.forumTopics.slice(0, 5) ?? []}/></article>
+    </section>
+  </>;
+}
+
+function Downloads({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>RELEASE CENTER</small><h2>获取已验证的桌面端版本。</h2><p>这里只展示管理员上传并正式发布的 Eval Agent 安装包。安装前可以核对版本、渠道和文件格式。</p></div><div className="workspace-panel"><PanelHead eyebrow="AVAILABLE BUILDS" title="版本目录" href="/docs" link="查看安装说明"/><ReleaseList releases={snapshot?.releases ?? []} detailed/></div></section>;
+}
+
+function Community({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>KNOWLEDGE & DISCUSSION</small><h2>讨论工程问题，沉淀团队经验。</h2><p>论坛用于交流与协作，博客用于发布经过整理的产品和技术内容。</p><div className="workspace-page-actions"><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div><div className="workspace-columns"><article className="workspace-panel"><PanelHead eyebrow="FORUM" title="活跃主题" href="/forum" link="全部主题"/><TopicList topics={snapshot?.forumTopics ?? []}/></article><article className="workspace-panel"><PanelHead eyebrow="BLOG" title="最新文章" href="/blog" link="全部文章"/><BlogList posts={snapshot?.blogPosts ?? []}/></article></div></section>;
+}
+
+function Organization({ snapshot, user, roleLabel }: { snapshot: ConsoleSnapshot | null; user: DashboardUser; roleLabel: string }) {
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>ORGANIZATION</small><h2>账号归属与协作边界。</h2><p>组织身份由服务端会话确认，成员和内容始终限定在当前组织内。</p></div><div className="workspace-profile-grid"><article><span className="workspace-profile-avatar">{user.displayName.slice(0,2).toUpperCase()}</span><small>CURRENT ACCOUNT</small><h3>{user.displayName}</h3><p>{user.email}</p><b>{roleLabel}</b></article><article><Icon name="users"/><small>CURRENT ORGANIZATION</small><h3>{user.tenantName}</h3><p>{snapshot?.metrics.activeMembers ?? 0} 名活动成员 / {snapshot?.metrics.totalMembers ?? 0} 名成员</p><b>服务端租户隔离</b></article><article><Icon name="terminal"/><small>DESKTOP SESSIONS</small><h3>{snapshot?.metrics.activeDesktopSessions ?? 0}</h3><p>当前账号仍有效的桌面端设备会话</p><b>可撤销授权</b></article></div></section>;
+}
+
+function Activity({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>ACCOUNT ACTIVITY</small><h2>最近操作，清晰可追踪。</h2><p>普通成员只看到自己的操作；管理员可查看当前组织的审计活动。</p></div><div className="workspace-ledger"><header><span>操作</span><span>资源</span><span>时间</span><span>标识</span></header>{snapshot?.audits.length ? snapshot.audits.map(item => <article key={item.id}><b>{auditLabel(item.action)}<small>{item.action}</small></b><span>{item.resourceType}</span><time>{formatRelative(item.createdAt)}</time><code>{item.resourceId?.slice(0, 14) || "—"}</code></article>) : <Empty text="暂无可显示的操作记录。"/>}</div></section>;
+}
+
+function Metric({ icon, value, label }: { icon: IconName; value: number; label: string }) { return <article><Icon name={icon}/><strong>{value.toLocaleString("zh-CN")}</strong><span>{label}</span></article>; }
+function PanelHead({ eyebrow, title, href, link }: { eyebrow: string; title: string; href: string; link: string }) { return <header><div><small>{eyebrow}</small><h3>{title}</h3></div><Link href={href}>{link}<Icon name="arrow"/></Link></header>; }
+function ReleaseList({ releases, detailed = false }: { releases: ConsoleSnapshot["releases"]; detailed?: boolean }) { return <div className="workspace-release-list">{releases.length ? releases.map(item => <article key={item.id}><span><Icon name="download"/></span><div><b>Eval Agent v{item.version}</b><small>{item.channel.toUpperCase()} · {item.format} · {item.fileName}{detailed ? ` · ${formatBytes(item.sizeBytes)}` : ""}</small></div><em className={item.status}>{item.status === "published" ? "已发布" : "草稿"}</em>{item.status === "published" ? <a href={`/api/v1/downloads/${item.id}`} aria-label={`下载 v${item.version}`}><Icon name="download"/></a> : <i/>}</article>) : <Empty text="还没有可用版本。"/>}</div>; }
+function TopicList({ topics }: { topics: ConsoleSnapshot["forumTopics"] }) { return <div className="workspace-topic-list">{topics.length ? topics.map(item => <Link href={`/forum/${item.slug}`} key={item.id}><span>{item.pinned ? "置顶" : item.category}</span><div><b>{item.title}</b><small>{item.authorName} · {item.replyCount} 条回复 · {formatRelative(item.lastActivityAt)}</small></div><Icon name="chevron"/></Link>) : <Empty text="还没有论坛主题。"/>}</div>; }
+function BlogList({ posts }: { posts: ConsoleSnapshot["blogPosts"] }) { return <div className="workspace-blog-list">{posts.length ? posts.map(item => <Link href={`/blog/${item.slug}`} key={item.id}><small>{item.publishedAt ? new Date(item.publishedAt * 1000).toLocaleDateString("zh-CN") : "草稿"}</small><b>{item.title}</b><p>{item.excerpt}</p><span>{item.authorName}<Icon name="arrow"/></span></Link>) : <Empty text="还没有已发布文章。"/>}</div>; }
+function Empty({ text }: { text: string }) { return <div className="workspace-empty"><i/><p>{text}</p></div>; }
+function formatTime(value: number) { return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }
+function formatRelative(value: number) { const seconds = Math.max(0, Math.floor(Date.now() / 1000 - value)); if (seconds < 60) return "刚刚"; if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`; if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`; return new Date(value * 1000).toLocaleDateString("zh-CN"); }
+function formatBytes(value: number) { return value > 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`; }
+function auditLabel(value: string) { return ({ "auth.password.change": "修改密码", "desktop.auth.approve": "授权桌面端", "desktop.session.revoke": "撤销桌面端", "forum.topic.create": "发布论坛主题", "forum.reply.create": "发布论坛回复", "blog.post.create": "创建博客", "blog.post.update": "更新博客", "release.publish": "发布版本" } as Record<string, string>)[value] || "系统操作"; }

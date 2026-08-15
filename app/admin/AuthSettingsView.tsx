@@ -18,10 +18,16 @@ export type AuthSettingsSnapshot = {
   googleClientIdRef: string;
   googleClientSecretRef: string;
   googleAllowedHostedDomain: string;
+  githubEnabled: boolean;
+  githubClientIdRef: string;
+  githubClientSecretRef: string;
+  githubCallbackUrl: string;
   smsEnvironment: { accessKeyId: boolean; accessKeySecret: boolean; pepper: boolean };
   googleEnvironment: { clientId: boolean; clientSecret: boolean };
+  githubEnvironment: { clientId: boolean; clientSecret: boolean };
   smsConfigured: boolean;
   googleConfigured: boolean;
+  githubConfigured: boolean;
   updatedAt: number | null;
 };
 
@@ -38,6 +44,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       ...Object.fromEntries(data),
       smsEnabled: data.get("smsEnabled") === "on",
       googleEnabled: data.get("googleEnabled") === "on",
+      githubEnabled: data.get("githubEnabled") === "on",
     }, "登录与身份配置已保存。");
   };
 
@@ -57,10 +64,17 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
         configured={settings.googleConfigured}
         detail={settings.googleConfigured ? "OAuth 客户端部署变量已就绪" : "Client ID 或 Client Secret 尚未注入"}
       />
+      <ProviderStatus
+        label="GITHUB / OAUTH 2.0"
+        title="中英文 GitHub 登录"
+        enabled={settings.githubEnabled}
+        configured={settings.githubConfigured}
+        detail={settings.githubConfigured ? "OAuth App 部署凭据已就绪" : "GitHub Client ID 或 Client Secret 尚未注入"}
+      />
       <article className="auth-provider-scope">
         <span>IDENTITY TENANT</span>
         <strong>{settings.tenantSlug}</strong>
-        <p>{settings.identityTenant ? "当前组织承载公开登录入口" : "当前组织不是公开 Google 登录租户"}</p>
+        <p>{settings.identityTenant ? "当前组织承载公开登录入口" : "当前组织不是公开 Google/GitHub 登录租户"}</p>
       </article>
     </section>
 
@@ -94,6 +108,24 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
         </div>
       </ProviderForm>
 
+      <ProviderForm title="GitHub 登录" eyebrow="03 / OAUTH 2.0" icon="terminal">
+        <label className="auth-provider-toggle"><input name="githubEnabled" type="checkbox" defaultChecked={settings.githubEnabled}/><span>启用中英文界面的 GitHub 账号登录</span></label>
+        <div className="auth-field-grid">
+          <EnvironmentField label="OAuth Client ID 变量" name="githubClientIdRef" value={settings.githubClientIdRef} configured={settings.githubEnvironment.clientId}/>
+          <EnvironmentField label="OAuth Client Secret 变量" name="githubClientSecretRef" value={settings.githubClientSecretRef} configured={settings.githubEnvironment.clientSecret}/>
+          <div className="auth-callback-field">
+            <span>授权回调地址</span>
+            <code>{settings.githubCallbackUrl}</code>
+            <small>必须与 GitHub OAuth App 中的 Authorization callback URL 完全一致</small>
+          </div>
+          <div className="auth-callback-field">
+            <span>最小授权范围</span>
+            <code>user:email</code>
+            <small>仅用于读取当前 GitHub 账号的已验证邮箱；不申请仓库、组织或代码权限</small>
+          </div>
+        </div>
+      </ProviderForm>
+
       <section className="auth-secret-policy">
         <div><Icon name="shield"/><span><b>凭据隔离</b><small>这里只保存环境变量名称。AccessKey、Client Secret 和 Pepper 不会进入 PostgreSQL、审计日志或浏览器响应。</small></span></div>
         <button disabled={busy} type="submit">{busy ? "正在保存…" : "保存登录配置"}<Icon name="arrow"/></button>
@@ -112,7 +144,7 @@ function ProviderStatus({ label, title, enabled, configured, detail }: { label: 
   </article>;
 }
 
-function ProviderForm({ title, eyebrow, icon, children }: { title: string; eyebrow: string; icon: "key" | "shield"; children: React.ReactNode }) {
+function ProviderForm({ title, eyebrow, icon, children }: { title: string; eyebrow: string; icon: "key" | "shield" | "terminal"; children: React.ReactNode }) {
   return <section className="auth-provider-form">
     <header><div><Icon name={icon}/><span>{eyebrow}</span></div><h2>{title}</h2></header>
     {children}

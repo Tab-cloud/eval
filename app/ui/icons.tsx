@@ -1,10 +1,9 @@
 import type { SVGProps } from "react";
 
-export type IconName = "grid" | "model" | "route" | "key" | "users" | "shield" | "chart" | "download" | "settings" | "search" | "bell" | "plus" | "arrow" | "check" | "clock" | "chevron" | "spark" | "terminal" | "logout" | "sun" | "moon" | "more";
+export type IconName = "grid" | "route" | "key" | "users" | "shield" | "chart" | "download" | "settings" | "search" | "bell" | "plus" | "arrow" | "check" | "clock" | "chevron" | "spark" | "terminal" | "logout" | "sun" | "moon" | "more";
 
 const paths: Record<IconName, React.ReactNode> = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
-  model: <><path d="M7 3h10l4 4v10l-4 4H7l-4-4V7l4-4Z"/><circle cx="9" cy="10" r="1"/><circle cx="15" cy="10" r="1"/><path d="M8 15h8"/></>,
   route: <><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6.5 7.5l4.3 8.7M17.5 7.5l-4.3 8.7"/></>,
   key: <><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M15 12v2"/></>,
   users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></>,

@@ -16,6 +16,9 @@ export type IdentityProviderSettings = {
   googleClientIdRef: string;
   googleClientSecretRef: string;
   googleAllowedHostedDomain: string;
+  githubEnabled: boolean;
+  githubClientIdRef: string;
+  githubClientSecretRef: string;
   updatedAt: number | null;
 };
 
@@ -33,6 +36,9 @@ type SettingsRow = {
   google_client_id_ref: string;
   google_client_secret_ref: string;
   google_allowed_hosted_domain: string | null;
+  github_enabled: boolean;
+  github_client_id_ref: string;
+  github_client_secret_ref: string;
   updated_at: number;
 };
 
@@ -58,6 +64,7 @@ export async function tenantProviderSettings(tenantId: string): Promise<Identity
            s.aliyun_template_code, s.aliyun_template_code_key, s.aliyun_access_key_id_ref,
            s.aliyun_access_key_secret_ref, s.sms_code_pepper_ref, s.google_enabled,
            s.google_client_id_ref, s.google_client_secret_ref, s.google_allowed_hosted_domain,
+           s.github_enabled, s.github_client_id_ref, s.github_client_secret_ref,
            s.updated_at
     FROM auth_provider_settings s
     JOIN tenants t ON t.id = s.tenant_id
@@ -83,6 +90,9 @@ export async function tenantProviderSettings(tenantId: string): Promise<Identity
     googleClientIdRef: "GOOGLE_OAUTH_CLIENT_ID",
     googleClientSecretRef: "GOOGLE_OAUTH_CLIENT_SECRET",
     googleAllowedHostedDomain: process.env.GOOGLE_ALLOWED_HOSTED_DOMAIN?.trim().toLowerCase() || "",
+    githubEnabled: false,
+    githubClientIdRef: "GITHUB_OAUTH_CLIENT_ID",
+    githubClientSecretRef: "GITHUB_OAUTH_CLIENT_SECRET",
     updatedAt: null,
   };
 }
@@ -95,8 +105,9 @@ export async function saveTenantProviderSettings(tenantId: string, input: Record
       tenant_id, sms_enabled, aliyun_sign_name, aliyun_template_code,
       aliyun_template_code_key, aliyun_access_key_id_ref, aliyun_access_key_secret_ref,
       sms_code_pepper_ref, google_enabled, google_client_id_ref,
-      google_client_secret_ref, google_allowed_hosted_domain, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      google_client_secret_ref, google_allowed_hosted_domain, github_enabled,
+      github_client_id_ref, github_client_secret_ref, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tenant_id) DO UPDATE SET
       sms_enabled=excluded.sms_enabled,
       aliyun_sign_name=excluded.aliyun_sign_name,
@@ -109,6 +120,9 @@ export async function saveTenantProviderSettings(tenantId: string, input: Record
       google_client_id_ref=excluded.google_client_id_ref,
       google_client_secret_ref=excluded.google_client_secret_ref,
       google_allowed_hosted_domain=excluded.google_allowed_hosted_domain,
+      github_enabled=excluded.github_enabled,
+      github_client_id_ref=excluded.github_client_id_ref,
+      github_client_secret_ref=excluded.github_client_secret_ref,
       updated_at=excluded.updated_at
   `).bind(
     tenantId,
@@ -123,6 +137,9 @@ export async function saveTenantProviderSettings(tenantId: string, input: Record
     settings.googleClientIdRef,
     settings.googleClientSecretRef,
     settings.googleAllowedHostedDomain || null,
+    settings.githubEnabled,
+    settings.githubClientIdRef,
+    settings.githubClientSecretRef,
     now,
     now,
   ).run();
@@ -139,17 +156,24 @@ export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
     clientId: environmentConfigured(settings.googleClientIdRef),
     clientSecret: environmentConfigured(settings.googleClientSecretRef),
   };
+  const githubEnvironment = {
+    clientId: environmentConfigured(settings.githubClientIdRef),
+    clientSecret: environmentConfigured(settings.githubClientSecretRef),
+  };
   const origin = process.env.APP_ORIGIN?.trim() || "https://eval.zailink.space";
   return {
     ...settings,
     identityTenant: settings.tenantSlug === identityTenantSlug(),
     callbackUrl: `${new URL(origin).origin}/api/auth/google/callback`,
+    githubCallbackUrl: `${new URL(origin).origin}/api/auth/github/callback`,
     smsEnvironment,
     googleEnvironment,
+    githubEnvironment,
     smsConfigured: settings.smsEnabled
       && Boolean(settings.aliyunSignName && settings.aliyunTemplateCode)
       && Object.values(smsEnvironment).every(Boolean),
     googleConfigured: settings.googleEnabled && Object.values(googleEnvironment).every(Boolean),
+    githubConfigured: settings.githubEnabled && Object.values(githubEnvironment).every(Boolean),
   };
 }
 
@@ -193,6 +217,9 @@ function validateSettings(tenantId: string, input: Record<string, unknown>): Ide
     googleClientIdRef: reference("googleClientIdRef"),
     googleClientSecretRef: reference("googleClientSecretRef"),
     googleAllowedHostedDomain: hostedDomain,
+    githubEnabled: input.githubEnabled === true,
+    githubClientIdRef: reference("githubClientIdRef"),
+    githubClientSecretRef: reference("githubClientSecretRef"),
     updatedAt: null,
   };
 }
@@ -212,6 +239,9 @@ function mapSettings(row: SettingsRow): IdentityProviderSettings {
     googleClientIdRef: row.google_client_id_ref,
     googleClientSecretRef: row.google_client_secret_ref,
     googleAllowedHostedDomain: row.google_allowed_hosted_domain || "",
+    githubEnabled: Boolean(row.github_enabled),
+    githubClientIdRef: row.github_client_id_ref,
+    githubClientSecretRef: row.github_client_secret_ref,
     updatedAt: Number(row.updated_at),
   };
 }

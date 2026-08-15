@@ -1,8 +1,8 @@
 # Eval Agent Web
 
-Eval Web 同时提供公开落地页、组织登录、AI/Agent 管理控制台和桌面端签名更新服务。桌面客户端通过 `/api/v1/updates/{target}/{arch}/{current_version}` 检查管理员发布的真实安装包；未发布、未签名或不属于公开发布租户的文件不会进入更新通道。
+Eval Web 是 Eval Agent 的产品网站与运营后台，提供公开落地页、中英文登录、桌面端账号绑定、用户工作台、管理员平台、论坛、博客、安装包下载和签名更新服务。
 
-面向硬件研发团队的 Agent 工具、模型网关与可治理执行平台。项目包含公开落地页、中英文分流登录、用户控制台、管理员控制室、OpenAI-compatible API、安装包下载和开发者文档。
+桌面客户端通过 `/api/v1/updates/{target}/{arch}/{current_version}` 检查管理员发布的真实安装包；未发布、未签名或不属于公开发布租户的文件不会进入更新通道。
 
 ## 当前架构
 
@@ -36,11 +36,11 @@ npm run dev
 
 - `user@eval.local`：普通开发者
 - `vben`：租户管理员用户名，通过 `/admin/auth/login` 登录
-- 管理员密码仅以 PBKDF2 哈希保存，不在仓库和页面中明文记录
+- 管理员密码只保存 PBKDF2 哈希，不在仓库和页面中记录明文
 - 普通开发者的旧本地密码为 `123456`，仅在启用旧密码接口时可用
 - `EVAL_ENABLE_PASSWORD_LOGIN=true` 只用于启用普通用户的旧邮箱密码接口，不影响独立管理员登录入口
 
-生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false` 和 `EVAL_ENABLE_PASSWORD_LOGIN=false`，并通过正式初始化流程创建具有密码凭据的管理员账号，禁止继续使用示例账号和密码。
+生产环境必须保持 `EVAL_ENABLE_SEEDED_ACCOUNTS=false` 和 `EVAL_ENABLE_PASSWORD_LOGIN=false`，并通过正式初始化流程创建具有密码凭据的管理员账号。
 
 ## 数据库
 
@@ -51,33 +51,35 @@ npm run db:generate
 npm run db:migrate
 ```
 
-所有服务端查询必须附加登录会话或 API Key 派生的 `tenant_id`，不接受客户端提交租户标识。
+所有组织内查询都必须使用服务端登录会话或桌面端会话派生的 `tenant_id`，不接受客户端提交租户标识。
 
 ## 安装包文件
 
 管理员上传的真实 `.exe` 和 `.msi` 文件保存于 `ARTIFACT_STORAGE_PATH`。生产环境应将该目录放在独立云盘或共享文件系统中，并纳入备份。
 
-数据库只记录文件标识、大小、SHA-256、租户归属和发布状态。公开下载接口只返回已正式发布、属于稳定通道且源文件真实存在的版本。
+数据库只记录文件标识、大小、SHA-256、签名、租户归属和发布状态。公开下载接口只返回已正式发布且源文件真实存在的版本。
 
 ## 主要入口
 
 - `/`：公开落地页与公开下载
-- `/login`：中文界面使用手机号与阿里云短信验证码；英文界面使用管理员预置邮箱的 Google 登录
-- `/console`：用户控制台
+- `/login`：中文支持手机号或 GitHub；英文支持 Google 或 GitHub
+- `/blog`：公开团队博客，只显示指定公共内容租户中已发布的文章
+- `/forum`：组织论坛，登录成员可发布主题和回复，内容按当前租户隔离
+- `/console`：桌面端下载、社区、组织与账号工作台
 - `/admin/auth/login`：管理员专用用户名密码登录
-- `/admin`：租户管理员控制室；未登录时自动跳转到管理员专用登录页
-- `/docs`：开发者接口文档
-- `/api/v1/models`：模型目录
-- `/api/v1/chat/completions`：Chat Completions 中转
-- `/api/v1/responses`：Responses 中转
+- `/admin`：用户、登录、内容、版本、套餐与审计管理平台
+- `/docs`：安装、登录、桌面端授权、更新和社区使用指南
+- `/api/v1/downloads`：公开版本目录与安装包下载
+- `/api/v1/updates/{target}/{arch}/{current_version}`：Tauri 更新检查
 - `/api/v1/health`：健康检查
 
 ## 生产安全
 
-- PostgreSQL 只开放给应用安全组，不暴露公网端口。
-- 数据库启用 TLS、自动备份和时间点恢复。
-- LLM 密钥只通过 ECS 环境文件或密钥管理服务注入。
-- API Key 仅保存 SHA-256 哈希，完整密钥只在创建时显示一次。
+- PostgreSQL 只开放给应用安全组，不暴露公网端口，并启用 TLS、自动备份和时间点恢复。
 - 登录 Cookie 使用 HttpOnly、SameSite，并在 HTTPS 下启用 Secure。
-- 短信和 Google 登录都只接受管理员已预置的组织成员，不在登录过程中创建账号、租户或角色。
+- 短信、Google 和 GitHub 登录只接受管理员已预置的组织成员，不在登录过程中创建账号、租户或角色。
+- GitHub 只申请 `user:email`，用于匹配已验证邮箱，不申请仓库或代码权限。
+- 论坛写入要求有效登录会话、通过同源校验并执行发布频率限制；主题、回复及治理操作始终使用服务端派生的 `tenant_id`。
+- 博客和论坛正文按纯文本渲染，不接受或执行用户提交的 HTML。
+- 桌面端令牌、设备码、密码、短信验证码和第三方登录凭据不得写入日志或仓库。
 - 安装包目录禁止执行权限，Nginx 限制请求体大小。

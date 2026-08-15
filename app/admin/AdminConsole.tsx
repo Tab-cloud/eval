@@ -5,28 +5,26 @@ import { useEffect, useState } from "react";
 import { Icon, type IconName } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
 import { AuthSettingsView, type AuthSettingsSnapshot } from "./AuthSettingsView";
+import { ContentSettingsView, type ContentAdminSnapshot } from "./ContentSettingsView";
 
 type AdminUser = { id: string; email: string; phoneE164?: string | null; displayName: string; tenantId: string; tenantName: string; role: string };
 type Snapshot = {
-  metrics: { users: number; activeUsers: number; llms: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; requests30d: number; todayRequests: number; successRate: number | null; averageLatency: number; tokens30d: number; activeKeys: number };
-  readiness: { users: boolean; identity: boolean; llms: boolean; apiKeys: boolean; artifacts: boolean; releases: boolean; billing: boolean };
-  dailyUsage: Array<{ day: number; requests: number; successful: number; averageLatency: number; tokens: number }>;
-  topModels: Array<{ modelName: string; requests: number; successRate: number | null; averageLatency: number; tokens: number }>;
-  recentRequests: Array<{ id: string; endpoint: string; statusCode: number; latencyMs: number; inputTokens: number; outputTokens: number; createdAt: number; modelName: string; keyPrefix: string }>;
+  metrics: { users: number; activeUsers: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; blogPosts: number; forumTopics: number; forumReplies: number };
+  readiness: { users: boolean; identity: boolean; content: boolean; artifacts: boolean; releases: boolean; billing: boolean };
   users: Array<{ id: string; username?: string | null; email: string; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
-  llms: Array<{ id: string; displayName: string; provider: string; modelId: string; baseUrl: string; secretRef: string; status: string; requestsPerMinute: number }>;
   artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; platform: string; architecture: string; status: string; createdAt: number }>;
   releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
-  plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; requestLimit: number; seatLimit: number; features: string | string[]; status: string }>;
+  plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; seatLimit: number; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
   authSettings: AuthSettingsSnapshot;
+  content: ContentAdminSnapshot;
 };
 
 const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconName }> = [
   { id: "dashboard", label: "运营看板", eyebrow: "SIGNAL", icon: "grid" },
   { id: "users", label: "用户管理", eyebrow: "IDENTITY", icon: "users" },
   { id: "identity", label: "登录与身份", eyebrow: "AUTHENTICATION", icon: "key" },
-  { id: "llms", label: "LLM 配置", eyebrow: "INTELLIGENCE", icon: "model" },
+  { id: "content", label: "内容中心", eyebrow: "EDITORIAL", icon: "spark" },
   { id: "artifacts", label: "工具源文件", eyebrow: "ARTIFACTS", icon: "download" },
   { id: "releases", label: "版本升级", eyebrow: "RELEASES", icon: "route" },
   { id: "billing", label: "收费配置", eyebrow: "COMMERCE", icon: "chart" },
@@ -90,7 +88,7 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
         {active === "users" && <UsersView data={data} busy={busy} action={action}/>} 
         {active === "users" && <PhoneBindingPanel data={data} busy={busy} action={action}/>}
         {active === "identity" && <AuthSettingsView settings={data.authSettings} busy={busy} action={action}/>}
-        {active === "llms" && <LlmsView data={data} busy={busy} action={action}/>} 
+        {active === "content" && <ContentSettingsView content={data.content} busy={busy} action={action}/>}
         {active === "artifacts" && <ArtifactsView data={data} busy={busy} upload={uploadArtifact}/>} 
         {active === "releases" && <ReleasesView data={data} busy={busy} action={action}/>} 
         {active === "billing" && <BillingView data={data} busy={busy} action={action}/>} 
@@ -104,9 +102,8 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
 function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (module: string) => void }) {
   const readiness = [
     { key: "users", module: "users", label: "组织与管理员", detail: `${data.metrics.activeUsers} 位活跃成员`, ready: data.readiness.users },
-    { key: "identity", module: "identity", label: "登录身份服务", detail: "阿里云短信或 Google OIDC", ready: data.readiness.identity },
-    { key: "llms", module: "llms", label: "模型与部署密钥", detail: `${data.metrics.llms} 个模型配置`, ready: data.readiness.llms },
-    { key: "apiKeys", module: "console", label: "网关 API 密钥", detail: `${data.metrics.activeKeys} 个活跃密钥`, ready: data.readiness.apiKeys },
+    { key: "identity", module: "identity", label: "登录身份服务", detail: "短信、Google 或 GitHub 登录", ready: data.readiness.identity },
+    { key: "content", module: "content", label: "社区与内容", detail: `${data.metrics.blogPosts + data.metrics.forumTopics} 项内容`, ready: data.readiness.content },
     { key: "artifacts", module: "artifacts", label: "已签名工具产物", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
     { key: "releases", module: "releases", label: "公开升级版本", detail: `${data.metrics.publishedReleases} 个公开版本`, ready: data.readiness.releases },
     { key: "billing", module: "billing", label: "生效收费套餐", detail: `${data.metrics.activePlans} 个生效套餐`, ready: data.readiness.billing },
@@ -114,34 +111,24 @@ function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (modu
   const completed = readiness.filter(item => item.ready).length;
   const score = Math.round(completed / readiness.length * 100);
   const stats: Array<[string, string]> = [
-    [compactNumber(data.metrics.requests30d), "30 天请求"],
-    [compactNumber(data.metrics.todayRequests), "24 小时请求"],
-    [data.metrics.successRate === null ? "—" : `${data.metrics.successRate}%`, "成功率"],
-    [data.metrics.averageLatency ? `${data.metrics.averageLatency} ms` : "—", "平均延迟"],
-    [compactNumber(data.metrics.tokens30d), "30 天 Token"],
+    [compactNumber(data.metrics.activeUsers), "活动用户"],
+    [compactNumber(data.metrics.artifacts), "工具产物"],
+    [compactNumber(data.metrics.publishedReleases), "公开版本"],
+    [compactNumber(data.metrics.blogPosts + data.metrics.forumTopics + data.metrics.forumReplies), "社区内容"],
+    [compactNumber(data.metrics.activePlans), "产品套餐"],
   ];
-  const maxRequests = Math.max(1, ...data.dailyUsage.map(item => item.requests));
-  const weeklyRequests = data.dailyUsage.reduce((total,item)=>total+item.requests,0);
   return <div className="admin-dashboard">
-    <section className="admin-hero"><div><p><i/>SYSTEM GOVERNANCE ONLINE</p><h2>{completed === readiness.length ? <>控制平面。<br/><em>已经就绪。</em></> : <>从配置开始。<br/><em>直到真实运行。</em></>}</h2><span>所有指标来自当前组织的 PostgreSQL 数据。缺少真实配置时明确显示待完成，不填充演示数据。</span></div><aside><small>READINESS / 07</small><strong>{String(score).padStart(2,"0")}<sup>%</sup></strong><p>{completed} / {readiness.length} 条运营链路已完成</p><i style={{width:`${score}%`}}/></aside></section>
+    <section className="admin-hero"><div><p><i/>PRODUCT OPERATIONS ONLINE</p><h2>{completed === readiness.length ? <>产品运营。<br/><em>已经就绪。</em></> : <>从账号开始。<br/><em>走向真实交付。</em></>}</h2><span>管理员平台围绕账号、登录、内容、桌面端发布和产品套餐运行，所有指标都来自当前组织的真实数据。</span></div><aside><small>READINESS / 06</small><strong>{String(score).padStart(2,"0")}<sup>%</sup></strong><p>{completed} / {readiness.length} 条运营链路已完成</p><i style={{width:`${score}%`}}/></aside></section>
     <section className="admin-stat-strip">{stats.map(([value,label],index)=><article key={label}><span>0{index+1}</span><strong>{value}</strong><small>{label}</small></article>)}</section>
     <section className="admin-dashboard-grid">
       <article className="admin-usage-panel">
-        <header><div><p>REQUEST SIGNAL / 7D</p><h3>真实网关流量</h3></div><span>{data.metrics.activeKeys} 个活跃 API 密钥</span></header>
-        {weeklyRequests ? <div className="admin-usage-chart" aria-label="最近七天网关请求趋势">{data.dailyUsage.map(item => <div key={item.day}><span>{item.requests}</span><i style={{height:`${Math.max(6,item.requests/maxRequests*100)}%`}}/><small>{formatUsageDay(item.day)}</small></div>)}</div> : <div className="admin-zero-state"><Icon name="chart"/><h4>尚无网关请求</h4><p>接入 LLM 并在用户控制台创建 API 密钥后，这里将显示真实请求趋势。</p><a href="/console">前往用户控制台 <Icon name="arrow"/></a></div>}
+        <header><div><p>CONTENT & COMMUNITY</p><h3>公开内容运营</h3></div><span>{data.metrics.blogPosts} 篇博客 · {data.metrics.forumTopics} 个主题</span></header>
+        <div className="admin-zero-state"><Icon name="spark"/><h4>{data.readiness.content ? "内容中心已经开始运行" : "从第一篇文章或主题开始"}</h4><p>博客用于正式发布产品与技术内容，论坛用于团队讨论和经验沉淀。</p><button onClick={()=>onNavigate("content")}>管理内容 <Icon name="arrow"/></button></div>
       </article>
       <article className="admin-readiness-panel">
         <header><div><p>LAUNCH SEQUENCE</p><h3>上线清单</h3></div><strong>{completed}/{readiness.length}</strong></header>
-        <div>{readiness.map((item,index)=><button key={item.key} className={item.ready ? "complete" : ""} onClick={()=>item.module === "console" ? location.href="/console" : onNavigate(item.module)}><span>{String(index+1).padStart(2,"0")}</span><i>{item.ready ? <Icon name="check"/> : <Icon name="arrow"/>}</i><b>{item.label}</b><small>{item.ready ? "已完成" : item.detail}</small></button>)}</div>
+        <div>{readiness.map((item,index)=><button key={item.key} className={item.ready ? "complete" : ""} onClick={()=>onNavigate(item.module)}><span>{String(index+1).padStart(2,"0")}</span><i>{item.ready ? <Icon name="check"/> : <Icon name="arrow"/>}</i><b>{item.label}</b><small>{item.ready ? "已完成" : item.detail}</small></button>)}</div>
       </article>
-    </section>
-    <section className="admin-model-operations">
-      <header><div><p>MODEL OPERATIONS / 30D</p><h3>模型运行质量</h3></div><span>请求、成功率、延迟与 Token 均来自网关日志</span></header>
-      {data.topModels.length ? <div>{data.topModels.map((model,index)=><article key={model.modelName}><span>{String(index+1).padStart(2,"0")}</span><b>{model.modelName}</b><strong>{compactNumber(model.requests)}<small>请求</small></strong><strong>{model.successRate === null ? "—" : `${model.successRate}%`}<small>成功率</small></strong><strong>{model.averageLatency} ms<small>平均延迟</small></strong><strong>{compactNumber(model.tokens)}<small>Token</small></strong></article>)}</div> : <div className="admin-model-empty"><span>NO LIVE MODEL SIGNAL</span><p>完成模型配置并产生第一笔真实调用后，这里会形成模型质量排名。</p><button onClick={()=>onNavigate("llms")}>配置 LLM <Icon name="arrow"/></button></div>}
-    </section>
-    <section className="admin-recent-requests">
-      <header><div><p>LIVE REQUEST LEDGER</p><h3>最近调用</h3></div><span>仅显示当前组织最近 8 次调用</span></header>
-      {data.recentRequests.length ? <div>{data.recentRequests.map(request=><article key={request.id}><span className={`request-state ${request.statusCode >= 200 && request.statusCode < 400 ? "ok" : "error"}`}><i/>{request.statusCode}</span><b>{request.modelName}<small>{request.endpoint}</small></b><code>{request.latencyMs} ms</code><code>{compactNumber(request.inputTokens + request.outputTokens)} tokens</code><code>{request.keyPrefix}…</code><time>{formatRelativeTime(request.createdAt)}</time></article>)}</div> : <div className="admin-request-empty">暂无真实调用记录</div>}
     </section>
   </div>;
 }
@@ -167,10 +154,6 @@ function PhoneBindingPanel({ data, busy, action }: ViewProps) {
   </AdminForm>;
 }
 
-function LlmsView({ data, busy, action }: ViewProps) {
-  return <div className="admin-module"><AdminForm title="接入模型" note="API 密钥不写入数据库，只保存部署环境中的密钥变量名。上游需提供 OpenAI-compatible 接口。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("save_llm",Object.fromEntries(f),"LLM 配置已保存。");event.currentTarget.reset();}}><input name="displayName" placeholder="显示名称，如 GPT-5.2" required/><input name="provider" placeholder="供应商，如 OpenAI" required/><input name="modelId" placeholder="上游模型 ID" required/><input name="baseUrl" type="url" placeholder="https://api.example.com/v1" required/><input name="secretRef" placeholder="密钥变量，如 OPENAI_API_KEY" pattern="[A-Z][A-Z0-9_]{2,63}" required/><input name="requestsPerMinute" type="number" min="1" defaultValue="60"/><button disabled={busy}>保存配置 <Icon name="arrow"/></button></form></AdminForm><div className="admin-card-grid">{data.llms.length ? data.llms.map(llm=><article key={llm.id}><span>{llm.provider}</span><h3>{llm.displayName}</h3><p>{llm.modelId}</p><div><code>{llm.baseUrl}</code><small>{llm.requestsPerMinute} RPM</small></div><footer><i/>{llm.status.toUpperCase()} · {llm.secretRef}</footer><div className="admin-inline-actions"><button disabled={busy} onClick={()=>void action("test_llm",{id:llm.id},"模型连接与凭据验证通过。")}>测试连接</button><button disabled={busy} onClick={()=>void action("set_llm_status",{id:llm.id,status:llm.status==="disabled"?"active":"disabled"},llm.status==="disabled"?"模型已启用。":"模型已停用。")}>{llm.status==="disabled"?"启用":"停用"}</button></div></article>) : <EmptyState title="尚未接入 LLM" text="从上方配置供应商、模型 ID、地址与密钥引用。"/>}</div></div>;
-}
-
 function ArtifactsView({ data, busy, upload }: {data:Snapshot;busy:boolean;upload:(form:HTMLFormElement)=>Promise<void>}) {
   return <div className="admin-module"><AdminForm title="上传 Agent 更新产物" note="同时上传 Tauri 构建生成的 Windows x64 NSIS（.exe）或 MSI（.msi）及对应 .sig；缺少签名的文件不能发布为自动更新。"><form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}><input name="label" placeholder="显示名称，如 Windows x64 安装程序" required/><label className="admin-file"><Icon name="download"/><span>选择 .exe 或 .msi 安装包</span><input name="file" type="file" accept=".exe,.msi" required/></label><label className="admin-file"><Icon name="shield"/><span>选择对应的 .sig 签名文件</span><input name="signature" type="file" accept=".sig" required/></label><button disabled={busy}>{busy ? "正在上传…" : "上传更新产物"} <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["源文件","平台","大小","SHA256","签名"]}>{data.artifacts.map(item=><article key={item.id}><div><b>{item.label}</b><small>{item.fileName}</small></div><span>{item.platform}-{item.architecture}</span><code>{formatBytes(item.sizeBytes)}</code><code title={item.sha256}>{item.sha256.slice(0,12)}…</code><a href={`/api/admin/artifacts/${item.id}`}>{item.signed ? "已签名 · 下载" : "签名缺失"}</a></article>)}</AdminLedger></div>;
 }
@@ -180,22 +163,20 @@ function ReleasesView({ data, busy, action }: ViewProps) {
 }
 
 function BillingView({ data, busy, action }: ViewProps) {
-  return <div className="admin-module"><AdminForm title="创建收费套餐" note="金额使用最小货币单位保存；功能权益每行一项。支付渠道与自动扣费将在后续独立接入。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("save_plan",Object.fromEntries(f),"收费套餐已保存。");event.currentTarget.reset();}}><input name="name" placeholder="套餐名称" required/><div className="admin-money"><select name="currency"><option value="CNY">CNY</option><option value="USD">USD</option></select><input name="monthlyPriceCents" type="number" min="0" placeholder="月费（分）" required/></div><input name="requestLimit" type="number" min="0" placeholder="每月请求额度，0 表示不限" required/><input name="seatLimit" type="number" min="1" placeholder="席位数" required/><textarea name="features" placeholder={'功能权益，每行一项\n统一模型网关\n用量分析'}/><button disabled={busy}>保存套餐 <Icon name="arrow"/></button></form></AdminForm><div className="pricing-grid">{data.plans.length ? data.plans.map(plan=><article key={plan.id}><span>{plan.status.toUpperCase()}</span><h3>{plan.name}</h3><strong>{plan.currency === "CNY" ? "¥" : "$"}{(plan.monthlyPriceCents/100).toLocaleString()}<small>/ 月</small></strong><p>{plan.seatLimit} 个席位 · {plan.requestLimit ? `${plan.requestLimit.toLocaleString()} 次请求` : "请求不限"}</p><ul>{safeFeatures(plan.features).map(item=><li key={item}>{item}</li>)}</ul><button className="plan-status" disabled={busy} onClick={()=>void action("set_plan_status",{id:plan.id,status:plan.status==="active"?"archived":"active"},plan.status==="active"?"套餐已归档。":"套餐已重新启用。")}>{plan.status==="active"?"归档套餐":"重新启用"}</button></article>) : <EmptyState title="尚未配置收费套餐" text="创建套餐后，这里会形成独立的商业配置视图。"/>}</div></div>;
+  return <div className="admin-module"><AdminForm title="创建产品套餐" note="套餐只描述 Eval Agent 产品席位和功能权益；金额使用最小货币单位保存，功能权益每行一项。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("save_plan",Object.fromEntries(f),"产品套餐已保存。");event.currentTarget.reset();}}><input name="name" placeholder="套餐名称" required/><div className="admin-money"><select name="currency"><option value="CNY">CNY</option><option value="USD">USD</option></select><input name="monthlyPriceCents" type="number" min="0" placeholder="月费（分）" required/></div><input name="seatLimit" type="number" min="1" placeholder="席位数" required/><textarea name="features" placeholder={'功能权益，每行一项\n桌面端更新\n工程论坛\n团队知识库'}/><button disabled={busy}>保存套餐 <Icon name="arrow"/></button></form></AdminForm><div className="pricing-grid">{data.plans.length ? data.plans.map(plan=><article key={plan.id}><span>{plan.status.toUpperCase()}</span><h3>{plan.name}</h3><strong>{plan.currency === "CNY" ? "¥" : "$"}{(plan.monthlyPriceCents/100).toLocaleString()}<small>/ 月</small></strong><p>{plan.seatLimit} 个产品席位</p><ul>{safeFeatures(plan.features).map(item=><li key={item}>{item}</li>)}</ul><button className="plan-status" disabled={busy} onClick={()=>void action("set_plan_status",{id:plan.id,status:plan.status==="active"?"archived":"active"},plan.status==="active"?"套餐已归档。":"套餐已重新启用。")}>{plan.status==="active"?"归档套餐":"重新启用"}</button></article>) : <EmptyState title="尚未配置产品套餐" text="创建套餐后，可以独立管理席位价格和产品功能权益。"/>}</div></div>;
 }
 
 function AuditsView({ data }: { data: Snapshot }) {
-  return <div className="admin-module"><div className="admin-module-head"><div><p>IMMUTABLE ACTIVITY</p><h2>管理员与安全操作记录</h2></div><p>当前组织最近 100 条写操作。日志不记录密码、API Key 或模型密钥明文。</p></div><AdminLedger headings={["操作","执行者","资源","时间","标识"]}>{data.audits.map(item=><article key={item.id}><div><b>{auditLabel(item.action)}</b><small>{item.action}</small></div><span>{item.actorName}</span><span>{item.resourceType}</span><code>{new Date(item.createdAt*1000).toLocaleString("zh-CN")}</code><code>{item.resourceId?.slice(0,12) || "—"}</code></article>)}</AdminLedger>{!data.audits.length && <EmptyState title="尚无审计事件" text="创建用户、配置模型、发布版本或管理密钥后，操作会显示在这里。"/>}</div>;
+  return <div className="admin-module"><div className="admin-module-head"><div><p>IMMUTABLE ACTIVITY</p><h2>管理员与安全操作记录</h2></div><p>当前组织最近 100 条写操作。日志不记录密码、短信验证码或登录凭据明文。</p></div><AdminLedger headings={["操作","执行者","资源","时间","标识"]}>{data.audits.map(item=><article key={item.id}><div><b>{auditLabel(item.action)}</b><small>{item.action}</small></div><span>{item.actorName}</span><span>{item.resourceType}</span><code>{new Date(item.createdAt*1000).toLocaleString("zh-CN")}</code><code>{item.resourceId?.slice(0,12) || "—"}</code></article>)}</AdminLedger>{!data.audits.length && <EmptyState title="尚无审计事件" text="创建用户、配置登录、管理内容、发布版本或调整套餐后，操作会显示在这里。"/>}</div>;
 }
 
 type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Record<string,unknown>,success:string)=>Promise<void> };
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、模型、发布与商业配置的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置中文短信与英文 Google 登录，并检查部署凭据完整度。",llms:"配置供应商、模型路由地址、密钥引用与速率边界。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义套餐价格、席位、请求额度与商业权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品套餐的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布团队博客，并治理当前组织的论坛主题与回复。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义 Eval Agent 套餐价格、产品席位与功能权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
-function formatUsageDay(day:number){return new Date(day*86400000).toLocaleDateString("zh-CN",{month:"numeric",day:"numeric"})}
-function formatRelativeTime(value:number){const seconds=Math.max(0,Math.floor(Date.now()/1000-value));if(seconds<60)return "刚刚";if(seconds<3600)return `${Math.floor(seconds/60)} 分钟前`;if(seconds<86400)return `${Math.floor(seconds/3600)} 小时前`;return new Date(value*1000).toLocaleDateString("zh-CN")}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
-function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","auth.providers.save":"保存登录配置","llm.save":"保存模型","llm.status":"模型状态","llm.test":"模型测试","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","api_key.create":"创建 API Key","api_key.revoke":"撤销 API Key","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}
+function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","user.phone.update":"更新手机号","auth.providers.save":"保存登录配置","blog.post.create":"创建博客","blog.post.update":"更新博客","blog.post.status":"博客状态","forum.topic.create":"发布论坛主题","forum.reply.create":"发布论坛回复","forum.topic.moderate":"治理论坛主题","forum.reply.moderate":"治理论坛回复","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}

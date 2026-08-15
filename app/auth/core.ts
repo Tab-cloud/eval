@@ -78,13 +78,26 @@ async function initializeSchema() {
     "CREATE TABLE IF NOT EXISTS auth_sms_challenges (key_hash text PRIMARY KEY NOT NULL, code_hash text NOT NULL, attempts integer DEFAULT 0 NOT NULL, expires_at bigint NOT NULL, consumed_at bigint, aliyun_biz_id text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS auth_sms_rate_limits (key_hash text PRIMARY KEY NOT NULL, window_started_at bigint NOT NULL, send_count integer DEFAULT 0 NOT NULL, blocked_until bigint, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS auth_oauth_states (state_hash text PRIMARY KEY NOT NULL, code_verifier text NOT NULL, nonce text NOT NULL, redirect_uri text NOT NULL, expires_at bigint NOT NULL, consumed_at bigint, created_at bigint NOT NULL)",
+    "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS provider text DEFAULT 'google' NOT NULL",
+    "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS locale text DEFAULT 'en' NOT NULL",
+    "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS return_path text DEFAULT '/console' NOT NULL",
     "CREATE TABLE IF NOT EXISTS auth_oidc_identities (id text PRIMARY KEY NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider text NOT NULL, subject text NOT NULL, email_at_link text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_subject_uq ON auth_oidc_identities (provider, subject)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_user_uq ON auth_oidc_identities (provider, user_id)",
     "CREATE INDEX IF NOT EXISTS auth_oidc_user_idx ON auth_oidc_identities (user_id)",
     "CREATE TABLE IF NOT EXISTS auth_provider_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, sms_enabled boolean DEFAULT false NOT NULL, aliyun_sign_name text, aliyun_template_code text, aliyun_template_code_key text DEFAULT 'code' NOT NULL, aliyun_access_key_id_ref text DEFAULT 'ALIBABA_CLOUD_ACCESS_KEY_ID' NOT NULL, aliyun_access_key_secret_ref text DEFAULT 'ALIBABA_CLOUD_ACCESS_KEY_SECRET' NOT NULL, sms_code_pepper_ref text DEFAULT 'AUTH_SMS_CODE_PEPPER' NOT NULL, google_enabled boolean DEFAULT false NOT NULL, google_client_id_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_ID' NOT NULL, google_client_secret_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_SECRET' NOT NULL, google_allowed_hosted_domain text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_enabled boolean DEFAULT false NOT NULL",
+    "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_client_id_ref text DEFAULT 'GITHUB_OAUTH_CLIENT_ID' NOT NULL",
+    "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_client_secret_ref text DEFAULT 'GITHUB_OAUTH_CLIENT_SECRET' NOT NULL",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
+    "CREATE TABLE IF NOT EXISTS desktop_auth_requests (id text PRIMARY KEY NOT NULL, device_code_hash text NOT NULL, user_code_hash text NOT NULL, source_hash text NOT NULL, device_name text NOT NULL, client_version text NOT NULL, status text NOT NULL, user_id text REFERENCES users(id) ON DELETE CASCADE, tenant_id text REFERENCES tenants(id) ON DELETE CASCADE, expires_at bigint NOT NULL, approved_at bigint, consumed_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS desktop_auth_device_code_uq ON desktop_auth_requests (device_code_hash)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS desktop_auth_user_code_uq ON desktop_auth_requests (user_code_hash)",
+    "CREATE INDEX IF NOT EXISTS desktop_auth_source_time_idx ON desktop_auth_requests (source_hash, created_at)",
+    "CREATE TABLE IF NOT EXISTS desktop_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, device_name text NOT NULL, client_version text NOT NULL, expires_at bigint NOT NULL, revoked_at bigint, last_used_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS desktop_sessions_token_uq ON desktop_sessions (token_hash)",
+    "CREATE INDEX IF NOT EXISTS desktop_sessions_user_idx ON desktop_sessions (user_id)",
   ];
   await db.batch(statements.map(sql => db.prepare(sql)));
 
@@ -170,30 +183,47 @@ export async function findActiveUserByPhone(phoneE164: string): Promise<Authenti
 }
 
 export async function findOrLinkGoogleUser(subject: string, verifiedEmail: string, tenantId: string): Promise<AuthenticatedUser | null> {
+  return findOrLinkExternalUser("google", subject, [verifiedEmail], tenantId);
+}
+
+export async function findOrLinkGitHubUser(subject: string, verifiedEmails: string[], tenantId: string): Promise<AuthenticatedUser | null> {
+  return findOrLinkExternalUser("github", subject, verifiedEmails, tenantId);
+}
+
+async function findOrLinkExternalUser(provider: "google" | "github", subject: string, verifiedEmails: string[], tenantId: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const db = database();
-  const existing = await googleUserBySubject(subject, tenantId);
+  const existing = await externalUserBySubject(provider, subject, tenantId);
   if (existing) return existing;
 
-  const candidate = await db.prepare(`
-    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
-    FROM users u
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
-    WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
-    LIMIT 1
-  `).bind(verifiedEmail, tenantId).first<Record<string, string | number>>();
+  let candidate: Record<string, string | number> | null = null;
+  let emailAtLink = "";
+  const uniqueEmails = Array.from(new Set(verifiedEmails.map(email => email.trim().toLowerCase()).filter(Boolean)));
+  for (const verifiedEmail of uniqueEmails) {
+    candidate = await db.prepare(`
+      SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+             m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+      FROM users u
+      JOIN memberships m ON m.user_id = u.id
+      JOIN tenants t ON t.id = m.tenant_id
+      WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
+      LIMIT 1
+    `).bind(verifiedEmail, tenantId).first<Record<string, string | number>>();
+    if (candidate) {
+      emailAtLink = verifiedEmail;
+      break;
+    }
+  }
   if (!candidate || candidate.status !== "active" || candidate.tenant_status !== "active") return null;
 
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(
-    "INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, 'google', ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-  ).bind(`oidc_${crypto.randomUUID()}`, String(candidate.id), subject, verifiedEmail.toLowerCase(), now, now).run();
-  return googleUserBySubject(subject, tenantId);
+    "INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+  ).bind(`oidc_${crypto.randomUUID()}`, String(candidate.id), provider, subject, emailAtLink, now, now).run();
+  return externalUserBySubject(provider, subject, tenantId);
 }
 
-async function googleUserBySubject(subject: string, tenantId: string): Promise<AuthenticatedUser | null> {
+async function externalUserBySubject(provider: "google" | "github", subject: string, tenantId: string): Promise<AuthenticatedUser | null> {
   const row = await database().prepare(`
     SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
@@ -201,9 +231,9 @@ async function googleUserBySubject(subject: string, tenantId: string): Promise<A
     JOIN users u ON u.id = i.user_id
     JOIN memberships m ON m.user_id = u.id
     JOIN tenants t ON t.id = m.tenant_id
-    WHERE i.provider = 'google' AND i.subject = ? AND m.tenant_id = ?
+    WHERE i.provider = ? AND i.subject = ? AND m.tenant_id = ?
     LIMIT 1
-  `).bind(subject, tenantId).first<Record<string, string | number>>();
+  `).bind(provider, subject, tenantId).first<Record<string, string | number>>();
   if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
   return mapUser(row);
 }

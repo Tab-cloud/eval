@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   try {
     const result = await finishGoogleAuthorization(request);
     const headers = new Headers({
-      Location: new URL("/console", request.url).toString(),
+      Location: new URL(result.returnPath, request.url).toString(),
       "Cache-Control": "no-store",
     });
     headers.append("Set-Cookie", googleSessionCookie(result.session, request));

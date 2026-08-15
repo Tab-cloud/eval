@@ -8,6 +8,7 @@ import {
   type AuthenticatedUser,
 } from "./core";
 import { environmentValue, identityProviderSettings } from "./provider-settings";
+import { safeReturnPath } from "./return-path";
 
 const GOOGLE_STATE_COOKIE = "eval_google_state";
 const GOOGLE_STATE_TTL_SECONDS = 10 * 60;
@@ -26,6 +27,9 @@ export async function beginGoogleAuthorization(request: Request) {
   await ensureAuthSchema();
   const { clientId } = await googleConfiguration();
   const redirectUri = `${applicationOrigin(request)}/api/auth/google/callback`;
+  const requestUrl = new URL(request.url);
+  const returnPath = safeReturnPath(requestUrl.searchParams.get("returnTo"));
+  const locale = requestUrl.searchParams.get("lang") === "zh" ? "zh" : "en";
   const state = randomBase64Url(32);
   const nonce = randomBase64Url(32);
   const codeVerifier = randomBase64Url(64);
@@ -35,8 +39,8 @@ export async function beginGoogleAuthorization(request: Request) {
   await db.batch([
     db.prepare("DELETE FROM auth_oauth_states WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - 60 * 60),
     db.prepare(
-      "INSERT INTO auth_oauth_states (state_hash, code_verifier, nonce, redirect_uri, expires_at, consumed_at, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
-    ).bind(await sha256Hex(state), codeVerifier, nonce, redirectUri, now + GOOGLE_STATE_TTL_SECONDS, now),
+      "INSERT INTO auth_oauth_states (state_hash, provider, locale, code_verifier, nonce, redirect_uri, return_path, expires_at, consumed_at, created_at) VALUES (?, 'google', ?, ?, ?, ?, ?, ?, NULL, ?)",
+    ).bind(await sha256Hex(state), locale, codeVerifier, nonce, redirectUri, returnPath, now + GOOGLE_STATE_TTL_SECONDS, now),
   ]);
 
   const authorization = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -53,11 +57,12 @@ export async function beginGoogleAuthorization(request: Request) {
   }).toString();
   return {
     authorizationUrl: authorization.toString(),
+    returnPath,
     stateCookie: `${GOOGLE_STATE_COOKIE}=${state}; Path=/api/auth/google; HttpOnly; SameSite=Lax; Max-Age=${GOOGLE_STATE_TTL_SECONDS}${isSecureOrigin(request) ? "; Secure" : ""}`,
   };
 }
 
-export async function finishGoogleAuthorization(request: Request): Promise<{ user: AuthenticatedUser; session: string }> {
+export async function finishGoogleAuthorization(request: Request): Promise<{ user: AuthenticatedUser; session: string; returnPath: string }> {
   await ensureAuthSchema();
   const url = new URL(request.url);
   const state = url.searchParams.get("state") ?? "";
@@ -71,10 +76,10 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
   const stateResult = await authDatabase().prepare(`
     UPDATE auth_oauth_states
     SET consumed_at = ?
-    WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
-    RETURNING code_verifier, nonce, redirect_uri
+    WHERE state_hash = ? AND provider = 'google' AND consumed_at IS NULL AND expires_at > ?
+    RETURNING code_verifier, nonce, redirect_uri, return_path
   `).bind(now, await sha256Hex(state), now).run();
-  const stored = stateResult.results[0] as { code_verifier?: string; nonce?: string; redirect_uri?: string } | undefined;
+  const stored = stateResult.results[0] as { code_verifier?: string; nonce?: string; redirect_uri?: string; return_path?: string } | undefined;
   if (!stored?.code_verifier || !stored.nonce || !stored.redirect_uri) {
     throw new GoogleAuthenticationError("expired_state");
   }
@@ -114,7 +119,7 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
   }
   const user = await findOrLinkGoogleUser(payload.sub, payload.email.toLowerCase(), tenantId);
   if (!user) throw new GoogleAuthenticationError("account_not_provisioned");
-  return { user, session: await createSession(user) };
+  return { user, session: await createSession(user), returnPath: safeReturnPath(stored.return_path) };
 }
 
 export function googleSessionCookie(token: string, request: Request) {

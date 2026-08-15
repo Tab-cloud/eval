@@ -15,7 +15,7 @@ function databaseUrl() {
   const value = process.env.DATABASE_URL?.trim();
   if (!value) {
     throw new Error(
-      "DATABASE_URL is required. Configure a PostgreSQL connection string before using authentication, the console, or the API gateway.",
+      "DATABASE_URL is required. Configure a PostgreSQL connection string before using authentication, the console, or community features.",
     );
   }
   return value;
