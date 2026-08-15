@@ -9,8 +9,8 @@ type PublicRelease = {
   name: string;
   version: string;
   platform: string;
-  format: "NSIS" | "MSI";
-  fileExtension: ".exe" | ".msi";
+  format: "NSIS";
+  fileExtension: ".exe";
   available: boolean;
   downloadUrl: string | null;
   size: number | null;
@@ -187,15 +187,15 @@ export function AgentLanding() {
           <p>{isZh ? "下载工具无需登录。管理员上传正式发布包后，下载按钮会在这里开放。" : "No sign-in is required. Download buttons become available here after an administrator uploads an official release."}</p>
         </div>
         <div className="release-list" aria-live="polite">
-          {downloadsLoading ? <div className="release-loading">{isZh ? "正在读取发布目录" : "Reading release catalog"}<i/><i/><i/></div> : downloads.map((release, index) => <article key={release.id}>
+          {downloadsLoading ? <div className="release-loading">{isZh ? "正在读取发布目录" : "Reading release catalog"}<i/><i/><i/></div> : downloads.map((release, index) => <article className="is-standard" key={release.id}>
             <div className="release-index">0{index + 1}</div>
-            <div className="release-name"><small>{release.platform}</small><h3>{isZh ? release.name : release.format === "NSIS" ? "Eval Agent Windows Installer" : "Eval Agent Windows Enterprise Package"}</h3></div>
+            <div className="release-name"><small>{isZh ? "Windows 安装" : "WINDOWS INSTALL"} · {release.platform}</small><h3>{isZh ? "Eval Agent Windows 安装程序" : "Eval Agent Windows Installer"}</h3></div>
             <div className="release-spec"><span>{release.format}</span><span>{release.fileExtension}</span><span>v{release.version}</span></div>
-            {release.available && release.downloadUrl ? <a className="release-action is-ready" href={release.downloadUrl} download>{isZh ? "立即下载" : "Download"}<i className="download-arrow" aria-hidden="true"/></a> : <span className="release-action is-pending" aria-disabled="true"><i/>{isZh ? "等待管理员上传" : "Awaiting administrator upload"}</span>}
+            {release.available && release.downloadUrl ? <a className="release-action is-ready" href={release.downloadUrl} download>{isZh ? `下载 ${release.fileExtension.toUpperCase()}` : `Download ${release.fileExtension.toUpperCase()}`}<i className="download-arrow" aria-hidden="true"/></a> : <span className="release-action is-pending" aria-disabled="true"><i/>{isZh ? "等待管理员上传" : "Awaiting administrator upload"}</span>}
           </article>)}
           {!downloadsLoading && downloads.length === 0 ? <div className="release-empty">{isZh ? "发布目录暂不可用" : "Release catalog is currently unavailable"}</div> : null}
         </div>
-        <div className="release-truth" data-reveal><span>ACTUAL BUILD OUTPUT</span><p>{isZh ? "当前仅列出项目已经实际生成的 Windows x64 构建格式：NSIS 安装程序（.exe）与 MSI 企业部署包（.msi）。" : "Only formats already produced by the project are listed: Windows x64 NSIS installer (.exe) and MSI enterprise package (.msi)."}</p></div>
+        <div className="release-truth" data-reveal><span>LATEST STABLE RELEASE</span><p>{isZh ? "这里只提供一个最新稳定版 EXE。新用户直接下载安装，已安装客户端通过自动升级获得同一版本。" : "Only the latest stable EXE is provided. New users install it directly, while existing clients receive the same release through automatic updates."}</p></div>
       </section>
 
       <section className="closing-scene">

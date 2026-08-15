@@ -12,7 +12,7 @@ type Snapshot = {
   metrics: { users: number; activeUsers: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; blogPosts: number; forumTopics: number; forumReplies: number };
   readiness: { users: boolean; identity: boolean; content: boolean; artifacts: boolean; releases: boolean; billing: boolean };
   users: Array<{ id: string; username?: string | null; email: string; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
-  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; platform: string; architecture: string; status: string; createdAt: number }>;
+  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; signatureVerifiedAt?: number; signatureKeyId?: string; embeddedVersion?: string | null; productName?: string | null; versionSource?: string | null; platform: string; architecture: string; status: string; createdAt: number }>;
   releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
   plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; seatLimit: number; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
@@ -25,8 +25,7 @@ const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconNam
   { id: "users", label: "用户管理", eyebrow: "IDENTITY", icon: "users" },
   { id: "identity", label: "登录与身份", eyebrow: "AUTHENTICATION", icon: "key" },
   { id: "content", label: "内容中心", eyebrow: "EDITORIAL", icon: "spark" },
-  { id: "artifacts", label: "工具源文件", eyebrow: "ARTIFACTS", icon: "download" },
-  { id: "releases", label: "版本升级", eyebrow: "RELEASES", icon: "route" },
+  { id: "releases", label: "版本发布", eyebrow: "DISTRIBUTION", icon: "route" },
   { id: "billing", label: "收费配置", eyebrow: "COMMERCE", icon: "chart" },
   { id: "audits", label: "审计日志", eyebrow: "AUDIT", icon: "shield" },
 ];
@@ -68,9 +67,9 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
     setBusy(true); setError(""); setNotice("");
     try {
       const response = await fetch("/api/admin/artifacts", { method: "POST", body: new FormData(form) });
-      const payload = await response.json() as { error?: string };
+      const payload = await response.json() as { error?: string; artifacts?: unknown[] };
       if (!response.ok) throw new Error(payload.error ?? "上传失败。");
-      form.reset(); await load(); setNotice("安装包源文件已安全上传。");
+      form.reset(); await load(); setNotice(`${payload.artifacts?.length ?? 0} 个安装包已完成验签并安全上传。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "上传失败。"); }
     finally { setBusy(false); }
   };
@@ -89,8 +88,7 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
         {active === "users" && <PhoneBindingPanel data={data} busy={busy} action={action}/>}
         {active === "identity" && <AuthSettingsView settings={data.authSettings} busy={busy} action={action}/>}
         {active === "content" && <ContentSettingsView content={data.content} busy={busy} action={action}/>}
-        {active === "artifacts" && <ArtifactsView data={data} busy={busy} upload={uploadArtifact}/>} 
-        {active === "releases" && <ReleasesView data={data} busy={busy} action={action}/>} 
+        {active === "releases" && <ReleaseCenterView data={data} busy={busy} upload={uploadArtifact} action={action}/>}
         {active === "billing" && <BillingView data={data} busy={busy} action={action}/>} 
         {active === "audits" && <AuditsView data={data}/>}
       </>}
@@ -104,7 +102,7 @@ function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (modu
     { key: "users", module: "users", label: "组织与管理员", detail: `${data.metrics.activeUsers} 位活跃成员`, ready: data.readiness.users },
     { key: "identity", module: "identity", label: "登录身份服务", detail: "短信、Google 或 GitHub 登录", ready: data.readiness.identity },
     { key: "content", module: "content", label: "社区与内容", detail: `${data.metrics.blogPosts + data.metrics.forumTopics} 项内容`, ready: data.readiness.content },
-    { key: "artifacts", module: "artifacts", label: "已签名工具产物", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
+    { key: "artifacts", module: "releases", label: "已签名安装包", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
     { key: "releases", module: "releases", label: "公开升级版本", detail: `${data.metrics.publishedReleases} 个公开版本`, ready: data.readiness.releases },
     { key: "billing", module: "billing", label: "生效收费套餐", detail: `${data.metrics.activePlans} 个生效套餐`, ready: data.readiness.billing },
   ];
@@ -154,12 +152,55 @@ function PhoneBindingPanel({ data, busy, action }: ViewProps) {
   </AdminForm>;
 }
 
-function ArtifactsView({ data, busy, upload }: {data:Snapshot;busy:boolean;upload:(form:HTMLFormElement)=>Promise<void>}) {
-  return <div className="admin-module"><AdminForm title="上传 Agent 更新产物" note="同时上传 Tauri 构建生成的 Windows x64 NSIS（.exe）或 MSI（.msi）及对应 .sig；缺少签名的文件不能发布为自动更新。"><form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}><input name="label" placeholder="显示名称，如 Windows x64 安装程序" required/><label className="admin-file"><Icon name="download"/><span>选择 .exe 或 .msi 安装包</span><input name="file" type="file" accept=".exe,.msi" required/></label><label className="admin-file"><Icon name="shield"/><span>选择对应的 .sig 签名文件</span><input name="signature" type="file" accept=".sig" required/></label><button disabled={busy}>{busy ? "正在上传…" : "上传更新产物"} <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["源文件","平台","大小","SHA256","签名"]}>{data.artifacts.map(item=><article key={item.id}><div><b>{item.label}</b><small>{item.fileName}</small></div><span>{item.platform}-{item.architecture}</span><code>{formatBytes(item.sizeBytes)}</code><code title={item.sha256}>{item.sha256.slice(0,12)}…</code><a href={`/api/admin/artifacts/${item.id}`}>{item.signed ? "已签名 · 下载" : "签名缺失"}</a></article>)}</AdminLedger></div>;
-}
+function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload: (form: HTMLFormElement) => Promise<void> }) {
+  const latestArtifact = data.artifacts
+    .filter(artifact => artifact.format === "NSIS" && artifact.signed && artifact.embeddedVersion && artifact.status === "ready")
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  const currentRelease = data.releases
+    .filter(release => release.status === "published" && release.channel === "stable")
+    .sort((left, right) => Number(right.publishedAt ?? 0) - Number(left.publishedAt ?? 0))[0];
+  const currentArtifact = currentRelease ? data.artifacts.find(artifact => artifact.id === currentRelease.artifactId) : undefined;
 
-function ReleasesView({ data, busy, action }: ViewProps) {
-  return <div className="admin-module"><AdminForm title="创建升级版本" note="版本必须绑定已上传的真实安装包；发布后才会进入公开下载链路。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);const input={...Object.fromEntries(f),mandatory:f.get("mandatory")==="on"};void action("create_release",input,"版本配置已创建。");event.currentTarget.reset();}}><input name="version" placeholder="版本号，如 0.1.1" pattern="\d+\.\d+\.\d+.*" required/><select name="artifactId" required defaultValue=""><option value="" disabled>选择已上传安装包</option>{data.artifacts.map(item=><option key={item.id} value={item.id}>{item.label} · {item.fileName}</option>)}</select><select name="channel" defaultValue="stable"><option value="stable">Stable</option><option value="beta">Beta</option><option value="internal">Internal</option></select><select name="status" defaultValue="draft"><option value="draft">草稿</option><option value="published">立即发布</option></select><textarea name="notes" placeholder="更新说明"/><label className="admin-check"><input name="mandatory" type="checkbox"/>强制升级</label><button disabled={busy || !data.artifacts.length}>创建版本 <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["版本","渠道","安装包","升级策略","状态"]}>{data.releases.map(item=><article key={item.id}><div><b>v{item.version}</b><small>{item.notes || "无更新说明"}</small></div><span>{item.channel.toUpperCase()}</span><span>{item.fileName}</span><span>{item.mandatory ? "强制升级" : "用户可选"}</span><button disabled={busy} onClick={()=>void action("set_release_status",{id:item.id,status:item.status==="published"?"draft":"published"},item.status==="published"?"版本已回滚为草稿。":"版本已正式发布。")}>{item.status === "published" ? "回滚" : "发布"}</button></article>)}</AdminLedger></div>;
+  return <div className="admin-module release-center">
+    <section className={`release-current ${currentRelease ? "is-live" : "is-empty"}`}>
+      <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个签名版本后，新用户下载与老用户升级会在这里汇合。"}</small></div>
+      <div className="release-current-files">
+        <article className={currentArtifact ? "ready primary" : "missing"}><span>WINDOWS INSTALL / EXE</span><b>{currentArtifact ? currentArtifact.fileName : "EXE 未提供"}</b><small>{currentArtifact ? `${formatBytes(currentArtifact.sizeBytes)} · SHA256 ${currentArtifact.sha256.slice(0, 12)}…` : "当前还没有可公开下载的安装包"}</small>{currentArtifact ? <a href={`/api/v1/downloads/${currentArtifact.id}`}>下载最新 EXE<Icon name="download"/></a> : <i/>}</article>
+      </div>
+      {currentRelease && <button className="release-rollback" disabled={busy} onClick={()=>void action("set_release_status",{id:currentRelease.id,status:"draft"},"当前版本已停止公开分发。")}>停止公开分发</button>}
+    </section>
+
+    <section className="release-delivery-paths">
+      <article><span>01 / NEW USER</span><Icon name="download"/><b>官网直接下载</b><p>公开下载页始终只展示当前最新稳定版 EXE。</p></article>
+      <article><span>02 / EXISTING USER</span><Icon name="route"/><b>客户端直接升级</b><p>Eval 使用当前版本检查接口，命中后下载同一稳定版本的签名主包。</p></article>
+      <article><span>03 / RETENTION</span><Icon name="shield"/><b>历史版本转为私有</b><p>旧版本不再公开下载，但保留文件与审计记录，支持紧急回滚。</p></article>
+    </section>
+
+    <AdminForm title="上传新版本文件" note="提交 EXE 与对应签名。系统会自动验签并读取安装包内部版本。">
+      <form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}>
+        <input className="artifact-label" name="label" placeholder="显示名称，如 Eval Agent Windows x64" required/>
+        <section className="artifact-channel">
+          <header><span>WINDOWS X64</span><b>NSIS / .EXE</b></header>
+          <label className="admin-file"><Icon name="download"/><span>选择 .exe 安装包</span><input name="file" type="file" accept=".exe" required/></label>
+          <label className="admin-file"><Icon name="shield"/><span>选择对应的 .exe.sig</span><input name="signature" type="file" accept=".sig" required/></label>
+        </section>
+        <button disabled={busy}>{busy ? "正在验签并上传…" : "验签并上传最新产物"} <Icon name="arrow"/></button>
+      </form>
+    </AdminForm>
+
+    {latestArtifact && <section className="release-candidate"><header><div><span>LATEST VERIFIED BUILD</span><h3>v{latestArtifact.embeddedVersion}</h3></div><small>仅最新上传的 EXE 进入发布候选</small></header><div><article><span>EXE</span><div><b>{latestArtifact.fileName}</b><small>{formatBytes(latestArtifact.sizeBytes)} · {latestArtifact.productName || "Eval Agent"}</small></div><a href={`/api/admin/artifacts/${latestArtifact.id}`}>内部下载</a></article></div></section>}
+
+    <AdminForm title="发布到用户" note="选择最新验签版本并发布。每个渠道只保留一个公开版本，发布新版会自动把该渠道旧版转为私有。">
+      <form onSubmit={event=>{event.preventDefault();if(!latestArtifact?.embeddedVersion)return;const form=new FormData(event.currentTarget);void action("create_release",{version:latestArtifact.embeddedVersion,artifactId:latestArtifact.id,channel:form.get("channel"),status:form.get("status"),notes:form.get("notes"),mandatory:form.get("mandatory")==="on"},form.get("status")==="published"?"最新版本已发布。":"版本草稿已保存。");event.currentTarget.reset();}}>
+        <label>待发布版本<select name="artifactVersion" value={latestArtifact?.embeddedVersion ?? ""} disabled><option value={latestArtifact?.embeddedVersion ?? ""}>{latestArtifact?.embeddedVersion ? `v${latestArtifact.embeddedVersion} · EXE` : "请先上传安装包"}</option></select></label>
+        <label>发布渠道<select name="channel" defaultValue="stable"><option value="stable">Stable / 正式版</option><option value="beta">Beta / 测试版</option><option value="internal">Internal / 内部版</option></select></label>
+        <label>发布方式<select name="status" defaultValue="draft"><option value="draft">先保存草稿</option><option value="published">立即公开发布</option></select></label>
+        <label className="release-notes">更新说明<textarea name="notes" placeholder="说明新增能力、修复内容与升级注意事项"/></label>
+        <label className="admin-check"><input name="mandatory" type="checkbox"/>将此版本标记为强制升级</label>
+        <button disabled={busy || !latestArtifact}>创建发布版本 <Icon name="arrow"/></button>
+      </form>
+    </AdminForm>
+  </div>;
 }
 
 function BillingView({ data, busy, action }: ViewProps) {
@@ -174,7 +215,7 @@ type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Rec
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品套餐的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布团队博客，并治理当前组织的论坛主题与回复。",artifacts:"管理管理员上传的真实 Agent 安装包源文件。",releases:"把真实安装包组织成可审计的版本与升级策略。",billing:"定义 Eval Agent 套餐价格、产品席位与功能权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品套餐的独立管理视角。",users:"创建账号、控制角色与成员生命周期。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布团队博客，并治理当前组织的论坛主题与回复。",releases:"上传、验签并发布当前最新的 EXE 与桌面升级版本。",billing:"定义 Eval Agent 套餐价格、产品席位与功能权益。",audits:"查看当前组织中可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}

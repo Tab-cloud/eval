@@ -4,6 +4,8 @@ import { normalizeChinesePhone } from "../auth/phone";
 import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
 import { cleanText, contentSlug, ensureContentSchema, publicContentTenantSlug } from "../content/store";
 import { normalizeSemver } from "../releases/public";
+import { updaterPublicKeyId } from "../releases/signature";
+import { artifactExists } from "../storage/artifacts";
 
 let adminSchemaInitialization: Promise<void> | null = null;
 
@@ -22,12 +24,19 @@ async function initializeAdminSchema() {
   await db.batch([
     "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS updater_signature text",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS signature_verified_at bigint",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS signature_key_id text",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS embedded_version text",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS product_name text",
+    "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS version_source text",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS architecture text NOT NULL DEFAULT 'x86_64'",
     "CREATE INDEX IF NOT EXISTS agent_artifacts_tenant_idx ON agent_artifacts (tenant_id)",
     "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS release_versions_tenant_idx ON release_versions (tenant_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
+    "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (tenant_id, channel) WHERE status = 'published'",
     "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
@@ -41,8 +50,12 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const tenantId = user.tenantId;
   const [users, artifacts, releases, plans, audits, blogPosts, forumTopics, forumReplies] = await Promise.all([
     db.prepare("SELECT u.id, u.username, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, updater_signature IS NOT NULL AS signed, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName, r.notes, r.mandatory, r.status, r.published_at AS publishedAt FROM release_versions r LEFT JOIN agent_artifacts a ON a.id = r.artifact_id WHERE r.tenant_id = ? ORDER BY r.created_at DESC").bind(tenantId).all(),
+    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, signature_verified_at IS NOT NULL AS signed, signature_verified_at AS signatureVerifiedAt, signature_key_id AS signatureKeyId, embedded_version AS embeddedVersion, product_name AS productName, version_source AS versionSource, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? AND format = 'NSIS' ORDER BY created_at DESC").bind(tenantId).all(),
+    db.prepare(`SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName,
+      r.notes, r.mandatory, r.status, r.published_at AS publishedAt
+      FROM release_versions r
+      JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
+      WHERE r.tenant_id = ? ORDER BY r.created_at DESC`).bind(tenantId).all(),
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
     db.prepare(`SELECT p.id, p.title, p.slug, p.excerpt, p.body, p.status, p.published_at AS publishedAt,
@@ -67,7 +80,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
   const activeUsers = userRows.filter(item => item.status === "active").length;
-  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed).length;
+  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
   const activePlans = planRows.filter(item => item.status === "active").length;
   return {
@@ -246,30 +259,46 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     return { id, status };
   }
   if (action === "create_release") {
-    const artifactId = text(input.artifactId), version = text(input.version), notes = text(input.notes);
+    const artifactId = text(input.artifactId);
+    const version = text(input.version), notes = text(input.notes);
     const channel = allowed(text(input.channel), ["stable", "beta", "internal"], "stable");
     const status = allowed(text(input.status), ["draft", "published"], "draft");
     const normalizedVersion = normalizeSemver(version);
-    if (!normalizedVersion || !artifactId) throw new Error("请选择安装包并填写有效的语义化版本号。");
-    const artifact = await db.prepare("SELECT id, updater_signature FROM agent_artifacts WHERE id = ? AND tenant_id = ?").bind(artifactId, user.tenantId).first<{ id: string; updater_signature: string | null }>();
-    if (!artifact) throw new Error("安装包不存在或不属于当前组织。");
-    if (!artifact.updater_signature) throw new Error("该安装包缺少 Tauri .sig 签名，不能发布为自动更新版本。");
+    if (!normalizedVersion || !artifactId) throw new Error("请选择 EXE 安装包，并填写有效的语义化版本号。");
+    const artifactResult = await db.prepare(`SELECT id, format, object_key, status, signature_verified_at, signature_key_id, embedded_version
+      FROM agent_artifacts WHERE tenant_id = ? AND id = ? AND format = 'NSIS'`)
+      .bind(user.tenantId, artifactId)
+      .all<PublishableArtifact>();
+    const artifact = artifactResult.results[0];
+    if (!artifact) throw new Error("EXE 安装包不存在或不属于当前组织。");
+    await ensureArtifactPublishable(artifact);
+    ensureArtifactVersionMatchesRelease(artifact, normalizedVersion.version);
     const duplicate = await db.prepare("SELECT id FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?").bind(user.tenantId, normalizedVersion.version, channel).first();
     if (duplicate) throw new Error("当前渠道已存在相同版本号。");
     const id = `rel_${crypto.randomUUID()}`;
-    await db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, user.tenantId, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now).run();
-    await recordAudit(db, user, "release.create", "release_version", id, { version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) });
+    await db.batch([
+      ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published'").bind(now, user.tenantId, channel)] : []),
+      db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, user.tenantId, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now),
+      db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'release.create', 'release_version', ?, ?, ?)")
+        .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) }), now),
+    ]);
     return { id };
   }
   if (action === "set_release_status") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["draft", "published"], "draft");
+    if (status === "published") await ensureReleasePublishable(db, user.tenantId, id);
+    const release = await db.prepare("SELECT channel FROM release_versions WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ channel: string }>();
+    if (!release) throw new Error("版本不存在。");
     if (status === "published") {
-      const release = await db.prepare("SELECT a.updater_signature FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id WHERE r.id = ? AND r.tenant_id = ?").bind(id, user.tenantId).first<{ updater_signature: string | null }>();
-      if (!release?.updater_signature) throw new Error("该版本的安装包缺少 Tauri .sig 签名，无法发布。");
+      await db.batch([
+        db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published'").bind(now, user.tenantId, release.channel),
+        db.prepare("UPDATE release_versions SET status = 'published', published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(now, now, id, user.tenantId),
+      ]);
+    } else {
+      await db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE id = ? AND tenant_id = ?").bind(now, id, user.tenantId).run();
     }
-    const result = await db.prepare("UPDATE release_versions SET status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, status === "published" ? now : null, now, id, user.tenantId).run();
-    if (!result.meta.changes) throw new Error("版本不存在。");
     await recordAudit(db, user, status === "published" ? "release.publish" : "release.rollback", "release_version", id, { status });
     return { id, status };
   }
@@ -292,6 +321,50 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     return { id, status };
   }
   throw new Error("不支持的管理员操作。");
+}
+
+type PublishableArtifact = {
+  id: string;
+  format: string;
+  object_key: string;
+  status: string;
+  signature_verified_at: number | null;
+  signature_key_id: string | null;
+  embedded_version: string | null;
+};
+
+async function ensureArtifactPublishable(artifact: PublishableArtifact) {
+  if (artifact.status !== "ready") throw new Error("已归档的安装包不能绑定到发布版本。");
+  if (!artifact.signature_verified_at || !artifact.signature_key_id) {
+    throw new Error("安装包尚未通过当前 Tauri 更新公钥验签，不能发布。");
+  }
+  if (artifact.signature_key_id !== updaterPublicKeyId()) {
+    throw new Error("安装包由旧的 Tauri 更新公钥验签，请使用当前密钥重新构建并上传。");
+  }
+  if (!artifact.embedded_version) {
+    throw new Error("安装包缺少可信的内部版本信息，请重新上传后再发布。");
+  }
+  if (!await artifactExists(artifact.object_key)) throw new Error("安装包源文件不存在，不能发布。");
+}
+
+function ensureArtifactVersionMatchesRelease(artifact: PublishableArtifact, releaseVersion: string) {
+  const embeddedVersion = normalizeSemver(artifact.embedded_version ?? "");
+  if (!embeddedVersion || embeddedVersion.version !== releaseVersion) {
+    throw new Error(`${artifact.format} 安装包内部版本 ${artifact.embedded_version ?? "未识别"} 与发布版本 ${releaseVersion} 不一致。`);
+  }
+}
+
+async function ensureReleasePublishable(db: PostgresDatabase, tenantId: string, releaseId: string) {
+  const artifact = await db.prepare(`SELECT a.id, a.format, a.object_key, a.status, a.signature_verified_at, a.signature_key_id,
+      a.embedded_version, r.version AS releaseVersion
+    FROM release_versions r
+    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
+    WHERE r.id = ? AND r.tenant_id = ?`)
+    .bind(releaseId, tenantId)
+    .first<PublishableArtifact & { releaseVersion: string }>();
+  if (!artifact) throw new Error("版本不存在或没有绑定 EXE 安装包。");
+  await ensureArtifactPublishable(artifact);
+  ensureArtifactVersionMatchesRelease(artifact, artifact.releaseVersion);
 }
 
 function text(value: unknown) { return typeof value === "string" ? value.trim() : ""; }

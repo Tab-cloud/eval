@@ -13,8 +13,9 @@ export async function consoleSnapshot(user: AuthenticatedUser) {
       .bind(user.tenantId).first<Record<string, number | string>>(),
     db.prepare(`SELECT r.id, r.version, r.channel, r.status, r.published_at AS "publishedAt",
       a.file_name AS "fileName", a.format, a.size_bytes AS "sizeBytes"
-      FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id
-      WHERE r.tenant_id = ? ORDER BY r.created_at DESC LIMIT 12`).bind(user.tenantId).all(),
+      FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
+      WHERE r.tenant_id = ? AND r.status = 'published' AND r.channel = 'stable'
+      ORDER BY r.published_at DESC NULLS LAST, r.created_at DESC LIMIT 1`).bind(user.tenantId).all(),
     db.prepare(`SELECT t.id, t.title, t.slug, t.category, t.status, t.pinned,
       t.last_activity_at AS "lastActivityAt", u.display_name AS "authorName",
       COUNT(r.id) FILTER (WHERE r.status = 'visible') AS "replyCount"

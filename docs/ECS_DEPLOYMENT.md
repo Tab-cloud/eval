@@ -43,6 +43,7 @@ DATABASE_CONNECT_TIMEOUT_MS=5000
 DATABASE_IDLE_TIMEOUT_MS=30000
 APP_ORIGIN=https://eval.zailink.space
 EVAL_PUBLIC_RELEASE_TENANT_SLUG=connecting-hangzhou
+EVAL_UPDATER_PUBLIC_KEY=replace-with-tauri-minisign-public-key
 EVAL_IDENTITY_TENANT_SLUG=connecting-hangzhou
 EVAL_PUBLIC_CONTENT_TENANT_SLUG=connecting-hangzhou
 ARTIFACT_STORAGE_PATH=/srv/eval-web/artifacts
@@ -154,9 +155,11 @@ Nginx 模板已经包含：
 
 ## 桌面端版本发布
 
-桌面安装包在独立的可信构建机生成，不在 ECS 上签名。构建环境设置 `TAURI_SIGNING_PRIVATE_KEY`（以及密钥有密码时的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）和 `EVAL_UPDATER_PUBLIC_KEY`，执行 Tauri Windows 构建后会得到安装包及对应 `.sig`。私钥不得复制到 ECS。
+桌面安装包在独立的可信构建机生成，不在 ECS 上签名。构建环境设置 `TAURI_SIGNING_PRIVATE_KEY`（以及密钥有密码时的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）和 `EVAL_UPDATER_PUBLIC_KEY`，执行 Tauri Windows 构建后会得到安装包及对应 `.sig`。同一个 `EVAL_UPDATER_PUBLIC_KEY` 必须写入 Web 服务环境并编译进桌面客户端，以便上传端和客户端验证同一把签名密钥；私钥不得复制到 ECS。
 
-管理员在“工具源文件”中同时上传安装包和 `.sig`，再在“版本升级”中绑定安装包、填写语义化版本号并发布。发布后可验证：
+管理员在统一的“版本发布”页面提交 NSIS/EXE 与同名 `.sig`，验签通过后直接创建发布。Web 服务会读取安装包内部版本。每个渠道只保留一个公开版本：发布新版会把旧版转为私有草稿，官网固定入口只提供最新稳定版 EXE，桌面客户端也只收到该最新公开升级；历史 EXE 继续私有保留以支持审计与回滚。Nginx 的 `client_max_body_size` 必须覆盖单个安装包，仓库示例配置为 `128m`。发布后可验证：
+
+如果轮换 `EVAL_UPDATER_PUBLIC_KEY`，旧公钥验签的产物会立即退出公开下载与更新通道，也不能重新发布；必须用新私钥重新构建并上传安装包。公钥指纹只基于密钥内容，不受 `.pub` 注释或配置编码形式影响。
 
 ```bash
 curl -i "https://eval.zailink.space/api/v1/updates/windows/x86_64/0.1.0?channel=stable"

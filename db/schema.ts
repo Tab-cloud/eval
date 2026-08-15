@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { bigint, boolean, index, integer, jsonb, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 const epoch = (name: string) => bigint(name, { mode: "number" });
@@ -90,11 +91,16 @@ export const agentArtifacts = pgTable("agent_artifacts", {
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   fileName: text("file_name").notNull(),
   label: text("label").notNull(),
-  format: text("format", { enum: ["NSIS", "MSI"] }).notNull(),
+  format: text("format", { enum: ["NSIS"] }).notNull(),
   objectKey: text("object_key").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
   sha256: text("sha256").notNull(),
   updaterSignature: text("updater_signature"),
+  signatureVerifiedAt: epoch("signature_verified_at"),
+  signatureKeyId: text("signature_key_id"),
+  embeddedVersion: text("embedded_version"),
+  productName: text("product_name"),
+  versionSource: text("version_source"),
   platform: text("platform").notNull().default("windows"),
   architecture: text("architecture").notNull().default("x86_64"),
   status: text("status", { enum: ["ready", "archived"] }).notNull().default("ready"),
@@ -118,6 +124,7 @@ export const releaseVersions = pgTable("release_versions", {
 }, (table) => [
   index("release_versions_tenant_idx").on(table.tenantId),
   uniqueIndex("release_versions_tenant_version_uq").on(table.tenantId, table.version, table.channel),
+  uniqueIndex("release_versions_one_published_channel_uq").on(table.tenantId, table.channel).where(sql`${table.status} = 'published'`),
 ]);
 
 export const billingPlans = pgTable("billing_plans", {

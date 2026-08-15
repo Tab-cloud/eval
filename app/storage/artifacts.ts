@@ -61,8 +61,16 @@ export async function getArtifact(objectKey: string): Promise<StoredArtifact | n
   }
 }
 
+export async function artifactExists(objectKey: string) {
+  try {
+    return (await stat(resolveObjectKey(objectKey))).isFile();
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw error;
+  }
+}
+
 function contentTypeFor(fileName: string) {
-  if (fileName.toLowerCase().endsWith(".msi")) return "application/x-msi";
   if (fileName.toLowerCase().endsWith(".exe")) return "application/vnd.microsoft.portable-executable";
   return "application/octet-stream";
 }

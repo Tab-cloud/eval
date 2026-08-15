@@ -60,9 +60,11 @@ test("admin control room exposes governed modules and audit logs without a side 
     source("../app/admin/store.ts"),
     source("../app/admin/style.css"),
   ]);
-  for (const label of ["运营看板", "用户管理", "登录与身份", "内容中心", "工具源文件", "版本升级", "收费配置"]) {
+  for (const label of ["运营看板", "用户管理", "登录与身份", "内容中心", "版本发布", "收费配置"]) {
     assert.match(consoleSource, new RegExp(label));
   }
+  assert.doesNotMatch(consoleSource, /id: "artifacts"/);
+  assert.match(consoleSource, /ReleaseCenterView/);
   assert.match(consoleSource, /审计日志/);
   assert.match(consoleSource, /公开内容运营/);
   assert.match(consoleSource, /上线清单/);
@@ -89,7 +91,7 @@ test("published downloads require a real stored artifact", async () => {
   assert.match(download, /getArtifact/);
   assert.match(upload, /putArtifact/);
   assert.match(upload, /\.exe/);
-  assert.match(upload, /\.msi/);
+  assert.doesNotMatch(upload, /\.msi/i);
   assert.match(upload, /SHA-256/);
   assert.doesNotMatch(upload, /\.dmg|\.deb|\.rpm/);
 });
@@ -177,6 +179,7 @@ test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
   assert.match(service, /ReadWritePaths=\/srv\/eval-web\/artifacts \/opt\/eval-web\/current\/\.next\/cache/);
   assert.match(nginx, /server_name eval\.zailink\.space/);
   assert.match(nginx, /X-Forwarded-Proto/);
+  assert.match(nginx, /client_max_body_size 128m/);
   assert.doesNotMatch(nginx, /chat\/completions|responses|proxy_buffering off/);
   assert.match(hosting, /PostgreSQL/);
   assert.doesNotMatch(hosting, /\bD1\b|\bR2\b|Cloudflare Workers/);
@@ -388,29 +391,114 @@ test("admin content center publishes blogs and moderates tenant forum content wi
   assert.match(landing, /agent-mobile-content/);
 });
 
-test("desktop updater exposes only signed releases from the public release tenant", async () => {
-  const [updateRoute, catalog, download, releaseStore, upload, schema, config] = await Promise.all([
+test("desktop updater exposes only the verified, version-matched EXE from the public release tenant", async () => {
+  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, metadata, signature, schema, releaseMigration, config, packageJson] = await Promise.all([
     source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
     source("../app/api/v1/downloads/route.ts"),
     source("../app/api/v1/downloads/[id]/route.ts"),
     source("../app/admin/store.ts"),
+    source("../app/console/store.ts"),
+    source("../app/admin/AdminConsole.tsx"),
+    source("../app/agent/AgentLanding.tsx"),
     source("../app/api/admin/artifacts/route.ts"),
+    source("../app/releases/installer-metadata.ts"),
+    source("../app/releases/signature.ts"),
     source("../db/schema.ts"),
+    source("../drizzle/0009_faulty_lady_deathstrike.sql"),
     source("../.env.example"),
+    source("../package.json"),
   ]);
   assert.match(updateRoute, /status:\s*204/);
   assert.match(updateRoute, /signature:\s*release\.updater_signature/);
   assert.match(updateRoute, /publicReleaseTenantSlug\(\)/);
   assert.match(updateRoute, /compareSemver/);
+  assert.match(updateRoute, /signature_verified_at IS NOT NULL/);
+  assert.match(updateRoute, /signature_key_id = \?/);
+  assert.match(updateRoute, /a\.embedded_version = r\.version/);
+  assert.match(updateRoute, /a\.format = 'NSIS'/);
+  assert.match(updateRoute, /format:\s*"nsis"/);
+  assert.doesNotMatch(updateRoute, /x-eval-installer-format|release_artifacts|MSI/i);
+  assert.match(updateRoute, /SELECT latest_r\.id/);
   assert.match(catalog, /JOIN tenants/);
+  assert.match(catalog, /latestReleaseId/);
+  assert.match(catalog, /a\.format = 'NSIS'/);
+  assert.doesNotMatch(catalog, /release_artifacts|MSI|\.msi/i);
   assert.match(catalog, /publicReleaseTenantSlug\(\)/);
+  assert.match(catalog, /a\.embedded_version = r\.version/);
+  assert.match(catalog, /SELECT latest_r\.id/);
   assert.match(download, /JOIN tenants/);
   assert.match(download, /publicReleaseTenantSlug\(\)/);
-  assert.match(releaseStore, /缺少 Tauri \.sig 签名/);
-  assert.match(upload, /form\.get\("signature"\)/);
+  assert.match(download, /a\.embedded_version = r\.version/);
+  assert.match(download, /a\.format = 'NSIS'/);
+  assert.doesNotMatch(download, /release_artifacts|MSI|\.msi/i);
+  assert.match(download, /SELECT latest_r\.id/);
+  assert.match(releaseStore, /尚未通过当前 Tauri 更新公钥验签/);
+  assert.match(releaseStore, /旧的 Tauri 更新公钥验签/);
+  assert.match(adminUi, /name="file"/);
+  assert.match(adminUi, /name="signature"/);
+  assert.match(upload, /verifyUpdaterSignature/);
+  assert.match(upload, /inspectWindowsInstaller/);
+  assert.doesNotMatch(upload, /MSI|\.msi/i);
+  assert.match(upload, /signatureFile\.name\.toLowerCase\(\) !== `\$\{file\.name\}\.sig`/);
   assert.match(upload, /updater_signature/);
+  assert.match(signature, /@threema\/wasm-minisign-verify/);
+  assert.match(signature, /EVAL_UPDATER_PUBLIC_KEY/);
+  assert.match(signature, /decodeWrappedSignature/);
+  assert.match(metadata, /AppInfoParser/);
+  assert.match(metadata, /PE\.ProductVersion/);
+  assert.doesNotMatch(metadata, /MSI|\.msi/i);
+  assert.match(metadata, /mkdtemp/);
   assert.match(schema, /updaterSignature/);
+  assert.match(schema, /signatureVerifiedAt/);
+  assert.match(schema, /embeddedVersion/);
+  assert.doesNotMatch(schema, /releaseArtifacts|MSI/);
+  assert.match(releaseMigration, /ADD COLUMN "embedded_version" text/);
+  assert.match(releaseMigration, /ROW_NUMBER\(\) OVER/);
+  assert.match(releaseMigration, /release_versions_one_published_channel_uq/);
+  assert.match(releaseStore, /ensureArtifactVersionMatchesRelease/);
+  assert.match(releaseStore, /内部版本.*与发布版本.*不一致/);
+  assert.match(releaseStore, /SET status = 'draft'.*channel = \?.*status = 'published'/);
+  assert.match(schema, /release_versions_one_published_channel_uq/);
+  assert.doesNotMatch(releaseStore, /release_artifacts|STRING_AGG|MSI/i);
+  assert.match(consoleStore, /r\.status = 'published' AND r\.channel = 'stable'/);
+  assert.match(consoleStore, /LIMIT 1/);
+  assert.match(adminUi, /CURRENT DISTRIBUTION/);
+  assert.match(adminUi, /官网直接下载/);
+  assert.match(adminUi, /客户端直接升级/);
+  assert.match(adminUi, /历史版本转为私有/);
+  assert.doesNotMatch(adminUi, /MSI|\.msi/i);
+  assert.doesNotMatch(landing, /MSI|\.msi/i);
+  assert.doesNotMatch(adminUi, /function ArtifactsView|function ReleasesView/);
+  assert.match(packageJson, /@h-t-m\/app-inspect/);
   assert.match(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
+  assert.match(config, /EVAL_UPDATER_PUBLIC_KEY/);
+});
+
+test("minisign verifier accepts authentic bytes and rejects modified bytes", async () => {
+  const minisign = await import("@threema/wasm-minisign-verify");
+  const keyText = "untrusted comment: minisign public key 60DF2F3B621B4533\nRWQzRRtiOy/fYNCli5tW96CO6R+FnO92LceeIoWlCLj+BTVe+6q8T69M";
+  const signatureText = "untrusted comment: signature from minisign secret key\nRWQzRRtiOy/fYEU/vGHUEfBg+lSmrdpViX3l9fX1Ps6FMBrBcsMw9uxsLPFr9pAMdKy1NVEX3MsHsuCKlSVNYc4C5/pCnU/Kugk=\ntrusted comment: timestamp:1634045550\tfile:test.txt\nzEHzYWS0L/lFlN3hfMdAJA0MsVfazBXbwSw9XihxQ0msFQPlC30F6Ajvxi67KEFNd1GUhdi3DcslssTW8MUECQ==";
+  const publicKey = minisign.PublicKey.decode(keyText);
+  const signature = minisign.Signature.decode(signatureText);
+  try {
+    assert.equal(publicKey.verify(new TextEncoder().encode("test\n"), signature), true);
+  } finally {
+    signature.free();
+    publicKey.free();
+  }
+  const invalidPublicKey = minisign.PublicKey.decode(keyText);
+  const invalidSignature = minisign.Signature.decode(signatureText);
+  assert.throws(() => invalidPublicKey.verify(new TextEncoder().encode("modified\n"), invalidSignature));
+
+  const wrappedSignatureText = Buffer.from(signatureText, "utf8").toString("base64");
+  const wrappedPublicKey = minisign.PublicKey.decode(keyText);
+  const wrappedSignature = minisign.Signature.decode(Buffer.from(wrappedSignatureText, "base64").toString("utf8"));
+  try {
+    assert.equal(wrappedPublicKey.verify(new TextEncoder().encode("test\n"), wrappedSignature), true);
+  } finally {
+    wrappedSignature.free();
+    wrappedPublicKey.free();
+  }
 });
 
 test("desktop account binding uses browser approval and hashed revocable device sessions", async () => {

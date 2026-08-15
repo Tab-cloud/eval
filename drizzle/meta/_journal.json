@@ -64,6 +64,13 @@
       "when": 1786793949975,
       "tag": "0008_mushy_songbird",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786802384443,
+      "tag": "0009_faulty_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

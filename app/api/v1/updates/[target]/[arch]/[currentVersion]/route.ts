@@ -7,9 +7,11 @@ import {
   publicApplicationOrigin,
   publicReleaseTenantSlug,
 } from "../../../../../../releases/public";
+import { updaterPublicKeyId } from "../../../../../../releases/signature";
 
 type UpdateRelease = {
   id: string;
+  artifact_id: string;
   version: string;
   notes: string;
   mandatory: boolean;
@@ -28,16 +30,20 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   if (target !== "windows" || arch !== "x86_64") return noUpdate();
 
   const result = await authDatabase().prepare(`
-    SELECT r.id, r.version, r.notes, r.mandatory, r.published_at,
+    SELECT r.id, a.id AS artifact_id, r.version, r.notes, r.mandatory, r.published_at,
            a.updater_signature, a.sha256, a.size_bytes
     FROM release_versions r
-    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id
+    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
     JOIN tenants t ON t.id = r.tenant_id
     WHERE t.slug = ? AND r.status = 'published' AND r.channel = ?
+      AND r.id = (SELECT latest_r.id FROM release_versions latest_r
+        WHERE latest_r.tenant_id = r.tenant_id AND latest_r.channel = r.channel AND latest_r.status = 'published'
+        ORDER BY latest_r.published_at DESC, latest_r.created_at DESC LIMIT 1)
       AND a.status = 'ready' AND a.platform = ? AND a.architecture = ?
-      AND a.updater_signature IS NOT NULL
+      AND a.updater_signature IS NOT NULL AND a.signature_verified_at IS NOT NULL
+      AND a.signature_key_id = ? AND a.embedded_version = r.version
     ORDER BY r.published_at DESC
-  `).bind(publicReleaseTenantSlug(), channel, target, arch).all<UpdateRelease>();
+  `).bind(publicReleaseTenantSlug(), channel, target, arch, updaterPublicKeyId()).all<UpdateRelease>();
 
   const releases = result.results.filter(item => normalizeSemver(item.version));
   releases.sort((left, right) => compareSemver(right.version, left.version));
@@ -49,15 +55,23 @@ export async function GET(request: Request, context: { params: Promise<{ target:
     version: normalizeSemver(release.version)!.version,
     notes: release.notes,
     pub_date: new Date(release.published_at * 1000).toISOString(),
-    url: `${origin}/api/v1/downloads/${encodeURIComponent(release.id)}`,
+    url: `${origin}/api/v1/downloads/${encodeURIComponent(release.artifact_id)}`,
     signature: release.updater_signature,
     mandatory: Boolean(release.mandatory),
     sha256: release.sha256,
     size: Number(release.size_bytes),
     channel,
-  }, { headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+    format: "nsis",
+  }, { headers: updateHeaders() });
 }
 
 function noUpdate() {
-  return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+  return new Response(null, { status: 204, headers: updateHeaders() });
+}
+
+function updateHeaders() {
+  return {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
 }
