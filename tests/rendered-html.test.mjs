@@ -318,6 +318,24 @@ test("public blog exposes only published posts from the configured content tenan
   assert.match(config, /EVAL_PUBLIC_CONTENT_TENANT_SLUG/);
 });
 
+test("blog and forum preserve the public landing navigation on desktop and mobile", async () => {
+  const [header, landing, css] = await Promise.all([
+    source("../app/content/ContentHeader.tsx"),
+    source("../app/agent/AgentLanding.tsx"),
+    source("../app/content/style.css"),
+  ]);
+  for (const href of ["/#difference", "/#system", "/#audience", "/#downloads", "/blog", "/forum"]) {
+    assert.match(header, new RegExp(`href=["']${href.replace("/", "\\/")}["']`));
+  }
+  assert.match(header, /Eval<\/b><small>Agent System/);
+  assert.match(header, /language-switch/);
+  assert.match(header, /theme-switch/);
+  assert.match(header, /content-mobile-content/);
+  assert.match(landing, /agent-mobile-content/);
+  assert.match(css, /\.content-header \{ position: fixed/);
+  assert.match(css, /@media \(max-width: 1024px\)/);
+});
+
 test("forum is session-protected, tenant-bound, rate-limited, and same-origin written", async () => {
   const [forumPage, topicPage, contentStore, topicRoute, replyRoute, schema, migration, css] = await Promise.all([
     source("../app/forum/page.tsx"),
