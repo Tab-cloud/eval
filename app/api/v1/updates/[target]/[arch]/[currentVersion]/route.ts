@@ -7,7 +7,7 @@ import {
   publicApplicationOrigin,
   publicReleaseTenantSlug,
 } from "../../../../../../releases/public";
-import { updaterPublicKeyId } from "../../../../../../releases/signature";
+import { publicReleaseSigningSettings } from "../../../../../../releases/settings";
 
 type UpdateRelease = {
   id: string;
@@ -28,6 +28,8 @@ export async function GET(request: Request, context: { params: Promise<{ target:
   const channel = parseReleaseChannel(new URL(request.url).searchParams.get("channel") ?? "stable");
   if (!current || !channel || channel === "internal") return Response.json({ error: "更新版本或公开渠道格式无效。" }, { status: 400 });
   if (target !== "windows" || arch !== "x86_64") return noUpdate();
+  const signingSettings = await publicReleaseSigningSettings();
+  if (!signingSettings) return noUpdate();
 
   const result = await authDatabase().prepare(`
     SELECT r.id, a.id AS artifact_id, r.version, r.notes, r.mandatory, r.published_at,
@@ -43,7 +45,7 @@ export async function GET(request: Request, context: { params: Promise<{ target:
       AND a.updater_signature IS NOT NULL AND a.signature_verified_at IS NOT NULL
       AND a.signature_key_id = ? AND a.embedded_version = r.version
     ORDER BY r.published_at DESC
-  `).bind(publicReleaseTenantSlug(), channel, target, arch, updaterPublicKeyId()).all<UpdateRelease>();
+  `).bind(publicReleaseTenantSlug(), channel, target, arch, signingSettings.publicKeyId).all<UpdateRelease>();
 
   const releases = result.results.filter(item => normalizeSemver(item.version));
   releases.sort((left, right) => compareSemver(right.version, left.version));

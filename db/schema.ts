@@ -127,6 +127,14 @@ export const releaseVersions = pgTable("release_versions", {
   uniqueIndex("release_versions_one_published_channel_uq").on(table.tenantId, table.channel).where(sql`${table.status} = 'published'`),
 ]);
 
+export const releaseSettings = pgTable("release_settings", {
+  tenantId: text("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  updaterPublicKey: text("updater_public_key").notNull(),
+  updaterPublicKeyId: text("updater_public_key_id").notNull(),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+  ...timestamps,
+});
+
 export const billingPlans = pgTable("billing_plans", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),

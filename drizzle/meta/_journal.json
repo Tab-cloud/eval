@@ -71,6 +71,13 @@
       "when": 1786802384443,
       "tag": "0009_faulty_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786803546397,
+      "tag": "0010_empty_diamondback",
+      "breakpoints": true
     }
   ]
 }

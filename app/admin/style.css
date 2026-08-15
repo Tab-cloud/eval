@@ -177,6 +177,25 @@
 .artifact-form > button { grid-column: 1 / -1; width: 100%; min-height: 52px; }
 .release-center { display: grid; gap: 20px; }
 .release-center .admin-form { margin-bottom: 0; }
+.release-key-config { min-height: 260px; border: 1px solid var(--line); background: var(--surface-solid); display: grid; grid-template-columns: minmax(260px, .75fr) minmax(0, 1.25fr); }
+.release-key-copy { padding: 28px; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
+.release-key-copy > span { color: var(--admin-red); font: 700 8px var(--font-mono); letter-spacing: .13em; display: flex; align-items: center; gap: 8px; }
+.release-key-config.is-ready .release-key-copy > span { color: var(--admin-green); }
+.release-key-copy > span i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.release-key-copy h2 { margin: 24px 0 10px; font-size: 26px; letter-spacing: -.04em; }
+.release-key-copy p { max-width: 420px; margin: 0; color: var(--secondary); font-size: 10px; line-height: 1.75; }
+.release-key-copy code { color: var(--primary); font: 9px var(--font-mono); }
+.release-key-copy small { margin-top: 22px; color: var(--tertiary); font: 8px/1.6 var(--font-mono); }
+.release-key-config > form { min-width: 0; padding: 24px; display: grid; gap: 13px; }
+.release-key-config > form label { min-width: 0; display: grid; gap: 8px; }
+.release-key-config > form label > span { color: var(--tertiary); font: 700 8px var(--font-mono); letter-spacing: .1em; }
+.release-key-config textarea { width: 100%; min-height: 125px; padding: 14px; border: 1px solid var(--line-strong); outline: 0; resize: vertical; background: var(--surface-muted); color: var(--primary); font: 9px/1.65 var(--font-mono); }
+.release-key-config textarea:focus { border-color: var(--admin-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--admin-accent) 10%, transparent); }
+.release-key-config > form > div { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.release-key-config > form > div small { color: var(--tertiary); font-size: 9px; line-height: 1.6; }
+.release-key-config > form button { min-width: 170px; min-height: 44px; border: 0; background: var(--admin-accent); color: #fff; display: flex; align-items: center; justify-content: center; gap: 9px; font-size: 9px; font-weight: 650; cursor: pointer; }
+.release-key-config > form button:disabled { opacity: .5; cursor: wait; }
+.release-key-config > form button svg { width: 13px; }
 .release-current { min-height: 330px; padding: 30px; border: 1px solid var(--line); background: radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--admin-accent) 13%, transparent), transparent 30%), var(--surface-solid); display: grid; grid-template-columns: minmax(250px, .65fr) minmax(0, 1.35fr); gap: 28px; position: relative; overflow: hidden; }
 .release-current::after { content: ""; width: 280px; height: 280px; border: 1px solid color-mix(in srgb, var(--admin-accent) 15%, transparent); border-radius: 50%; position: absolute; right: -120px; top: -155px; pointer-events: none; }
 .release-current-copy { min-width: 0; padding-right: 28px; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
@@ -346,6 +365,8 @@
   .admin-dashboard-grid { grid-template-columns: 1fr; }
   .admin-form { grid-template-columns: minmax(190px, .55fr) minmax(0, 1.45fr); gap: 28px; }
   .release-current { grid-template-columns: 1fr; }
+  .release-key-config { grid-template-columns: 1fr; }
+  .release-key-copy { border-right: 0; border-bottom: 1px solid var(--line); }
   .release-current-copy { min-height: 210px; padding: 0 0 32px; border-right: 0; border-bottom: 1px solid var(--line); }
   .release-current-copy > span { margin-top: 30px; }
   .release-rollback { position: static; width: fit-content; grid-column: 1 / -1; }
@@ -384,6 +405,9 @@
   .admin-form label, .admin-file, .admin-form form > button { grid-column: 1 / -1 !important; }
   .content-publish-scope { align-items: stretch; flex-direction: column; }.content-publish-scope aside { min-width: 0; }.content-editor-form, .content-record-list details form { padding: 18px; grid-template-columns: 1fr; }.content-editor-form label, .content-editor-form > button, .content-record-list details label, .content-record-actions { grid-column: 1 / -1; }.content-record-list summary { grid-template-columns: 1fr; }.content-record-list summary aside { justify-content: space-between; }.moderation-list article { grid-template-columns: 1fr; }.moderation-controls { width: 100%; grid-template-columns: repeat(3, 1fr); }.reply-moderation-list article > button { min-height: 44px; }
   .artifact-form { grid-template-columns: 1fr; }
+  .release-key-copy, .release-key-config > form { padding: 18px; }
+  .release-key-config > form > div { align-items: stretch; flex-direction: column; }
+  .release-key-config > form button { width: 100%; }
   .artifact-channel { grid-template-columns: 1fr; }
   .artifact-channel .admin-file { height: 66px; min-height: 66px; }
   .release-current { padding: 18px; }

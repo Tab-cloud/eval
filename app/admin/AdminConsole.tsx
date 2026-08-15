@@ -17,6 +17,7 @@ type Snapshot = {
   plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; seatLimit: number; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
   authSettings: AuthSettingsSnapshot;
+  releaseSettings: { configured: boolean; updaterPublicKey: string; updaterPublicKeyId: string; source: "database" | "environment" | "missing"; updatedAt: number | null; publicReleaseTenant: boolean };
   content: ContentAdminSnapshot;
 };
 
@@ -154,14 +155,24 @@ function PhoneBindingPanel({ data, busy, action }: ViewProps) {
 
 function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload: (form: HTMLFormElement) => Promise<void> }) {
   const latestArtifact = data.artifacts
-    .filter(artifact => artifact.format === "NSIS" && artifact.signed && artifact.embeddedVersion && artifact.status === "ready")
+    .filter(artifact => artifact.format === "NSIS" && artifact.signed && artifact.embeddedVersion && artifact.status === "ready" && artifact.signatureKeyId === data.releaseSettings.updaterPublicKeyId)
     .sort((left, right) => right.createdAt - left.createdAt)[0];
-  const currentRelease = data.releases
+  const publishedStableRelease = data.releases
     .filter(release => release.status === "published" && release.channel === "stable")
     .sort((left, right) => Number(right.publishedAt ?? 0) - Number(left.publishedAt ?? 0))[0];
-  const currentArtifact = currentRelease ? data.artifacts.find(artifact => artifact.id === currentRelease.artifactId) : undefined;
+  const publishedArtifact = publishedStableRelease ? data.artifacts.find(artifact => artifact.id === publishedStableRelease.artifactId) : undefined;
+  const currentArtifact = publishedArtifact?.signatureKeyId === data.releaseSettings.updaterPublicKeyId ? publishedArtifact : undefined;
+  const currentRelease = currentArtifact ? publishedStableRelease : undefined;
 
   return <div className="admin-module release-center">
+    <section className={`release-key-config ${data.releaseSettings.configured ? "is-ready" : "is-missing"}`}>
+      <div className="release-key-copy"><span><i/>{data.releaseSettings.configured ? "SIGNING KEY READY" : "SIGNING KEY REQUIRED"}</span><h2>更新签名公钥</h2><p>粘贴构建目录中的 <code>updater.pub</code> 内容。该公钥用于验证 EXE 对应的签名，不要在这里填写签名私钥。</p><small>{data.releaseSettings.configured ? `${data.releaseSettings.source === "database" ? "管理员配置" : "环境变量后备"} · 指纹 ${data.releaseSettings.updaterPublicKeyId}` : "配置后才能上传、发布和分发更新包。"}</small></div>
+      <form key={`${data.releaseSettings.source}-${data.releaseSettings.updatedAt ?? "default"}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);void action("save_release_settings",{updaterPublicKey:form.get("updaterPublicKey")},"更新签名公钥已保存。");}}>
+        <label><span>MINISIGN PUBLIC KEY / updater.pub</span><textarea name="updaterPublicKey" defaultValue={data.releaseSettings.updaterPublicKey} placeholder={"untrusted comment: minisign public key\nRW..."} required spellCheck={false}/></label>
+        <div><small>{data.releaseSettings.publicReleaseTenant ? "当前组织负责官网公开下载与桌面升级。" : "当前组织不是公开发布租户，此配置仅对本组织版本生效。"}</small><button disabled={busy}>{busy ? "正在验证…" : "验证并保存公钥"}<Icon name="shield"/></button></div>
+      </form>
+    </section>
+
     <section className={`release-current ${currentRelease ? "is-live" : "is-empty"}`}>
       <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个签名版本后，新用户下载与老用户升级会在这里汇合。"}</small></div>
       <div className="release-current-files">
@@ -184,7 +195,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
           <label className="admin-file"><Icon name="download"/><span>选择 .exe 安装包</span><input name="file" type="file" accept=".exe" required/></label>
           <label className="admin-file"><Icon name="shield"/><span>选择对应的 .exe.sig</span><input name="signature" type="file" accept=".sig" required/></label>
         </section>
-        <button disabled={busy}>{busy ? "正在验签并上传…" : "验签并上传最新产物"} <Icon name="arrow"/></button>
+        <button disabled={busy || !data.releaseSettings.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.configured ? "验签并上传最新产物" : "请先保存更新公钥"} <Icon name="arrow"/></button>
       </form>
     </AdminForm>
 
@@ -197,7 +208,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
         <label>发布方式<select name="status" defaultValue="draft"><option value="draft">先保存草稿</option><option value="published">立即公开发布</option></select></label>
         <label className="release-notes">更新说明<textarea name="notes" placeholder="说明新增能力、修复内容与升级注意事项"/></label>
         <label className="admin-check"><input name="mandatory" type="checkbox"/>将此版本标记为强制升级</label>
-        <button disabled={busy || !latestArtifact}>创建发布版本 <Icon name="arrow"/></button>
+        <button disabled={busy || !latestArtifact || !data.releaseSettings.configured}>创建发布版本 <Icon name="arrow"/></button>
       </form>
     </AdminForm>
   </div>;
@@ -220,4 +231,4 @@ function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).t
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
-function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","user.phone.update":"更新手机号","auth.providers.save":"保存登录配置","blog.post.create":"创建博客","blog.post.update":"更新博客","blog.post.status":"博客状态","forum.topic.create":"发布论坛主题","forum.reply.create":"发布论坛回复","forum.topic.moderate":"治理论坛主题","forum.reply.moderate":"治理论坛回复","artifact.upload":"上传安装包","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}
+function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","user.phone.update":"更新手机号","auth.providers.save":"保存登录配置","blog.post.create":"创建博客","blog.post.update":"更新博客","blog.post.status":"博客状态","forum.topic.create":"发布论坛主题","forum.reply.create":"发布论坛回复","forum.topic.moderate":"治理论坛主题","forum.reply.moderate":"治理论坛回复","artifact.upload":"上传安装包","release.settings.save":"更新发布公钥","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}

@@ -4,7 +4,7 @@ import { normalizeChinesePhone } from "../auth/phone";
 import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
 import { cleanText, contentSlug, ensureContentSchema, publicContentTenantSlug } from "../content/store";
 import { normalizeSemver } from "../releases/public";
-import { updaterPublicKeyId } from "../releases/signature";
+import { releaseSettingsSnapshot, requireTenantReleaseSigningSettings, saveTenantReleaseSigningSettings, tenantReleaseSigningSettings } from "../releases/settings";
 import { artifactExists } from "../storage/artifacts";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -37,6 +37,7 @@ async function initializeAdminSchema() {
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
     "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (tenant_id, channel) WHERE status = 'published'",
+    "CREATE TABLE IF NOT EXISTS release_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
@@ -76,11 +77,13 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
   const authSettings = providerSettingsSnapshot(await tenantProviderSettings(tenantId));
+  const signingSettings = await tenantReleaseSigningSettings(tenantId);
+  const releaseSettings = releaseSettingsSnapshot(signingSettings, authSettings.tenantSlug);
   const artifactRows = artifacts.results as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
   const activeUsers = userRows.filter(item => item.status === "active").length;
-  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion).length;
+  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion && item.signatureKeyId === signingSettings?.publicKeyId).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
   const activePlans = planRows.filter(item => item.status === "active").length;
   return {
@@ -110,6 +113,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     plans: plans.results,
     audits: audits.results,
     authSettings,
+    releaseSettings,
     content: {
       publicTenant: user.tenantId && user.tenantName ? publicContentTenantSlug() === await tenantSlug(tenantId) : false,
       publicTenantSlug: publicContentTenantSlug(),
@@ -201,6 +205,14 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     });
     return providerSettingsSnapshot(settings);
   }
+  if (action === "save_release_settings") {
+    const settings = await saveTenantReleaseSigningSettings(user.tenantId, user.id, input.updaterPublicKey);
+    await recordAudit(db, user, "release.settings.save", "release_settings", user.tenantId, {
+      updaterPublicKeyId: settings?.publicKeyId ?? null,
+      source: settings?.source ?? "missing",
+    });
+    return releaseSettingsSnapshot(settings, await tenantSlug(user.tenantId));
+  }
   if (action === "save_blog_post") {
     const id = text(input.id);
     const title = cleanText(input.title);
@@ -271,7 +283,8 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
       .all<PublishableArtifact>();
     const artifact = artifactResult.results[0];
     if (!artifact) throw new Error("EXE 安装包不存在或不属于当前组织。");
-    await ensureArtifactPublishable(artifact);
+    const signingSettings = await requireTenantReleaseSigningSettings(user.tenantId);
+    await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
     ensureArtifactVersionMatchesRelease(artifact, normalizedVersion.version);
     const duplicate = await db.prepare("SELECT id FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?").bind(user.tenantId, normalizedVersion.version, channel).first();
     if (duplicate) throw new Error("当前渠道已存在相同版本号。");
@@ -333,12 +346,12 @@ type PublishableArtifact = {
   embedded_version: string | null;
 };
 
-async function ensureArtifactPublishable(artifact: PublishableArtifact) {
+async function ensureArtifactPublishable(artifact: PublishableArtifact, publicKeyId: string) {
   if (artifact.status !== "ready") throw new Error("已归档的安装包不能绑定到发布版本。");
   if (!artifact.signature_verified_at || !artifact.signature_key_id) {
     throw new Error("安装包尚未通过当前 Tauri 更新公钥验签，不能发布。");
   }
-  if (artifact.signature_key_id !== updaterPublicKeyId()) {
+  if (artifact.signature_key_id !== publicKeyId) {
     throw new Error("安装包由旧的 Tauri 更新公钥验签，请使用当前密钥重新构建并上传。");
   }
   if (!artifact.embedded_version) {
@@ -355,6 +368,7 @@ function ensureArtifactVersionMatchesRelease(artifact: PublishableArtifact, rele
 }
 
 async function ensureReleasePublishable(db: PostgresDatabase, tenantId: string, releaseId: string) {
+  const signingSettings = await requireTenantReleaseSigningSettings(tenantId);
   const artifact = await db.prepare(`SELECT a.id, a.format, a.object_key, a.status, a.signature_verified_at, a.signature_key_id,
       a.embedded_version, r.version AS releaseVersion
     FROM release_versions r
@@ -363,7 +377,7 @@ async function ensureReleasePublishable(db: PostgresDatabase, tenantId: string, 
     .bind(releaseId, tenantId)
     .first<PublishableArtifact & { releaseVersion: string }>();
   if (!artifact) throw new Error("版本不存在或没有绑定 EXE 安装包。");
-  await ensureArtifactPublishable(artifact);
+  await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
   ensureArtifactVersionMatchesRelease(artifact, artifact.releaseVersion);
 }
 

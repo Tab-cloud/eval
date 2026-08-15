@@ -392,7 +392,7 @@ test("admin content center publishes blogs and moderates tenant forum content wi
 });
 
 test("desktop updater exposes only the verified, version-matched EXE from the public release tenant", async () => {
-  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, metadata, signature, schema, releaseMigration, config, packageJson] = await Promise.all([
+  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, metadata, signature, signingSettings, schema, releaseMigration, settingsMigration, config, packageJson] = await Promise.all([
     source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
     source("../app/api/v1/downloads/route.ts"),
     source("../app/api/v1/downloads/[id]/route.ts"),
@@ -403,8 +403,10 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
     source("../app/api/admin/artifacts/route.ts"),
     source("../app/releases/installer-metadata.ts"),
     source("../app/releases/signature.ts"),
+    source("../app/releases/settings.ts"),
     source("../db/schema.ts"),
     source("../drizzle/0009_faulty_lady_deathstrike.sql"),
+    source("../drizzle/0010_empty_diamondback.sql"),
     source("../.env.example"),
     source("../package.json"),
   ]);
@@ -416,6 +418,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(updateRoute, /signature_key_id = \?/);
   assert.match(updateRoute, /a\.embedded_version = r\.version/);
   assert.match(updateRoute, /a\.format = 'NSIS'/);
+  assert.match(updateRoute, /publicReleaseSigningSettings/);
   assert.match(updateRoute, /format:\s*"nsis"/);
   assert.doesNotMatch(updateRoute, /x-eval-installer-format|release_artifacts|MSI/i);
   assert.match(updateRoute, /SELECT latest_r\.id/);
@@ -424,10 +427,12 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(catalog, /a\.format = 'NSIS'/);
   assert.doesNotMatch(catalog, /release_artifacts|MSI|\.msi/i);
   assert.match(catalog, /publicReleaseTenantSlug\(\)/);
+  assert.match(catalog, /publicReleaseSigningSettings/);
   assert.match(catalog, /a\.embedded_version = r\.version/);
   assert.match(catalog, /SELECT latest_r\.id/);
   assert.match(download, /JOIN tenants/);
   assert.match(download, /publicReleaseTenantSlug\(\)/);
+  assert.match(download, /publicReleaseSigningSettings/);
   assert.match(download, /a\.embedded_version = r\.version/);
   assert.match(download, /a\.format = 'NSIS'/);
   assert.doesNotMatch(download, /release_artifacts|MSI|\.msi/i);
@@ -437,6 +442,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(adminUi, /name="file"/);
   assert.match(adminUi, /name="signature"/);
   assert.match(upload, /verifyUpdaterSignature/);
+  assert.match(upload, /requireTenantReleaseSigningSettings/);
   assert.match(upload, /inspectWindowsInstaller/);
   assert.doesNotMatch(upload, /MSI|\.msi/i);
   assert.match(upload, /signatureFile\.name\.toLowerCase\(\) !== `\$\{file\.name\}\.sig`/);
@@ -444,6 +450,11 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(signature, /@threema\/wasm-minisign-verify/);
   assert.match(signature, /EVAL_UPDATER_PUBLIC_KEY/);
   assert.match(signature, /decodeWrappedSignature/);
+  assert.match(signature, /validateUpdaterPublicKey/);
+  assert.match(signingSettings, /release_settings/);
+  assert.match(signingSettings, /saveTenantReleaseSigningSettings/);
+  assert.match(signingSettings, /EVAL_UPDATER_PUBLIC_KEY/);
+  assert.match(signingSettings, /source:\s*"database"/);
   assert.match(metadata, /AppInfoParser/);
   assert.match(metadata, /PE\.ProductVersion/);
   assert.doesNotMatch(metadata, /MSI|\.msi/i);
@@ -451,11 +462,16 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(schema, /updaterSignature/);
   assert.match(schema, /signatureVerifiedAt/);
   assert.match(schema, /embeddedVersion/);
+  assert.match(schema, /releaseSettings/);
   assert.doesNotMatch(schema, /releaseArtifacts|MSI/);
   assert.match(releaseMigration, /ADD COLUMN "embedded_version" text/);
   assert.match(releaseMigration, /ROW_NUMBER\(\) OVER/);
   assert.match(releaseMigration, /release_versions_one_published_channel_uq/);
+  assert.match(settingsMigration, /CREATE TABLE "release_settings"/);
+  assert.match(settingsMigration, /updater_public_key_id/);
   assert.match(releaseStore, /ensureArtifactVersionMatchesRelease/);
+  assert.match(releaseStore, /save_release_settings/);
+  assert.match(releaseStore, /release\.settings\.save/);
   assert.match(releaseStore, /内部版本.*与发布版本.*不一致/);
   assert.match(releaseStore, /SET status = 'draft'.*channel = \?.*status = 'published'/);
   assert.match(schema, /release_versions_one_published_channel_uq/);
@@ -463,6 +479,10 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(consoleStore, /r\.status = 'published' AND r\.channel = 'stable'/);
   assert.match(consoleStore, /LIMIT 1/);
   assert.match(adminUi, /CURRENT DISTRIBUTION/);
+  assert.match(adminUi, /更新签名公钥/);
+  assert.match(adminUi, /name="updaterPublicKey"/);
+  assert.match(adminUi, /save_release_settings/);
+  assert.match(adminUi, /不要在这里填写签名私钥/);
   assert.match(adminUi, /官网直接下载/);
   assert.match(adminUi, /客户端直接升级/);
   assert.match(adminUi, /历史版本转为私有/);

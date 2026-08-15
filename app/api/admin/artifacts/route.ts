@@ -2,6 +2,7 @@ import { authDatabase } from "../../../auth/core";
 import { isAdminError, requireAdminRequest } from "../../../auth/admin";
 import { ensureAdminSchema } from "../../../admin/store";
 import { inspectWindowsInstaller } from "../../../releases/installer-metadata";
+import { requireTenantReleaseSigningSettings } from "../../../releases/settings";
 import { verifyUpdaterSignature } from "../../../releases/signature";
 import { rejectCrossSiteWrite } from "../../../security/request";
 import { deleteArtifact, putArtifact } from "../../../storage/artifacts";
@@ -37,12 +38,13 @@ export async function POST(request: Request) {
 
   let artifact: ValidatedArtifact;
   try {
+    const signingSettings = await requireTenantReleaseSigningSettings(user.tenantId);
     const fileValue = form.get("file");
     const signatureValue = form.get("signature");
     if (!(fileValue instanceof File) || !fileValue.name || !(signatureValue instanceof File) || !signatureValue.name) {
       throw new Error("请同时选择 EXE 安装包和对应的 .sig 签名文件。");
     }
-    artifact = await validatePair(fileValue, signatureValue, user.tenantId);
+    artifact = await validatePair(fileValue, signatureValue, user.tenantId, signingSettings.publicKey);
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "安装包校验失败。" }, { status: 400 });
   }
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
   });
 }
 
-async function validatePair(file: File, signatureFile: File, tenantId: string): Promise<ValidatedArtifact> {
+async function validatePair(file: File, signatureFile: File, tenantId: string, publicKey: string): Promise<ValidatedArtifact> {
   if (!file.name.toLowerCase().endsWith(".exe")) throw new Error("只接受 .exe 安装包。");
   if (file.size <= 0 || file.size > MAX_ARTIFACT_SIZE) throw new Error("EXE 安装包必须大于 0 且不超过 120 MB。");
   if (signatureFile.name.toLowerCase() !== `${file.name}.sig`.toLowerCase()) {
@@ -95,7 +97,7 @@ async function validatePair(file: File, signatureFile: File, tenantId: string): 
   assertWindowsInstallerMagic(new Uint8Array(bytes));
   const updaterSignature = (await signatureFile.text()).trim();
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(updaterSignature)) throw new Error(".sig 文件包含无效控制字符。");
-  const verification = await verifyUpdaterSignature(new Uint8Array(bytes), updaterSignature);
+  const verification = await verifyUpdaterSignature(new Uint8Array(bytes), updaterSignature, publicKey);
   const metadata = await inspectWindowsInstaller(file.name, bytes);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");

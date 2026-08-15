@@ -72,7 +72,7 @@ PostgreSQL 保存租户、用户、手机号、成员关系、短信挑战、OAu
 
 ## 桌面端下载与自动升级
 
-管理员上传 NSIS/EXE 时必须同时提供 Tauri 构建生成且与安装包同名的 `.sig`。服务器使用 `EVAL_UPDATER_PUBLIC_KEY` 真实验签，并从 PE `ProductVersion`/`FileVersion` 读取内部版本。数据库保存 SHA-256、签名、公钥指纹、验签时间、内部版本、产品名、版本来源、平台和架构；签名私钥只存在于受保护的构建环境。
+管理员先在版本发布页配置 `updater.pub` 公钥，再上传 NSIS/EXE 及 Tauri 构建生成且与安装包同名的 `.sig`。`release_settings` 按租户保存公钥与指纹；数据库没有配置时才使用 `EVAL_UPDATER_PUBLIC_KEY` 后备。服务器从 PE `ProductVersion`/`FileVersion` 读取内部版本，并保存 SHA-256、签名、公钥指纹、验签时间、内部版本、产品名、版本来源、平台和架构；签名私钥只存在于受保护的构建环境，不能进入管理员平台。
 
 - `GET /api/v1/updates/{target}/{arch}/{current_version}?channel=stable`：有新版本返回更新清单，无更新返回 `204`。
 - `GET /api/v1/downloads/{artifact_id}`：只下载当前公开版本中已验签的 EXE；传入当前版本 ID 时兼容下载该安装包，历史版本不再公开访问。

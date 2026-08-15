@@ -10,8 +10,11 @@ export type VerifiedUpdaterSignature = {
 export async function verifyUpdaterSignature(
   bytes: Uint8Array,
   signatureText: string,
+  configuredPublicKey?: string,
 ): Promise<VerifiedUpdaterSignature> {
-  const publicKeyText = configuredUpdaterPublicKey();
+  const publicKeyText = configuredPublicKey
+    ? normalizeUpdaterPublicKey(configuredPublicKey)
+    : configuredUpdaterPublicKey();
   const signatureValue = signatureText.trim();
   if (!signatureValue) throw new Error("Tauri .sig 签名文件为空。");
   const signatureSource = decodeWrappedSignature(signatureValue);
@@ -36,8 +39,24 @@ export async function verifyUpdaterSignature(
   };
 }
 
-export function updaterPublicKeyId() {
-  return publicKeyFingerprint(configuredUpdaterPublicKey());
+export async function validateUpdaterPublicKey(value: string) {
+  const publicKeyText = normalizeUpdaterPublicKey(value);
+  const minisign = await import("@threema/wasm-minisign-verify");
+  let publicKey: InstanceType<typeof minisign.PublicKey> | undefined;
+  try {
+    publicKey = minisign.PublicKey.decode(publicKeyText);
+  } catch {
+    throw new Error("更新签名公钥不是有效的 Minisign 公钥。");
+  } finally {
+    safeFree(publicKey);
+  }
+  return { publicKey: publicKeyText, publicKeyId: publicKeyFingerprint(publicKeyText) };
+}
+
+export function updaterPublicKeyId(configuredPublicKey?: string) {
+  return publicKeyFingerprint(configuredPublicKey
+    ? normalizeUpdaterPublicKey(configuredPublicKey)
+    : configuredUpdaterPublicKey());
 }
 
 function safeFree(value: { free(): void } | undefined) {
@@ -54,12 +73,18 @@ function configuredUpdaterPublicKey() {
     throw new Error(`服务器未配置 ${PUBLIC_KEY_ENV}，无法验证 Tauri 更新签名。`);
   }
 
+  return normalizeUpdaterPublicKey(configured);
+}
+
+export function normalizeUpdaterPublicKey(value: string) {
+  const configured = value.trim().replaceAll("\\n", "\n");
+  if (!configured) throw new Error("请填写更新签名公钥。");
   const decoded = decodeWrappedPublicKey(configured);
   if (decoded.includes("\n")) return decoded;
   if (/^RW[A-Za-z0-9+/=]+$/.test(decoded)) {
     return `untrusted comment: minisign public key\n${decoded}`;
   }
-  throw new Error(`${PUBLIC_KEY_ENV} 不是有效的 Minisign 公钥。`);
+  throw new Error("更新签名公钥不是有效的 Minisign 公钥。");
 }
 
 function decodeWrappedPublicKey(value: string) {
