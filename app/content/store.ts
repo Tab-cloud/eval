@@ -1,4 +1,5 @@
 import { authDatabase, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
+import { displayBlogAuthorName, normalizeContentCreationChannel } from "./attribution";
 
 export const forumCategories = ["general", "hardware", "firmware", "agents"] as const;
 export type ForumCategory = typeof forumCategories[number];
@@ -254,7 +255,14 @@ function mapForumReply(row: ForumReply): ForumReply {
 }
 
 function mapBlogPost(row: BlogPostSummary): BlogPostSummary {
-  return { ...row, createdVia: row.createdVia === "eval_agent" ? "eval_agent" : "web", publishedAt: Number(row.publishedAt), updatedAt: Number(row.updatedAt) };
+  const createdVia = normalizeContentCreationChannel(row.createdVia);
+  return {
+    ...row,
+    authorName: displayBlogAuthorName(row.authorName, createdVia),
+    createdVia,
+    publishedAt: Number(row.publishedAt),
+    updatedAt: Number(row.updatedAt),
+  };
 }
 
 function epochSeconds() {

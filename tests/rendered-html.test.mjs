@@ -845,7 +845,7 @@ test("desktop account binding uses browser approval and hashed revocable device 
 test("Eval community automation APIs enforce four-layer consent, idempotency, limits, attribution, and emergency stop", async () => {
   const [permissions, policy, schemaRuntime, actions, api, writeRequest, content, desktop, schema, migration,
     capabilities, topics, topic, replies, drafts, draft, publish, userSettings, devices, approve, token,
-    deviceUi, adminStore, forumPage, forumTopicPage, blogPage, blogPostPage] = await Promise.all([
+    deviceUi, adminStore, contentAttribution, forumPage, forumTopicPage, blogPage, blogPostPage] = await Promise.all([
     source("../app/community/permissions.ts"),
     source("../app/community/policy-store.ts"),
     source("../app/community/schema.ts"),
@@ -869,6 +869,7 @@ test("Eval community automation APIs enforce four-layer consent, idempotency, li
     source("../app/api/auth/desktop/token/route.ts"),
     source("../app/device/DeviceApproval.tsx"),
     source("../app/admin/store.ts"),
+    source("../app/content/attribution.ts"),
     source("../app/forum/page.tsx"),
     source("../app/forum/[slug]/page.tsx"),
     source("../app/blog/page.tsx"),
@@ -936,6 +937,9 @@ test("Eval community automation APIs enforce four-layer consent, idempotency, li
   assert.match(adminStore, /save_agent_community_policy/);
   assert.match(adminStore, /disable_agent_community_writes/);
   assert.match(adminStore, /agentCommunityPolicy/);
+  assert.match(adminStore, /displayBlogAuthorName/);
+  assert.match(contentAttribution, /createdVia === "eval_agent"/);
+  assert.match(contentAttribution, /\$\{authorName\}_agent/);
   assert.match(forumPage + forumTopicPage + blogPage + blogPostPage, /由 Eval 辅助发布/);
   assert.doesNotMatch([permissions, policy, actions, api, content, capabilities, topics, replies, drafts, publish].join("\n"), /OPENAI_API_KEY|chat\/completions|llm_configs|gateway_requests/);
 
@@ -943,4 +947,45 @@ test("Eval community automation APIs enforce four-layer consent, idempotency, li
   assert.deepEqual(permissionModule.sanitizeCommunityScopes(["community.forum.read", "unknown", "community.forum.read"]), ["community.forum.read"]);
   assert.equal(permissionModule.roleAllowsCommunityScope("member", "community.blog.publish"), false);
   assert.equal(permissionModule.roleAllowsCommunityScope("admin", "community.blog.publish"), true);
+
+  const attributionModule = await import("../app/content/attribution.ts");
+  assert.equal(attributionModule.displayBlogAuthorName("张三", "eval_agent"), "张三_agent");
+  assert.equal(attributionModule.displayBlogAuthorName("张三", "web"), "张三");
+  assert.equal(attributionModule.displayBlogAuthorName("张三", "untrusted"), "张三");
+});
+
+test("blog articles render Markdown and provide safe back navigation", async () => {
+  const [page, backButton, style, packageJson] = await Promise.all([
+    source("../app/blog/[slug]/page.tsx"),
+    source("../app/blog/[slug]/BlogBackButton.tsx"),
+    source("../app/content/style.css"),
+    source("../package.json"),
+  ]);
+
+  assert.match(page, /ReactMarkdown/);
+  assert.match(page, /remarkPlugins=\{\[remarkGfm\]\}/);
+  assert.doesNotMatch(page, /post\.body\.split/);
+  assert.match(backButton, /router\.back\(\)/);
+  assert.match(backButton, /referrer\?\.origin === window\.location\.origin/);
+  assert.match(backButton, /router\.push\(fallbackHref\)/);
+  assert.match(backButton, /<svg[\s\S]*aria-hidden="true"/);
+  assert.match(style, /\.blog-back-button:focus-visible/);
+  assert.match(style, /\.blog-body h1/);
+  assert.match(style, /\.blog-body blockquote/);
+  assert.match(style, /\.blog-body pre/);
+  assert.match(style, /\.blog-body table/);
+  assert.match(packageJson, /"react-markdown"/);
+  assert.match(packageJson, /"remark-gfm"/);
+
+  const [{ createElement }, { renderToStaticMarkup }, { default: ReactMarkdown }, { default: remarkGfm }] = await Promise.all([
+    import("react"),
+    import("react-dom/server"),
+    import("react-markdown"),
+    import("remark-gfm"),
+  ]);
+  const rendered = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, "# 标题\n\n**加粗**\n\n- 列表\n\n<script>alert(1)</script>"));
+  assert.match(rendered, /<h1>标题<\/h1>/);
+  assert.match(rendered, /<strong>加粗<\/strong>/);
+  assert.match(rendered, /<li>列表<\/li>/);
+  assert.doesNotMatch(rendered, /<script>/);
 });

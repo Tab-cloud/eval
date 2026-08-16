@@ -2,6 +2,7 @@ import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
 import { identityProviderSettings, providerSettingsSnapshot, saveProviderSettings } from "../auth/provider-settings";
+import { displayBlogAuthorName } from "../content/attribution";
 import { contentSlug, ensureContentSchema, validateBlogDraftInput } from "../content/store";
 import { disableAgentCommunityWrites, globalAgentCommunityPolicy, saveGlobalAgentCommunityPolicy } from "../community/policy-store";
 import { normalizeSemver } from "../releases/public";
@@ -75,7 +76,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, features, status FROM billing_plans ORDER BY monthly_price_cents ASC").all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id ORDER BY a.created_at DESC LIMIT 100").all(),
     db.prepare(`SELECT p.id, p.title, p.slug, p.excerpt, p.body, p.status, p.published_at AS publishedAt,
-      p.updated_at AS updatedAt, u.display_name AS authorName
+      p.updated_at AS updatedAt, u.display_name AS authorName, p.created_via AS createdVia
       FROM blog_posts p JOIN users u ON u.id = p.author_id
       ORDER BY p.created_at DESC LIMIT 100`).all(),
     db.prepare(`SELECT t.id, t.title, t.slug, t.category, t.status, t.pinned, t.created_at AS createdAt,
@@ -103,6 +104,10 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const artifactRows = artifacts.results as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
+  const blogPostRows = (blogPosts.results as Array<Record<string, unknown>>).map(post => ({
+    ...post,
+    authorName: displayBlogAuthorName(String(post.authorName ?? ""), post.createdVia),
+  }));
   const activeUsers = userRows.filter(item => item.status === "active").length;
   const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion && item.signatureKeyId === signingSettings?.publicKeyId).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
@@ -116,14 +121,14 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       publishedReleases,
       activePlans,
       auditEvents: audits.results.length,
-      blogPosts: blogPosts.results.length,
+      blogPosts: blogPostRows.length,
       forumTopics: forumTopics.results.length,
       forumReplies: forumReplies.results.length,
     },
     readiness: {
       users: activeUsers > 0,
       identity: authSettings.smsConfigured || authSettings.googleConfigured || authSettings.githubConfigured,
-      content: blogPosts.results.length > 0 || forumTopics.results.length > 0,
+      content: blogPostRows.length > 0 || forumTopics.results.length > 0,
       artifacts: signedArtifacts > 0,
       releases: publishedReleases > 0,
       billing: activePlans > 0,
@@ -138,7 +143,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     agentCommunityPolicy,
     agentCommunityActions: agentCommunityActions.results,
     content: {
-      blogPosts: blogPosts.results,
+      blogPosts: blogPostRows,
       forumTopics: forumTopics.results,
       forumReplies: forumReplies.results,
     },
