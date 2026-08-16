@@ -279,7 +279,7 @@ export default function LoginPage() {
           </div>}
         </div>
       </section>
-      <footer>{isChinese ? "© 2026 正在连接（杭州）科技有限公司" : "© 2026 CONNECTING (HANGZHOU) TECHNOLOGY CO., LTD."}</footer>
+      <footer><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2024097468号-10</a></footer>
     </main>
   );
 }

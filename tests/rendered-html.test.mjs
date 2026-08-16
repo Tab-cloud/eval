@@ -225,7 +225,10 @@ test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
 });
 
 test("locale selects phone SMS and the configured external identity entry points", async () => {
-  const login = await source("../app/login/page.tsx");
+  const [login, loginCss] = await Promise.all([
+    source("../app/login/page.tsx"),
+    source("../app/login/style.css"),
+  ]);
   assert.match(login, /\/api\/auth\/sms\/send/);
   assert.match(login, /\/api\/auth\/sms\/login/);
   assert.match(login, /\/api\/auth\/username\/login/);
@@ -242,6 +245,11 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /注册账号/);
   assert.match(login, /账号密码/);
   assert.match(login, /Only Google and GitHub are available for English accounts/);
+  assert.match(login, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>浙ICP备2024097468号-10<\/a>/);
+  assert.doesNotMatch(login, /正在连接（杭州）科技有限公司|CONNECTING \(HANGZHOU\) TECHNOLOGY|© 2026/);
+  assert.match(loginCss, /\.trust span \{[^}]*font: 560 11px\/1\.4/);
+  assert.match(loginCss, /\.login-copy-foot p \{[^}]*font-size: 12px/);
+  assert.match(loginCss, /\.login-page > footer \{[^}]*font: 550 9px/);
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });
 
