@@ -20,8 +20,8 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
   if (!post) notFound();
   const paragraphs = post.body.split(/\n{2,}/).map(item => item.trim()).filter(Boolean);
 
-  return <div className="content-site blog-site">
-    <ContentHeader active="blog" user={user ? { displayName: user.displayName } : null}/>
+  return <div className={`content-site blog-site${user ? " content-workspace" : ""}`}>
+    <ContentHeader active="blog" user={user}/>
     <main className="content-main blog-article-main">
       <nav className="content-breadcrumb" aria-label="面包屑"><Link href="/blog">博客</Link><span>/</span><span>文章</span></nav>
       <article className="blog-article">

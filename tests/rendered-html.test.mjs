@@ -174,19 +174,23 @@ test("browser writes are same-origin protected and login attempts are limited", 
 });
 
 test("console reads real snapshots, keeps five useful destinations, and removes organization UI", async () => {
-  const [dashboard, snapshot, css] = await Promise.all([
+  const [dashboard, header, snapshot, css, headerCss] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
+    source("../app/ui/WorkspaceHeader.tsx"),
     source("../app/console/store.ts"),
     source("../app/console/style.css"),
+    source("../app/ui/workspace-header.css"),
   ]);
   assert.match(dashboard, /\/api\/console\/snapshot/);
   assert.match(dashboard, /\/forum/);
   assert.match(dashboard, /\/blog/);
-  assert.match(dashboard, /id: "blog", label: "博客", icon: "spark", href: "\/blog"/);
-  assert.match(dashboard, /<Link key=\{item\.id\} href=\{item\.href\}>/);
-  assert.match(dashboard, /className="workspace-mobile-nav"/);
+  assert.match(dashboard, /<WorkspaceHeader active=\{active\}/);
+  assert.match(header, /id: "blog", label: "博客", icon: "spark", href: "\/blog"/);
+  assert.match(header, /className="workspace-mobile-nav"/);
+  assert.match(header, /\/console\?view=\$\{section\}/);
   assert.doesNotMatch(dashboard + snapshot, /tenantId|tenantName|organization|Organization|activeMembers|totalMembers/);
-  assert.match(css, /grid-template-columns:repeat\(5,1fr\)/);
+  assert.match(headerCss, /grid-template-columns: repeat\(5,1fr\)/);
+  assert.doesNotMatch(css, /\.workspace-header\s*\{/);
   assert.match(snapshot, /release_versions/);
   assert.match(snapshot, /forum_topics/);
   assert.match(snapshot, /blog_posts/);
@@ -530,11 +534,17 @@ test("public blog exposes only globally published posts", async () => {
   assert.doesNotMatch(config, /EVAL_PUBLIC_CONTENT_TENANT_SLUG/);
 });
 
-test("blog and forum preserve the public landing navigation on desktop and mobile", async () => {
-  const [header, landing, css] = await Promise.all([
+test("blog and forum preserve public navigation while signed-in readers keep the workspace shell", async () => {
+  const [header, workspaceHeader, landing, blog, article, forum, topic, css, workspaceCss] = await Promise.all([
     source("../app/content/ContentHeader.tsx"),
+    source("../app/ui/WorkspaceHeader.tsx"),
     source("../app/agent/AgentLanding.tsx"),
+    source("../app/blog/page.tsx"),
+    source("../app/blog/[slug]/page.tsx"),
+    source("../app/forum/page.tsx"),
+    source("../app/forum/[slug]/page.tsx"),
     source("../app/content/style.css"),
+    source("../app/ui/workspace-header.css"),
   ]);
   for (const href of ["/#difference", "/#system", "/#audience", "/#downloads", "/blog", "/forum"]) {
     assert.match(header, new RegExp(`href=["']${href.replace("/", "\\/")}["']`));
@@ -543,8 +553,18 @@ test("blog and forum preserve the public landing navigation on desktop and mobil
   assert.match(header, /language-switch/);
   assert.match(header, /theme-switch/);
   assert.match(header, /content-mobile-content/);
+  assert.match(header, /if \(user\) return <WorkspaceHeader/);
+  assert.match(workspaceHeader, /aria-current=\{active === item\.id \? "page"/);
+  assert.match(workspaceHeader, /workspaceNav\.map/);
   assert.match(landing, /agent-mobile-content/);
+  assert.match(blog + article, /content-workspace/);
+  assert.match(blog + article, /user=\{user\}/);
+  assert.match(forum + topic, /content-site content-workspace/);
+  assert.match(forum + topic, /user=\{user\}/);
   assert.match(css, /\.content-header \{ position: fixed/);
+  assert.match(css, /\.content-workspace \.content-hero h1/);
+  assert.match(css, /\.content-workspace \.featured-post/);
+  assert.match(workspaceCss, /\.workspace-header \{ position: sticky/);
   assert.match(css, /@media \(max-width: 1024px\)/);
 });
 

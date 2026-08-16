@@ -17,8 +17,8 @@ export default async function ForumTopicPage({ params }: { params: Promise<{ slu
   const data = await forumTopic(user, slug);
   if (!data) notFound();
 
-  return <div className="content-site">
-    <ContentHeader active="forum" user={{ displayName: user.displayName }}/>
+  return <div className="content-site content-workspace">
+    <ContentHeader active="forum" user={user}/>
     <main className="content-main topic-detail-main">
       <nav className="content-breadcrumb" aria-label="面包屑"><Link href="/forum">论坛</Link><span>/</span><Link href={`/forum?category=${data.topic.category}`}>{categoryLabel(data.topic.category)}</Link></nav>
       <article className="topic-detail">

@@ -12,8 +12,8 @@ export default async function BlogPage() {
   const [user, posts] = await Promise.all([optionalUserSession(), publishedBlogPosts()]);
   const [featured, ...rest] = posts;
 
-  return <div className="content-site blog-site">
-    <ContentHeader active="blog" user={user ? { displayName: user.displayName } : null}/>
+  return <div className={`content-site blog-site${user ? " content-workspace" : ""}`}>
+    <ContentHeader active="blog" user={user}/>
     <main className="content-main">
       <section className="content-hero blog-hero">
         <div><p>FIELD NOTES / EVAL AGENT</p><h1>从真实工程中，<br/><em>提炼可复用的方法。</em></h1></div>

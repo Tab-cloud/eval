@@ -15,8 +15,8 @@ export default async function ForumPage({ searchParams }: { searchParams: Promis
   const data = await forumOverview(user, category);
   const total = Object.values(data.categoryCounts).reduce((sum, count) => sum + count, 0);
 
-  return <div className="content-site">
-    <ContentHeader active="forum" user={{ displayName: user.displayName }}/>
+  return <div className="content-site content-workspace">
+    <ContentHeader active="forum" user={user}/>
     <main className="content-main">
       <section className="content-hero forum-hero">
         <div><p>ENGINEERING COMMUNITY / EVAL AGENT</p><h1>把问题说清楚。<br/><em>把经验留下来。</em></h1></div>

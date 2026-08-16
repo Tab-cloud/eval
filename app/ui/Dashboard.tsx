@@ -1,19 +1,11 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Icon, type IconName } from "./icons";
-import { useTheme } from "./useTheme";
+import { isDashboardSection, WorkspaceHeader, type DashboardSection, type WorkspaceHeaderUser, workspaceSectionLabel } from "./WorkspaceHeader";
 
-type DashboardUser = {
-  username?: string;
-  email?: string;
-  phoneE164?: string;
-  accountLocale: "zh" | "en";
-  displayName: string;
-  role: "admin" | "member";
-};
+type DashboardUser = WorkspaceHeaderUser;
 
 type AccountSnapshot = {
   user: { id: string; username: string | null; email: string | null; phoneE164: string | null; displayName: string; accountLocale: "zh" | "en" };
@@ -36,22 +28,11 @@ type ConsoleSnapshot = {
   audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
 };
 
-const nav: Array<{ id: string; label: string; icon: IconName; href?: string }> = [
-  { id: "overview", label: "总览", icon: "grid" },
-  { id: "downloads", label: "下载", icon: "download" },
-  { id: "community", label: "社区", icon: "users" },
-  { id: "blog", label: "博客", icon: "spark", href: "/blog" },
-  { id: "activity", label: "活动", icon: "clock" },
-];
-
 export function Dashboard({ currentUser, initialView = "overview", initialNotice = "" }: { currentUser: DashboardUser; initialView?: string; initialNotice?: string }) {
-  const [active, setActive] = useState(initialView);
+  const [active, setActive] = useState<DashboardSection>(isDashboardSection(initialView) ? initialView : "overview");
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(initialNotice);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [logoutLoading, setLogoutLoading] = useState(false);
-  const { theme, toggleTheme } = useTheme();
 
   const refresh = useCallback(async () => {
     try {
@@ -77,55 +58,22 @@ export function Dashboard({ currentUser, initialView = "overview", initialNotice
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const logout = async () => {
-    if (logoutLoading) return;
-    setLogoutLoading(true);
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error();
-      location.href = "/login";
-    } catch {
-      setToast("退出失败，请稍后重试");
-      setLogoutLoading(false);
-    }
+  const navigate = (section: DashboardSection) => {
+    setActive(section);
+    history.replaceState(null, "", section === "overview" ? "/console" : `/console?view=${section}`);
   };
 
-  const roleLabel = currentUser.role === "admin" ? "管理员" : "普通用户";
-  const isAdmin = currentUser.role === "admin";
-
   return <div className="workspace-shell">
-    <header className="workspace-header">
-      <button className="workspace-brand" onClick={() => setActive("overview")} aria-label="返回总览">
-        <Image src="/favicon.svg" width={28} height={28} alt=""/><span><b>Eval Agent</b><small>Workspace</small></span>
-      </button>
-      <nav aria-label="主要导航">{nav.map(item => item.href
-        ? <Link key={item.id} href={item.href}><Icon name={item.icon}/>{item.label}</Link>
-        : <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/>{item.label}</button>)}</nav>
-      <div className="workspace-actions">
-        <Link href="/docs">使用指南</Link>
-        <button className="workspace-icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
-        <button className="workspace-avatar" onClick={() => setAccountOpen(value => !value)} aria-expanded={accountOpen}>{currentUser.displayName.slice(0, 2).toUpperCase()}</button>
-        {accountOpen && <div className="workspace-account">
-          <strong>{currentUser.displayName}</strong><span>{currentUser.email || currentUser.phoneE164 || currentUser.username || "Eval Account"}</span><small>{roleLabel}</small>
-          {isAdmin && <Link href="/admin"><Icon name="shield"/>管理员平台</Link>}
-          <button onClick={() => { setAccountOpen(false); setActive("profile"); history.replaceState(null, "", "/console?view=profile"); }}><Icon name="key"/>{currentUser.accountLocale === "zh" ? "个人中心" : "Profile"}</button>
-          <button onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "正在退出…" : "退出登录"}</button>
-        </div>}
-      </div>
-    </header>
+    <WorkspaceHeader active={active} currentUser={currentUser} onNavigate={navigate} onError={setToast}/>
 
     <main className="workspace-main">
-      <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : active === "profile" ? (currentUser.accountLocale === "zh" ? "个人中心" : "Profile") : nav.find(item => item.id === active)?.label}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
+      <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : active === "profile" && currentUser.accountLocale === "en" ? "Profile" : workspaceSectionLabel(active)}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
       {active === "overview" && <Overview snapshot={snapshot}/>}
       {active === "downloads" && <Downloads snapshot={snapshot}/>}
       {active === "community" && <Community snapshot={snapshot}/>}
       {active === "activity" && <Activity snapshot={snapshot}/>}
       {active === "profile" && <Profile currentUser={currentUser} notify={setToast}/>}
     </main>
-
-    <nav className="workspace-mobile-nav" aria-label="移动端导航">{nav.map(item => item.href
-      ? <Link key={item.id} href={item.href}><Icon name={item.icon}/><span>{item.label}</span></Link>
-      : <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav>
 
     {toast && <div className="workspace-toast"><Icon name="check"/>{toast}</div>}
   </div>;

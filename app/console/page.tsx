@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 export default async function ConsolePage({ searchParams }: { searchParams: Promise<{ view?: string; linked?: string; error?: string }> }) {
   const currentUser = await requireUserSession();
   const query = await searchParams;
-  const initialView = query.view === "profile" ? "profile" : "overview";
+  const initialView = query.view && ["overview", "downloads", "community", "activity", "profile"].includes(query.view) ? query.view : "overview";
   const linked = query.linked === "google" || query.linked === "github" ? query.linked : null;
   const initialNotice = linked
     ? currentUser.accountLocale === "zh" ? `${linked === "github" ? "GitHub" : "Google"} 账号已绑定` : `${linked === "github" ? "GitHub" : "Google"} account linked`

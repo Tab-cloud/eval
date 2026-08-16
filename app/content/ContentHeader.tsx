@@ -3,11 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import { WorkspaceHeader, type WorkspaceHeaderUser } from "../ui/WorkspaceHeader";
 import { useTheme } from "../ui/useTheme";
 
 type Props = {
   active: "blog" | "forum";
-  user?: { displayName: string } | null;
+  user?: WorkspaceHeaderUser | null;
 };
 
 export function ContentHeader({ active, user }: Props) {
@@ -20,6 +21,8 @@ export function ContentHeader({ active, user }: Props) {
     localStorage.setItem("eval-locale", next);
     document.documentElement.lang = next === "en" ? "en" : "zh-CN";
   };
+
+  if (user) return <WorkspaceHeader active={active === "forum" ? "community" : "blog"} currentUser={user}/>;
 
   return <>
     <header className="content-header">
@@ -38,7 +41,7 @@ export function ContentHeader({ active, user }: Props) {
       <div className="content-header-actions">
         <button className="language-switch" type="button" onClick={toggleLocale} aria-label={isZh ? "切换到英文" : "Switch to Chinese"}>{isZh ? "EN" : "中文"}</button>
         <button className="theme-switch" type="button" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}>{theme === "dark" ? "LIGHT" : "DARK"}</button>
-        <Link href={user ? "/console" : "/login"}>{user ? (isZh ? "控制台" : "Console") : (isZh ? "登录" : "Sign in")} <span className="css-arrow" aria-hidden="true"/></Link>
+        <Link href="/login">{isZh ? "登录" : "Sign in"} <span className="css-arrow" aria-hidden="true"/></Link>
       </div>
     </header>
     <nav className="content-mobile-content" aria-label={isZh ? "移动端内容导航" : "Mobile content navigation"}>
