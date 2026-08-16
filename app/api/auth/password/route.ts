@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (user.accountLocale !== "zh" || !user.phoneE164) {
     return Response.json({ error: "当前账号尚未绑定中国大陆手机号。" }, { status: 403 });
   }
-  if (!/^\d{6}$/.test(code) || !await verifySmsCode("password_change", user.phoneE164, code, user.tenantId, user.id)) {
+  if (!/^\d{6}$/.test(code) || !await verifySmsCode("password_change", user.phoneE164, code, user.id)) {
     return Response.json({ error: "验证码错误或已过期。" }, { status: 401 });
   }
   try {

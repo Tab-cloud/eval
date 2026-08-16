@@ -1,6 +1,5 @@
 import { authDatabase } from "../../../auth/core";
 import { ensureAdminSchema } from "../../../admin/store";
-import { publicReleaseTenantSlug } from "../../../releases/public";
 import { publicReleaseSigningSettings } from "../../../releases/settings";
 
 type PublishedRelease = {
@@ -23,8 +22,8 @@ export async function GET() {
   const signingSettings = await publicReleaseSigningSettings();
   const publicKeyId = signingSettings?.publicKeyId ?? "__not_configured__";
   const result = await authDatabase().prepare(
-    "SELECT r.id, a.id AS artifact_id, r.version, a.format, a.file_name, a.size_bytes, a.sha256, r.published_at FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS' JOIN tenants t ON t.id = r.tenant_id WHERE t.slug = ? AND r.status = 'published' AND r.channel = 'stable' AND r.id = (SELECT latest_r.id FROM release_versions latest_r WHERE latest_r.tenant_id = r.tenant_id AND latest_r.channel = r.channel AND latest_r.status = 'published' ORDER BY latest_r.published_at DESC, latest_r.created_at DESC LIMIT 1) AND a.status = 'ready' AND a.signature_verified_at IS NOT NULL AND a.signature_key_id = ? AND a.embedded_version = r.version ORDER BY r.published_at DESC, r.created_at DESC",
-  ).bind(publicReleaseTenantSlug(), publicKeyId).all<PublishedRelease>();
+    "SELECT r.id, a.id AS artifact_id, r.version, a.format, a.file_name, a.size_bytes, a.sha256, r.published_at FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS' WHERE r.status = 'published' AND r.channel = 'stable' AND r.id = (SELECT latest_r.id FROM release_versions latest_r WHERE latest_r.channel = r.channel AND latest_r.status = 'published' ORDER BY latest_r.published_at DESC, latest_r.created_at DESC LIMIT 1) AND a.status = 'ready' AND a.signature_verified_at IS NOT NULL AND a.signature_key_id = ? AND a.embedded_version = r.version ORDER BY r.published_at DESC, r.created_at DESC",
+  ).bind(publicKeyId).all<PublishedRelease>();
   const latest = new Map<string, PublishedRelease>();
   const latestReleaseId = result.results[0]?.id;
   for (const item of result.results) {

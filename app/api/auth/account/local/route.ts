@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   if (password.length < 10 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
     return Response.json({ error: "密码至少 10 位，并同时包含字母与数字。" }, { status: 400 });
   }
-  if (!await verifySmsCode("phone_bind", phone, code, user.tenantId, user.id)) {
+  if (!await verifySmsCode("phone_bind", phone, code, user.id)) {
     return Response.json({ error: "验证码错误或已过期。" }, { status: 401 });
   }
   try {

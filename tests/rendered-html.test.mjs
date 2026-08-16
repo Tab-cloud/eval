@@ -9,13 +9,13 @@ test("encrypted admin secrets round-trip only with the matching context and reje
   process.env.AUTH_SETTINGS_ENCRYPTION_KEY = "test-only-master-key-with-more-than-32-characters";
   try {
     const { openSecret, sealSecret } = await import("../app/auth/secret-crypto.ts");
-    const context = "auth-provider-settings:tenant-a:sms-code-pepper";
+    const context = "auth-provider-settings:global:sms-code-pepper";
     const plaintext = "test-only-pepper-value-with-32-characters";
     const encrypted = sealSecret(plaintext, context);
     assert.equal(typeof encrypted, "string");
     assert.doesNotMatch(encrypted, new RegExp(plaintext));
     assert.equal(openSecret(encrypted, context), plaintext);
-    assert.throws(() => openSecret(encrypted, "auth-provider-settings:tenant-b:sms-code-pepper"), /无法解密/);
+    assert.throws(() => openSecret(encrypted, "auth-provider-settings:other:sms-code-pepper"), /无法解密/);
     const parts = encrypted.split(".");
     parts[3] = `${parts[3][0] === "A" ? "B" : "A"}${parts[3].slice(1)}`;
     assert.throws(() => openSecret(parts.join("."), context), /无法解密/);
@@ -36,8 +36,8 @@ test("keeps the public landing page and protected consoles separated", async () 
   assert.match(home, /<AgentLanding\s*\/>/);
   assert.match(consolePage, /requireUserSession/);
   assert.match(adminPage, /requireAdminSession/);
-  assert.match(authServer, /tenant_admin/);
-  assert.match(authServer, /platform_admin/);
+  assert.match(authServer, /user\.role !== "admin"/);
+  assert.doesNotMatch(authServer, /tenant_admin|platform_admin|tenantId/);
   assert.match(authServer, /redirect\("\/console"\)/);
   assert.match(authServer, /redirect\("\/admin\/auth\/login"\)/);
   assert.match(adminLoginPage, /<AdminLogin\s*\/>/);
@@ -75,8 +75,8 @@ test("admin has a dedicated username login that never grants normal users contro
   assert.match(client, /location\.href = "\/admin"/);
   assert.match(route, /authenticateUsername/);
   assert.doesNotMatch(route, /authenticateEmail/);
-  assert.match(route, /tenant_admin/);
-  assert.match(route, /platform_admin/);
+  assert.match(route, /user\.role !== "admin"/);
+  assert.doesNotMatch(route, /tenant_admin|platform_admin/);
   assert.match(route, /isLoginBlocked/);
   assert.match(route, /rejectCrossSiteWrite/);
   assert.match(route, /x-forwarded-proto/);
@@ -96,7 +96,7 @@ test("admin control room exposes governed modules and audit logs without a side 
     source("../app/admin/store.ts"),
     source("../app/admin/style.css"),
   ]);
-  for (const label of ["运营看板", "用户管理", "登录与身份", "内容中心", "版本发布", "收费配置"]) {
+  for (const label of ["运营看板", "用户管理", "登录与身份", "内容中心", "版本发布", "产品方案"]) {
     assert.match(consoleSource, new RegExp(label));
   }
   assert.doesNotMatch(consoleSource, /id: "artifacts"/);
@@ -173,19 +173,44 @@ test("browser writes are same-origin protected and login attempts are limited", 
   assert.match(password, /至少 10 位/);
 });
 
-test("console reads real snapshots and does not ship the former fixed metrics", async () => {
-  const [dashboard, snapshot] = await Promise.all([
+test("console reads real snapshots, keeps five useful destinations, and removes organization UI", async () => {
+  const [dashboard, snapshot, css] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
     source("../app/console/store.ts"),
+    source("../app/console/style.css"),
   ]);
   assert.match(dashboard, /\/api\/console\/snapshot/);
   assert.match(dashboard, /\/forum/);
   assert.match(dashboard, /\/blog/);
+  assert.match(dashboard, /id: "blog", label: "博客", icon: "spark", href: "\/blog"/);
+  assert.match(dashboard, /<Link key=\{item\.id\} href=\{item\.href\}>/);
+  assert.match(dashboard, /className="workspace-mobile-nav"/);
+  assert.doesNotMatch(dashboard + snapshot, /tenantId|tenantName|organization|Organization|activeMembers|totalMembers/);
+  assert.match(css, /grid-template-columns:repeat\(5,1fr\)/);
   assert.match(snapshot, /release_versions/);
   assert.match(snapshot, /forum_topics/);
   assert.match(snapshot, /blog_posts/);
   assert.doesNotMatch(dashboard + snapshot, /api-keys|gateway_requests|llm_configs/);
   assert.doesNotMatch(dashboard, /1\.84M|\$8,429|12\.6M/);
+});
+
+test("single-site migration preserves users and settings before removing tenant structures", async () => {
+  const [schema, migration, authCore, adminStore, contentStore] = await Promise.all([
+    source("../db/schema.ts"),
+    source("../drizzle/0015_workable_lightspeed.sql"),
+    source("../app/auth/core.ts"),
+    source("../app/admin/store.ts"),
+    source("../app/content/store.ts"),
+  ]);
+  assert.match(migration, /COUNT\(\*\) FROM "tenants"\) > 1/);
+  assert.match(migration, /SET "role" = 'admin'/);
+  assert.match(migration, /RENAME COLUMN "tenant_id" TO "encryption_context"/);
+  assert.match(migration, /UPDATE "release_settings" SET "id" = 'global'/);
+  assert.match(migration, /DROP TABLE "memberships"/);
+  assert.match(migration, /DROP TABLE "tenants"/);
+  assert.match(schema, /role: text\("role", \{ enum: \["admin", "member"\] \}\)/);
+  assert.doesNotMatch(schema, /export const tenants|export const memberships|tenantId: text\("tenant_id"\)/);
+  assert.doesNotMatch(authCore + adminStore + contentStore, /tenant_id|tenantId|tenantName|memberships|JOIN tenants/);
 });
 
 test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
@@ -261,6 +286,7 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(loginCss, /\.trust span \{[^}]*font: 560 11px\/1\.4/);
   assert.match(loginCss, /\.login-copy-foot p \{[^}]*font-size: 12px/);
   assert.match(loginCss, /\.login-page > footer \{[^}]*font: 550 9px/);
+  assert.doesNotMatch(login + loginCss, /ORGANIZATION|团队空间|租户|组织/);
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });
 
@@ -279,7 +305,7 @@ test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accoun
   ]);
   assert.match(provider, /@alicloud\/dysmsapi20170525/);
   assert.match(provider, /dysmsapi\.aliyuncs\.com/);
-  assert.match(provider, /tenantProviderSettings/);
+  assert.match(provider, /identityProviderSettings/);
   assert.match(settings, /aliyunAccessKeyId/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(settings, /AUTH_SMS_CODE_PEPPER/);
@@ -306,7 +332,8 @@ test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accoun
   assert.match(sendRoute, /sessionUser\.accountLocale !== "zh"/);
   assert.match(loginRoute, /ACCOUNT_SETUP_REQUIRED/);
   assert.match(loginRoute, /status: 409/);
-  assert.match(loginRoute, /authenticateSmsCode\(phone, code, settings\.tenantId\)/);
+  assert.match(loginRoute, /authenticateSmsCode\(phone, code\)/);
+  assert.doesNotMatch(loginRoute, /tenantId/);
   assert.match(authCore, /hasCompleteChineseLocalIdentity/);
   assert.match(authCore, /auth\.account\.complete/);
   assert.match(authCore, /phoneOwner\.username && phoneOwner\.credential_user_id/);
@@ -444,7 +471,7 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.match(settings, /openSecret/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
-  assert.match(settings, /saveTenantProviderSettings/);
+  assert.match(settings, /saveProviderSettings/);
   assert.match(secretBoundary, /import "server-only"/);
   assert.match(secretCrypto, /aes-256-gcm/);
   assert.match(secretCrypto, /randomBytes\(12\)/);
@@ -460,7 +487,7 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.doesNotMatch(store, /smsCodePepper:\s*settings\.smsCodePepper/);
   assert.match(google, /identityProviderSettings/);
   assert.match(github, /identityProviderSettings/);
-  assert.match(sms, /tenantProviderSettings/);
+  assert.match(sms, /identityProviderSettings/);
   assert.match(sms, /accessKeyId = settings\.aliyunAccessKeyId/);
   assert.match(schema, /authProviderSettings/);
   assert.match(schema, /aliyunAccessKeyId/);
@@ -476,14 +503,14 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.match(secretMigration, /DROP COLUMN "sms_code_pepper_ref"/);
   assert.match(css, /grid-template-rows: minmax\(14px, auto\) 45px minmax\(12px, auto\)/);
   assert.match(css, /height: 45px; min-height: 45px/);
-  assert.match(config, /EVAL_IDENTITY_TENANT_SLUG/);
+  assert.doesNotMatch(config, /EVAL_IDENTITY_TENANT_SLUG|EVAL_PUBLIC_CONTENT_TENANT_SLUG|EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
   assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
   assert.match(config, /AUTH_SETTINGS_ENCRYPTION_KEY/);
   assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
 });
 
-test("public blog exposes only published posts from the configured content tenant", async () => {
+test("public blog exposes only globally published posts", async () => {
   const [indexPage, articlePage, contentStore, schema, migration, config] = await Promise.all([
     source("../app/blog/page.tsx"),
     source("../app/blog/[slug]/page.tsx"),
@@ -494,14 +521,13 @@ test("public blog exposes only published posts from the configured content tenan
   ]);
   assert.match(indexPage, /publishedBlogPosts/);
   assert.match(articlePage, /publishedBlogPost/);
-  assert.match(contentStore, /t\.slug = \?/);
   assert.match(contentStore, /p\.status = 'published'/);
   assert.match(contentStore, /p\.published_at IS NOT NULL/);
-  assert.match(contentStore, /publicContentTenantSlug/);
+  assert.doesNotMatch(contentStore, /tenant_id|JOIN tenants|publicContentTenantSlug/);
   assert.doesNotMatch(indexPage + articlePage, /dangerouslySetInnerHTML/);
   assert.match(schema, /blogPosts/);
   assert.match(migration, /CREATE TABLE "blog_posts"/);
-  assert.match(config, /EVAL_PUBLIC_CONTENT_TENANT_SLUG/);
+  assert.doesNotMatch(config, /EVAL_PUBLIC_CONTENT_TENANT_SLUG/);
 });
 
 test("blog and forum preserve the public landing navigation on desktop and mobile", async () => {
@@ -522,7 +548,7 @@ test("blog and forum preserve the public landing navigation on desktop and mobil
   assert.match(css, /@media \(max-width: 1024px\)/);
 });
 
-test("forum is session-protected, tenant-bound, rate-limited, and same-origin written", async () => {
+test("forum is session-protected, globally visible, rate-limited, and same-origin written", async () => {
   const [forumPage, topicPage, contentStore, topicRoute, replyRoute, schema, migration, css] = await Promise.all([
     source("../app/forum/page.tsx"),
     source("../app/forum/[slug]/page.tsx"),
@@ -535,8 +561,8 @@ test("forum is session-protected, tenant-bound, rate-limited, and same-origin wr
   ]);
   assert.match(forumPage, /requireUserSession/);
   assert.match(topicPage, /requireUserSession/);
-  assert.match(contentStore, /t\.tenant_id = \?/);
-  assert.match(contentStore, /r\.tenant_id = \?/);
+  assert.doesNotMatch(contentStore, /tenant_id|JOIN tenants/);
+  assert.match(contentStore, /WHERE t\.status <> 'hidden'/);
   assert.match(contentStore, /每小时最多发布 5 个主题/);
   assert.match(contentStore, /每小时最多发布 30 条回复/);
   assert.match(topicRoute, /rejectCrossSiteWrite/);
@@ -551,7 +577,7 @@ test("forum is session-protected, tenant-bound, rate-limited, and same-origin wr
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
 
-test("admin content center publishes blogs and moderates tenant forum content with audits", async () => {
+test("admin content center publishes blogs and moderates global forum content with audits", async () => {
   const [consoleUi, contentUi, store, landing] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
     source("../app/admin/ContentSettingsView.tsx"),
@@ -563,9 +589,9 @@ test("admin content center publishes blogs and moderates tenant forum content wi
   assert.match(contentUi, /save_blog_post/);
   assert.match(contentUi, /moderate_forum_topic/);
   assert.match(contentUi, /moderate_forum_reply/);
-  assert.match(store, /WHERE p\.tenant_id = \?/);
-  assert.match(store, /WHERE t\.tenant_id = \?/);
-  assert.match(store, /WHERE r\.tenant_id = \?/);
+  assert.doesNotMatch(store, /tenant_id|JOIN tenants|memberships/);
+  assert.match(store, /UPDATE forum_topics SET status/);
+  assert.match(store, /UPDATE forum_replies SET status/);
   assert.match(store, /blog\.post\.(?:create|update)/);
   assert.match(store, /forum\.topic\.moderate/);
   assert.match(store, /forum\.reply\.moderate/);
@@ -574,7 +600,7 @@ test("admin content center publishes blogs and moderates tenant forum content wi
   assert.match(landing, /agent-mobile-content/);
 });
 
-test("desktop updater exposes only the verified, version-matched EXE from the public release tenant", async () => {
+test("desktop updater exposes only the global verified, version-matched EXE", async () => {
   const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, artifactStorage, metadata, signature, signingSettings, schema, releaseMigration, settingsMigration, replacementMigration, config, packageJson] = await Promise.all([
     source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
     source("../app/api/v1/downloads/route.ts"),
@@ -597,7 +623,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   ]);
   assert.match(updateRoute, /status:\s*204/);
   assert.match(updateRoute, /signature:\s*release\.updater_signature/);
-  assert.match(updateRoute, /publicReleaseTenantSlug\(\)/);
+  assert.doesNotMatch(updateRoute, /publicReleaseTenantSlug|tenant_id|JOIN tenants/);
   assert.match(updateRoute, /compareSemver/);
   assert.match(updateRoute, /signature_verified_at IS NOT NULL/);
   assert.match(updateRoute, /signature_key_id = \?/);
@@ -607,16 +633,14 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(updateRoute, /format:\s*"nsis"/);
   assert.doesNotMatch(updateRoute, /x-eval-installer-format|release_artifacts|MSI/i);
   assert.match(updateRoute, /SELECT latest_r\.id/);
-  assert.match(catalog, /JOIN tenants/);
+  assert.doesNotMatch(catalog, /JOIN tenants|tenant_id/);
   assert.match(catalog, /latestReleaseId/);
   assert.match(catalog, /a\.format = 'NSIS'/);
   assert.doesNotMatch(catalog, /release_artifacts|MSI|\.msi/i);
-  assert.match(catalog, /publicReleaseTenantSlug\(\)/);
   assert.match(catalog, /publicReleaseSigningSettings/);
   assert.match(catalog, /a\.embedded_version = r\.version/);
   assert.match(catalog, /SELECT latest_r\.id/);
-  assert.match(download, /JOIN tenants/);
-  assert.match(download, /publicReleaseTenantSlug\(\)/);
+  assert.doesNotMatch(download, /JOIN tenants|tenant_id|publicReleaseTenantSlug/);
   assert.match(download, /publicReleaseSigningSettings/);
   assert.match(download, /a\.embedded_version = r\.version/);
   assert.match(download, /a\.format = 'NSIS'/);
@@ -627,9 +651,10 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(adminUi, /name="file"/);
   assert.match(adminUi, /name="signature"/);
   assert.match(upload, /verifyUpdaterSignature/);
-  assert.match(upload, /requireTenantReleaseSigningSettings/);
+  assert.match(upload, /requireReleaseSigningSettings/);
   assert.match(upload, /inspectWindowsInstaller/);
-  assert.match(upload, /WHERE tenant_id = \? AND embedded_version = \?/);
+  assert.match(upload, /WHERE embedded_version = \?/);
+  assert.doesNotMatch(upload, /tenant_id|tenantId/);
   assert.match(upload, /stageArtifactReplacement/);
   assert.match(upload, /UPDATE agent_artifacts SET file_name/);
   assert.match(upload, /replaced: Boolean\(existing\)/);
@@ -644,7 +669,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(signature, /decodeWrappedSignature/);
   assert.match(signature, /validateUpdaterPublicKey/);
   assert.match(signingSettings, /release_settings/);
-  assert.match(signingSettings, /saveTenantReleaseSigningSettings/);
+  assert.match(signingSettings, /saveReleaseSigningSettings/);
   assert.match(signingSettings, /EVAL_UPDATER_PUBLIC_KEY/);
   assert.match(signingSettings, /source:\s*"database"/);
   assert.match(metadata, /AppInfoParser/);
@@ -655,7 +680,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(schema, /signatureVerifiedAt/);
   assert.match(schema, /embeddedVersion/);
   assert.match(schema, /releaseSettings/);
-  assert.match(schema, /agent_artifacts_tenant_embedded_version_uq/);
+  assert.match(schema, /agent_artifacts_embedded_version_uq/);
   assert.match(schema, /artifactCleanupQueue/);
   assert.doesNotMatch(schema, /releaseArtifacts|MSI/);
   assert.match(releaseMigration, /ADD COLUMN "embedded_version" text/);
@@ -693,7 +718,7 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.doesNotMatch(landing, /MSI|\.msi/i);
   assert.doesNotMatch(adminUi, /function ArtifactsView|function ReleasesView/);
   assert.match(packageJson, /@h-t-m\/app-inspect/);
-  assert.match(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
+  assert.doesNotMatch(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
   assert.match(config, /EVAL_UPDATER_PUBLIC_KEY/);
 });
 

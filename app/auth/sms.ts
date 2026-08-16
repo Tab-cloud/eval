@@ -1,12 +1,12 @@
 import { SmsConfigurationError, SmsDeliveryError, sendLoginVerificationCode } from "./aliyun-sms";
 import { authDatabase, ensureAuthSchema, findActiveUserByPhone, hasCompleteChineseLocalIdentity, type AuthenticatedUser } from "./core";
-import { tenantProviderSettings } from "./provider-settings";
+import { identityProviderSettings } from "./provider-settings";
 
 const CODE_TTL_SECONDS = 5 * 60;
 const MAX_VERIFY_ATTEMPTS = 5;
 
 export type SmsPurpose = "login" | "register" | "phone_bind" | "password_change";
-type SmsContext = { tenantId: string; userId?: string };
+type SmsContext = { userId?: string };
 
 export { SmsConfigurationError, SmsDeliveryError };
 
@@ -46,21 +46,18 @@ export async function requestSmsCode(purpose: SmsPurpose, phoneE164: string, req
   const completeLocalIdentity = user ? await hasCompleteChineseLocalIdentity(user.id) : false;
   if (purpose === "login" && user && user.accountLocale !== "zh") return { accepted: true, retryAfter: 60 };
   if (purpose === "register" && user && (user.accountLocale !== "zh" || completeLocalIdentity)) return { accepted: true, retryAfter: 60 };
-  if ((purpose === "phone_bind" || purpose === "password_change") && (!context?.userId || !context.tenantId)) {
+  if ((purpose === "phone_bind" || purpose === "password_change") && !context?.userId) {
     return { accepted: true, retryAfter: 60 };
   }
   if (purpose === "phone_bind" && user && user.id !== context?.userId) return { accepted: true, retryAfter: 60 };
   if (purpose === "password_change" && (!user || user.id !== context?.userId || user.phoneE164 !== phoneE164)) {
     return { accepted: true, retryAfter: 60 };
   }
-  const tenantId = user?.tenantId ?? context?.tenantId;
-  if (!tenantId) throw new SmsConfigurationError("无法确定短信所属组织。");
-
   const code = randomSixDigitCode();
   const keyHash = await challengeKey(purpose, phoneE164, context?.userId);
-  const codeHash = await challengeCodeHash(keyHash, code, tenantId);
+  const codeHash = await challengeCodeHash(keyHash, code);
   const outId = `${purpose}_${crypto.randomUUID()}`;
-  const delivery = await sendLoginVerificationCode(tenantId, phoneE164, code, outId);
+  const delivery = await sendLoginVerificationCode(phoneE164, code, outId);
   const db = authDatabase();
   await db.batch([
     db.prepare("DELETE FROM auth_sms_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - 60 * 60),
@@ -85,24 +82,23 @@ export type SmsAuthenticationResult =
   | { status: "registration_required" }
   | { status: "invalid" };
 
-export async function authenticateSmsCode(phoneE164: string, code: string, registrationTenantId: string): Promise<SmsAuthenticationResult> {
+export async function authenticateSmsCode(phoneE164: string, code: string): Promise<SmsAuthenticationResult> {
   await ensureAuthSchema();
   const user = await findActiveUserByPhone(phoneE164);
   if (user && user.accountLocale !== "zh") return { status: "invalid" };
-  const tenantId = user?.tenantId ?? registrationTenantId;
-  if (!await verifySmsCode("login", phoneE164, code, tenantId)) return { status: "invalid" };
+  if (!await verifySmsCode("login", phoneE164, code)) return { status: "invalid" };
   if (!user || !await hasCompleteChineseLocalIdentity(user.id)) {
-    await promoteVerifiedLoginCodeToRegistration(phoneE164, code, tenantId);
+    await promoteVerifiedLoginCodeToRegistration(phoneE164, code);
     return { status: "registration_required" };
   }
   return { status: "authenticated", user };
 }
 
-export async function verifySmsCode(purpose: SmsPurpose, phoneE164: string, code: string, tenantId: string, userId?: string) {
+export async function verifySmsCode(purpose: SmsPurpose, phoneE164: string, code: string, userId?: string) {
   await ensureAuthSchema();
   const now = epochSeconds();
   const keyHash = await challengeKey(purpose, phoneE164, userId);
-  const codeHash = await challengeCodeHash(keyHash, code, tenantId);
+  const codeHash = await challengeCodeHash(keyHash, code);
   const db = authDatabase();
   const consumed = await db.prepare(`
     UPDATE auth_sms_challenges
@@ -127,10 +123,10 @@ export async function verifySmsCode(purpose: SmsPurpose, phoneE164: string, code
   return true;
 }
 
-async function promoteVerifiedLoginCodeToRegistration(phoneE164: string, code: string, tenantId: string) {
+async function promoteVerifiedLoginCodeToRegistration(phoneE164: string, code: string) {
   const now = epochSeconds();
   const keyHash = await challengeKey("register", phoneE164);
-  const codeHash = await challengeCodeHash(keyHash, code, tenantId);
+  const codeHash = await challengeCodeHash(keyHash, code);
   await authDatabase().prepare(`
     INSERT INTO auth_sms_challenges (key_hash, code_hash, attempts, expires_at, consumed_at, aliyun_biz_id, created_at, updated_at)
     VALUES (?, ?, 0, ?, NULL, NULL, ?, ?)
@@ -197,8 +193,8 @@ async function challengeKey(purpose: SmsPurpose, phoneE164: string, userId?: str
   return sha256(`${purpose}:${userId ?? "public"}:${phoneE164}`);
 }
 
-async function challengeCodeHash(keyHash: string, code: string, tenantId: string) {
-  const settings = await tenantProviderSettings(tenantId);
+async function challengeCodeHash(keyHash: string, code: string) {
+  const settings = await identityProviderSettings();
   const pepper = settings.smsCodePepper;
   if (pepper.length < 32) throw new SmsConfigurationError("管理员平台尚未保存至少 32 位的验证码 Pepper。");
   return sha256(`${keyHash}:${code}:${pepper}`);

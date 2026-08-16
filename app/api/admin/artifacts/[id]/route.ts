@@ -6,7 +6,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const user = await requireAdminRequest(request);
   if (isAdminError(user)) return user;
   const { id } = await context.params;
-  const artifact = await authDatabase().prepare("SELECT file_name, object_key FROM agent_artifacts WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ file_name: string; object_key: string }>();
+  const artifact = await authDatabase().prepare("SELECT file_name, object_key FROM agent_artifacts WHERE id = ?").bind(id).first<{ file_name: string; object_key: string }>();
   if (!artifact) return Response.json({ error: "安装包不存在。" }, { status: 404 });
   const object = await getArtifact(artifact.object_key);
   if (!object) return Response.json({ error: "源文件不存在。" }, { status: 404 });

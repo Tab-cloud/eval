@@ -14,6 +14,6 @@ export const metadata: Metadata = {
 export default async function AdminLoginPage() {
   const cookieStore = await cookies();
   const user = await getSessionUser(cookieStore.get(SESSION_COOKIE)?.value);
-  if (user?.role === "tenant_admin" || user?.role === "platform_admin") redirect("/admin");
+  if (user?.role === "admin") redirect("/admin");
   return <AdminLogin/>;
 }

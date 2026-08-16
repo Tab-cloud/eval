@@ -8,7 +8,6 @@ import {
 } from "../../../../auth/core";
 import { normalizeChinesePhone } from "../../../../auth/phone";
 import { authenticateSmsCode, SmsConfigurationError } from "../../../../auth/sms";
-import { identityProviderSettings } from "../../../../auth/provider-settings";
 import { rejectCrossSiteWrite } from "../../../../security/request";
 
 export async function POST(request: Request) {
@@ -33,8 +32,7 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const settings = await identityProviderSettings();
-    const result = await authenticateSmsCode(phone, code, settings.tenantId);
+    const result = await authenticateSmsCode(phone, code);
     if (result.status === "invalid") {
       await recordFailedLogin(attemptKey);
       return Response.json({ error: "手机号或验证码错误。" }, { status: 401 });

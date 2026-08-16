@@ -1,7 +1,7 @@
 import Dysmsapi20170525, { SendSmsRequest } from "@alicloud/dysmsapi20170525";
 import { $OpenApiUtil } from "@alicloud/openapi-core";
 import { aliyunPhoneNumber } from "./phone";
-import { tenantProviderSettings } from "./provider-settings";
+import { identityProviderSettings } from "./provider-settings";
 
 type SmsClient = InstanceType<typeof Dysmsapi20170525>;
 
@@ -37,8 +37,8 @@ function smsClient(accessKeyId: string, accessKeySecret: string) {
   return client;
 }
 
-export async function sendLoginVerificationCode(tenantId: string, phoneE164: string, code: string, outId: string) {
-  const settings = await tenantProviderSettings(tenantId);
+export async function sendLoginVerificationCode(phoneE164: string, code: string, outId: string) {
+  const settings = await identityProviderSettings();
   if (!settings.smsEnabled) throw new SmsConfigurationError("阿里云短信登录已停用。");
   const signName = settings.aliyunSignName;
   const templateCode = settings.aliyunTemplateCode;

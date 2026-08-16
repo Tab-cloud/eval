@@ -9,8 +9,6 @@ import {
 } from "../../../../auth/core";
 import { rejectCrossSiteWrite } from "../../../../security/request";
 
-const ADMIN_ROLES = new Set(["tenant_admin", "platform_admin"]);
-
 export async function POST(request: Request) {
   const rejected = rejectCrossSiteWrite(request);
   if (rejected) return rejected;
@@ -37,7 +35,7 @@ export async function POST(request: Request) {
   }
 
   const user = await authenticateUsername(username, password);
-  if (!user || !ADMIN_ROLES.has(user.role)) {
+  if (!user || user.role !== "admin") {
     await recordFailedLogin(attemptKey);
     return invalidCredentials();
   }

@@ -33,7 +33,7 @@ html[data-theme="light"] .login-cursor-light { background: radial-gradient(circl
 
 .login-card { position: relative; z-index: 2; width: min(450px,100%); justify-self: end; border: 1px solid var(--line-strong); border-radius: 2px; background: color-mix(in srgb,var(--surface-solid) 84%,transparent); box-shadow: 0 42px 120px rgba(0,0,0,.16); backdrop-filter: blur(34px) saturate(130%); }
 html[data-theme="dark"] .login-card { background: rgba(23,24,27,.88); box-shadow: 0 48px 140px rgba(0,0,0,.56); }
-.login-card::before { content: "AUTHENTICATION / ORGANIZATION"; position: absolute; left: 34px; right: 34px; top: 18px; padding-bottom: 13px; border-bottom: 1px solid var(--line); color: var(--tertiary); font: 500 6px var(--font-mono); letter-spacing: .16em; }
+.login-card::before { content: "AUTHENTICATION / ACCOUNT"; position: absolute; left: 34px; right: 34px; top: 18px; padding-bottom: 13px; border-bottom: 1px solid var(--line); color: var(--tertiary); font: 500 6px var(--font-mono); letter-spacing: .16em; }
 .card-glow { position: absolute; inset: -1px; pointer-events: none; overflow: hidden; }
 .card-glow::after { content: ""; position: absolute; top: -50%; left: -40%; width: 45%; height: 180%; background: linear-gradient(90deg,transparent,color-mix(in srgb,var(--blue) 10%,transparent),transparent); transform: rotate(18deg); animation: login-scan 8s ease-in-out infinite; }
 .login-form { position: relative; padding: 72px 38px 38px; }

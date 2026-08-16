@@ -112,7 +112,7 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
   }
   if (!code) throw new GoogleAuthenticationError("google_failed", context);
 
-  const { clientId, clientSecret, allowedHostedDomain, tenantId } = await googleConfiguration();
+  const { clientId, clientSecret, allowedHostedDomain } = await googleConfiguration();
   const client = new OAuth2Client({ clientId, clientSecret, redirectUri: stored.redirect_uri });
   let idToken: string | null | undefined;
   try {
@@ -159,7 +159,7 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
   }
   let user: AuthenticatedUser | null;
   try {
-    user = await loginOrCreateExternalUser("google", payload.sub, [verifiedEmail], tenantId, stored.locale === "zh" ? "zh" : "en");
+    user = await loginOrCreateExternalUser("google", payload.sub, [verifiedEmail], stored.locale === "zh" ? "zh" : "en");
   } catch (error) {
     if (error instanceof ExternalIdentityPolicyError) throw new GoogleAuthenticationError("provider_not_allowed", context);
     if (error instanceof ExternalIdentityConflictError) throw new GoogleAuthenticationError("identity_already_linked", context);
@@ -182,7 +182,6 @@ async function googleConfiguration() {
   if (!settings.googleEnabled) throw new GoogleConfigurationError("Google 登录已停用。");
   try {
     return {
-      tenantId: settings.tenantId,
       clientId: environmentValue(settings.googleClientIdRef),
       clientSecret: environmentValue(settings.googleClientSecretRef),
       allowedHostedDomain: settings.googleAllowedHostedDomain || null,

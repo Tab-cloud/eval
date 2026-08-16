@@ -11,9 +11,7 @@ export type AuthenticatedUser = {
   phoneE164?: string;
   accountLocale: "zh" | "en";
   displayName: string;
-  tenantId: string;
-  tenantName: string;
-  role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer";
+  role: "admin" | "member";
 };
 
 const seededAccounts = [
@@ -22,7 +20,7 @@ const seededAccounts = [
     username: null,
     email: "user@eval.local",
     displayName: "演示用户",
-    role: "developer",
+    role: "member",
     salt: "HP5L6ky7eu1zEFaVSx5agw==",
     passwordHash: "GYL+wH0VL8Jyg5BvGj4DPp1aXQSwJv0oFzy31F6mQak=",
     previousPasswordHash: null,
@@ -32,7 +30,7 @@ const seededAccounts = [
     username: "vben",
     email: "admin@eval.local",
     displayName: "系统管理员",
-    role: "tenant_admin",
+    role: "admin",
     salt: "upPuPdNBDMhCJNpXiAODwQ==",
     passwordHash: "m5TQhCIJoXAPEh1c38JvH74fNHtiYx3QAUqqzDMmLkM=",
     previousPasswordHash: "pz1cMU0k3cFNTyag50o3bNznxpygeE4J3LX6WckbLvk=",
@@ -60,22 +58,18 @@ export function ensureAuthSchema(): Promise<void> {
 async function initializeSchema() {
   const db = database();
   const statements = [
-    "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_uq ON tenants (slug)",
-    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text, display_name text NOT NULL, avatar_url text, status text NOT NULL, role text DEFAULT 'member' NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username text",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 text",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS account_locale text DEFAULT 'zh' NOT NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role text DEFAULT 'member' NOT NULL",
     "ALTER TABLE users ALTER COLUMN email DROP NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (username)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci_uq ON users (lower(username)) WHERE username IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_uq ON users (phone_e164)",
-    "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS membership_tenant_user_uq ON memberships (tenant_id, user_id)",
-    "CREATE INDEX IF NOT EXISTS membership_tenant_idx ON memberships (tenant_id)",
     "CREATE TABLE IF NOT EXISTS password_credentials (user_id text PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, password_hash text NOT NULL, password_salt text NOT NULL, iterations integer NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, expires_at bigint NOT NULL, created_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at bigint NOT NULL, created_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_uq ON auth_sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id)",
     "CREATE TABLE IF NOT EXISTS auth_login_attempts (key_hash text PRIMARY KEY NOT NULL, failed_count integer DEFAULT 0 NOT NULL, first_failed_at bigint NOT NULL, blocked_until bigint, updated_at bigint NOT NULL)",
@@ -91,7 +85,7 @@ async function initializeSchema() {
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_subject_uq ON auth_oidc_identities (provider, subject)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_user_uq ON auth_oidc_identities (provider, user_id)",
     "CREATE INDEX IF NOT EXISTS auth_oidc_user_idx ON auth_oidc_identities (user_id)",
-    "CREATE TABLE IF NOT EXISTS auth_provider_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, sms_enabled boolean DEFAULT false NOT NULL, aliyun_sign_name text, aliyun_template_code text, aliyun_template_code_key text DEFAULT 'code' NOT NULL, aliyun_access_key_id text, aliyun_access_key_secret_encrypted text, sms_code_pepper_encrypted text, google_enabled boolean DEFAULT false NOT NULL, google_client_id_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_ID' NOT NULL, google_client_secret_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_SECRET' NOT NULL, google_allowed_hosted_domain text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS auth_provider_settings (id text PRIMARY KEY DEFAULT 'global' NOT NULL, encryption_context text DEFAULT 'global' NOT NULL, sms_enabled boolean DEFAULT false NOT NULL, aliyun_sign_name text, aliyun_template_code text, aliyun_template_code_key text DEFAULT 'code' NOT NULL, aliyun_access_key_id text, aliyun_access_key_secret_encrypted text, sms_code_pepper_encrypted text, google_enabled boolean DEFAULT false NOT NULL, google_client_id_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_ID' NOT NULL, google_client_secret_ref text DEFAULT 'GOOGLE_OAUTH_CLIENT_SECRET' NOT NULL, google_allowed_hosted_domain text, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS aliyun_access_key_id text",
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS aliyun_access_key_secret_encrypted text",
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS sms_code_pepper_encrypted text",
@@ -101,13 +95,13 @@ async function initializeSchema() {
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_enabled boolean DEFAULT false NOT NULL",
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_client_id_ref text DEFAULT 'GITHUB_OAUTH_CLIENT_ID' NOT NULL",
     "ALTER TABLE auth_provider_settings ADD COLUMN IF NOT EXISTS github_client_secret_ref text DEFAULT 'GITHUB_OAUTH_CLIENT_SECRET' NOT NULL",
-    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
-    "CREATE TABLE IF NOT EXISTS desktop_auth_requests (id text PRIMARY KEY NOT NULL, device_code_hash text NOT NULL, user_code_hash text NOT NULL, source_hash text NOT NULL, device_name text NOT NULL, client_version text NOT NULL, status text NOT NULL, user_id text REFERENCES users(id) ON DELETE CASCADE, tenant_id text REFERENCES tenants(id) ON DELETE CASCADE, expires_at bigint NOT NULL, approved_at bigint, consumed_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_logs (created_at)",
+    "CREATE TABLE IF NOT EXISTS desktop_auth_requests (id text PRIMARY KEY NOT NULL, device_code_hash text NOT NULL, user_code_hash text NOT NULL, source_hash text NOT NULL, device_name text NOT NULL, client_version text NOT NULL, status text NOT NULL, user_id text REFERENCES users(id) ON DELETE CASCADE, expires_at bigint NOT NULL, approved_at bigint, consumed_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS desktop_auth_device_code_uq ON desktop_auth_requests (device_code_hash)",
     "CREATE UNIQUE INDEX IF NOT EXISTS desktop_auth_user_code_uq ON desktop_auth_requests (user_code_hash)",
     "CREATE INDEX IF NOT EXISTS desktop_auth_source_time_idx ON desktop_auth_requests (source_hash, created_at)",
-    "CREATE TABLE IF NOT EXISTS desktop_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, device_name text NOT NULL, client_version text NOT NULL, expires_at bigint NOT NULL, revoked_at bigint, last_used_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS desktop_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, device_name text NOT NULL, client_version text NOT NULL, expires_at bigint NOT NULL, revoked_at bigint, last_used_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS desktop_sessions_token_uq ON desktop_sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS desktop_sessions_user_idx ON desktop_sessions (user_id)",
   ];
@@ -117,14 +111,10 @@ async function initializeSchema() {
   if (!seedDevelopmentAccounts) return;
 
   const now = Math.floor(Date.now() / 1000);
-  const tenantId = "tenant_eval_default";
-  const seedStatements = [
-    db.prepare("INSERT INTO tenants (id, name, slug, plan, status, created_at, updated_at) VALUES (?, ?, ?, 'team', 'active', ?, ?) ON CONFLICT DO NOTHING").bind(tenantId, "正在连接（杭州）科技有限公司", "connecting-hangzhou", now, now),
-  ];
+  const seedStatements: Array<ReturnType<typeof db.prepare>> = [];
   for (const account of seededAccounts) {
     seedStatements.push(
-      db.prepare("INSERT INTO users (id, username, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.username, account.email, account.displayName, now, now),
-      db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(`mem_${account.id}`, tenantId, account.id, account.role, now, now),
+      db.prepare("INSERT INTO users (id, username, email, display_name, status, role, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.username, account.email, account.displayName, account.role, now, now),
       db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING").bind(account.id, account.passwordHash, account.salt, PASSWORD_ITERATIONS, now),
     );
     if (account.username) {
@@ -145,16 +135,14 @@ async function initializeSchema() {
 export async function authenticateEmail(email: string, password: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, c.password_hash, c.password_salt, c.iterations,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role,
+           c.password_hash, c.password_salt, c.iterations
     FROM users u
     JOIN password_credentials c ON c.user_id = u.id
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
     WHERE lower(u.email) = lower(?)
     LIMIT 1
   `).bind(email).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  if (!row || row.status !== "active") return null;
   const valid = await verifyPassword(password, String(row.password_salt), Number(row.iterations), String(row.password_hash));
   if (!valid) return null;
   return mapUser(row);
@@ -163,17 +151,14 @@ export async function authenticateEmail(email: string, password: string): Promis
 export async function authenticateUsername(username: string, password: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-           c.password_hash, c.password_salt, c.iterations,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role,
+           c.password_hash, c.password_salt, c.iterations
     FROM users u
     JOIN password_credentials c ON c.user_id = u.id
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
     WHERE lower(u.username) = lower(?)
     LIMIT 1
   `).bind(username).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  if (!row || row.status !== "active") return null;
   const valid = await verifyPassword(password, String(row.password_salt), Number(row.iterations), String(row.password_hash));
   if (!valid) return null;
   return mapUser(row);
@@ -182,15 +167,12 @@ export async function authenticateUsername(username: string, password: string): 
 export async function findActiveUserByPhone(phoneE164: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
     FROM users u
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
     WHERE u.phone_e164 = ?
     LIMIT 1
   `).bind(phoneE164).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  if (!row || row.status !== "active") return null;
   return mapUser(row);
 }
 
@@ -215,12 +197,11 @@ export async function loginOrCreateExternalUser(
   provider: ExternalProvider,
   subject: string,
   verifiedEmails: string[],
-  tenantId: string,
   accountLocale: "zh" | "en",
 ): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const db = database();
-  const existing = await externalUserBySubject(provider, subject, tenantId);
+  const existing = await externalUserBySubject(provider, subject);
   if (existing) {
     if (provider === "google" && existing.accountLocale !== "en") {
       throw new ExternalIdentityPolicyError("Google 仅用于英文账号。");
@@ -233,14 +214,11 @@ export async function loginOrCreateExternalUser(
   const uniqueEmails = Array.from(new Set(verifiedEmails.map(email => email.trim().toLowerCase()).filter(Boolean)));
   for (const verifiedEmail of uniqueEmails) {
     candidate = await db.prepare(`
-      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-             m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
       FROM users u
-      JOIN memberships m ON m.user_id = u.id
-      JOIN tenants t ON t.id = m.tenant_id
-      WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
+      WHERE lower(u.email) = lower(?)
       LIMIT 1
-    `).bind(verifiedEmail, tenantId).first<Record<string, string | number>>();
+    `).bind(verifiedEmail).first<Record<string, string | number>>();
     if (candidate) {
       emailAtLink = verifiedEmail;
       break;
@@ -254,23 +232,21 @@ export async function loginOrCreateExternalUser(
     const displayName = primaryEmail.split("@")[0].slice(0, 64) || (accountLocale === "zh" ? "Eval 用户" : "Eval User");
     try {
       await db.batch([
-        db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?, 'active', ?, ?)")
+        db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, role, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?, 'active', 'member', ?, ?)")
           .bind(userId, primaryEmail, accountLocale, displayName, now, now),
-        db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, 'developer', ?, ?)")
-          .bind(`mem_${crypto.randomUUID()}`, tenantId, userId, now, now),
         db.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
           .bind(`oidc_${crypto.randomUUID()}`, userId, provider, subject, primaryEmail, now, now),
-        auditStatement(tenantId, userId, "auth.account.register", "user", userId, { locale: accountLocale, provider }, now),
+        auditStatement(userId, "auth.account.register", "user", userId, { locale: accountLocale, provider }, now),
       ]);
     } catch {
-      const raced = await externalUserBySubject(provider, subject, tenantId);
+      const raced = await externalUserBySubject(provider, subject);
       if (raced) return raced;
-      candidate = await userByVerifiedEmails(uniqueEmails, tenantId);
+      candidate = await userByVerifiedEmails(uniqueEmails);
       if (!candidate) throw new ExternalIdentityConflictError("该第三方邮箱已绑定其他账号。");
     }
-    return externalUserBySubject(provider, subject, tenantId);
+    return externalUserBySubject(provider, subject);
   }
-  if (candidate.status !== "active" || candidate.tenant_status !== "active") return null;
+  if (candidate.status !== "active") return null;
 
   if (!candidate.username && !candidate.phone_e164 && candidate.account_locale !== accountLocale) {
     const existingIdentity = await db.prepare("SELECT id FROM auth_oidc_identities WHERE user_id = ? LIMIT 1")
@@ -286,7 +262,7 @@ export async function loginOrCreateExternalUser(
   }
 
   await linkExternalIdentity(mapUser(candidate), provider, subject, emailAtLink);
-  return externalUserBySubject(provider, subject, tenantId);
+  return externalUserBySubject(provider, subject);
 }
 
 export async function linkExternalIdentity(user: AuthenticatedUser, provider: ExternalProvider, subject: string, verifiedEmail: string) {
@@ -304,7 +280,7 @@ export async function linkExternalIdentity(user: AuthenticatedUser, provider: Ex
     await db.batch([
       db.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(`oidc_${crypto.randomUUID()}`, user.id, provider, subject, verifiedEmail, now, now),
-      auditStatement(user.tenantId, user.id, "auth.identity.link", "user", user.id, { provider }, now),
+      auditStatement(user.id, "auth.identity.link", "user", user.id, { provider }, now),
     ]);
   } catch (error) {
     if (isUniqueViolation(error)) throw new ExternalIdentityConflictError("该第三方账号已经绑定其他用户。");
@@ -312,34 +288,28 @@ export async function linkExternalIdentity(user: AuthenticatedUser, provider: Ex
   }
 }
 
-async function userByVerifiedEmails(verifiedEmails: string[], tenantId: string) {
+async function userByVerifiedEmails(verifiedEmails: string[]) {
   for (const email of verifiedEmails) {
     const row = await database().prepare(`
-      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-             m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
       FROM users u
-      JOIN memberships m ON m.user_id = u.id
-      JOIN tenants t ON t.id = m.tenant_id
-      WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
+      WHERE lower(u.email) = lower(?)
       LIMIT 1
-    `).bind(email, tenantId).first<Record<string, string | number>>();
+    `).bind(email).first<Record<string, string | number>>();
     if (row) return row;
   }
   return null;
 }
 
-async function externalUserBySubject(provider: "google" | "github", subject: string, tenantId: string): Promise<AuthenticatedUser | null> {
+async function externalUserBySubject(provider: "google" | "github", subject: string): Promise<AuthenticatedUser | null> {
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
     FROM auth_oidc_identities i
     JOIN users u ON u.id = i.user_id
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
-    WHERE i.provider = ? AND i.subject = ? AND m.tenant_id = ?
+    WHERE i.provider = ? AND i.subject = ?
     LIMIT 1
-  `).bind(provider, subject, tenantId).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  `).bind(provider, subject).first<Record<string, string | number>>();
+  if (!row || row.status !== "active") return null;
   return mapUser(row);
 }
 
@@ -384,7 +354,7 @@ export async function createSession(user: AuthenticatedUser): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   await database().batch([
     database().prepare("DELETE FROM auth_sessions WHERE expires_at <= ?").bind(now),
-    database().prepare("INSERT INTO auth_sessions (id, token_hash, user_id, tenant_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(crypto.randomUUID(), tokenHash, user.id, user.tenantId, now + SESSION_TTL_SECONDS, now),
+    database().prepare("INSERT INTO auth_sessions (id, token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)").bind(crypto.randomUUID(), tokenHash, user.id, now + SESSION_TTL_SECONDS, now),
     database().prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?").bind(now, now, user.id),
   ]);
   return token;
@@ -395,16 +365,13 @@ export async function getSessionUser(token: string | undefined): Promise<Authent
   await ensureAuthSchema();
   const now = Math.floor(Date.now() / 1000);
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, s.tenant_id, m.role,
-           t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
-    JOIN memberships m ON m.user_id = u.id AND m.tenant_id = s.tenant_id
-    JOIN tenants t ON t.id = s.tenant_id
     WHERE s.token_hash = ? AND s.expires_at > ?
     LIMIT 1
   `).bind(await sha256(token), now).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  if (!row || row.status !== "active") return null;
   return mapUser(row);
 }
 
@@ -416,17 +383,16 @@ export async function revokeSession(token: string | undefined) {
 
 export class AccountConflictError extends Error {}
 
-export async function registerChineseAccount(input: { username: string; phoneE164: string; password: string; tenantId: string }) {
+export async function registerChineseAccount(input: { username: string; phoneE164: string; password: string }) {
   await ensureAuthSchema();
   const db = database();
   const phoneOwner = await db.prepare(`
     SELECT u.id, u.username, u.account_locale, c.user_id AS credential_user_id
     FROM users u
-    JOIN memberships m ON m.user_id = u.id AND m.tenant_id = ?
     LEFT JOIN password_credentials c ON c.user_id = u.id
     WHERE u.phone_e164 = ?
     LIMIT 1
-  `).bind(input.tenantId, input.phoneE164).first<{
+  `).bind(input.phoneE164).first<{
     id: string;
     username: string | null;
     account_locale: string;
@@ -452,30 +418,28 @@ export async function registerChineseAccount(input: { username: string; phoneE16
           VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
           .bind(phoneOwner.id, credential.passwordHash, credential.salt, credential.iterations, now),
-        auditStatement(input.tenantId, phoneOwner.id, "auth.account.complete", "user", phoneOwner.id, { locale: "zh", provider: "phone" }, now),
+        auditStatement(phoneOwner.id, "auth.account.complete", "user", phoneOwner.id, { locale: "zh", provider: "phone" }, now),
       ]);
     } catch (error) {
       if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
       throw error;
     }
-    return userById(phoneOwner.id, input.tenantId);
+    return userById(phoneOwner.id);
   }
   const userId = `usr_${crypto.randomUUID()}`;
   try {
     await db.batch([
-      db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, created_at, updated_at) VALUES (?, ?, NULL, ?, 'zh', ?, 'active', ?, ?)")
+      db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, role, created_at, updated_at) VALUES (?, ?, NULL, ?, 'zh', ?, 'active', 'member', ?, ?)")
         .bind(userId, input.username, input.phoneE164, input.username, now, now),
-      db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, 'developer', ?, ?)")
-        .bind(`mem_${crypto.randomUUID()}`, input.tenantId, userId, now, now),
       db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)")
         .bind(userId, credential.passwordHash, credential.salt, credential.iterations, now),
-      auditStatement(input.tenantId, userId, "auth.account.register", "user", userId, { locale: "zh", provider: "phone" }, now),
+      auditStatement(userId, "auth.account.register", "user", userId, { locale: "zh", provider: "phone" }, now),
     ]);
   } catch (error) {
     if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
     throw error;
   }
-  return userById(userId, input.tenantId);
+  return userById(userId);
 }
 
 export async function bindChineseLocalIdentity(user: AuthenticatedUser, input: { username: string; phoneE164: string; password: string }) {
@@ -495,13 +459,13 @@ export async function bindChineseLocalIdentity(user: AuthenticatedUser, input: {
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
         .bind(user.id, credential.passwordHash, credential.salt, credential.iterations, now),
-      auditStatement(user.tenantId, user.id, "auth.local_identity.bind", "user", user.id, { phone: maskPhoneForAudit(input.phoneE164) }, now),
+      auditStatement(user.id, "auth.local_identity.bind", "user", user.id, { phone: maskPhoneForAudit(input.phoneE164) }, now),
     ]);
   } catch (error) {
     if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
     throw error;
   }
-  return userById(user.id, user.tenantId);
+  return userById(user.id);
 }
 
 export async function replacePassword(user: AuthenticatedUser, nextPassword: string) {
@@ -516,7 +480,7 @@ export async function replacePassword(user: AuthenticatedUser, nextPassword: str
       ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
       .bind(user.id, next.passwordHash, next.salt, next.iterations, now),
     db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(user.id),
-    auditStatement(user.tenantId, user.id, "auth.password.change", "user", user.id, { verifiedBy: "sms" }, now),
+    auditStatement(user.id, "auth.password.change", "user", user.id, { verifiedBy: "sms" }, now),
   ]);
 }
 
@@ -568,23 +532,20 @@ async function verifyPassword(password: string, saltBase64: string, iterations: 
   return difference === 0;
 }
 
-async function userById(userId: string, tenantId: string): Promise<AuthenticatedUser | null> {
+async function userById(userId: string): Promise<AuthenticatedUser | null> {
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
     FROM users u
-    JOIN memberships m ON m.user_id = u.id
-    JOIN tenants t ON t.id = m.tenant_id
-    WHERE u.id = ? AND m.tenant_id = ?
+    WHERE u.id = ?
     LIMIT 1
-  `).bind(userId, tenantId).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  `).bind(userId).first<Record<string, string | number>>();
+  if (!row || row.status !== "active") return null;
   return mapUser(row);
 }
 
-function auditStatement(tenantId: string, actorId: string, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>, now: number) {
-  return database().prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(`audit_${crypto.randomUUID()}`, tenantId, actorId, action, resourceType, resourceId, JSON.stringify(metadata), now);
+function auditStatement(actorId: string, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>, now: number) {
+  return database().prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(`audit_${crypto.randomUUID()}`, actorId, action, resourceType, resourceId, JSON.stringify(metadata), now);
 }
 
 function isUniqueViolation(error: unknown) {
@@ -603,8 +564,6 @@ function mapUser(row: Record<string, string | number>): AuthenticatedUser {
     ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
     accountLocale: row.account_locale === "en" ? "en" : "zh",
     displayName: String(row.display_name),
-    tenantId: String(row.tenant_id),
-    tenantName: String(row.tenant_name),
     role: String(row.role) as AuthenticatedUser["role"],
   };
 }

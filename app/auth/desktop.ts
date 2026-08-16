@@ -36,7 +36,6 @@ type AuthorizationRow = {
   device_name: string;
   client_version: string;
   user_id: string | null;
-  tenant_id: string | null;
   expires_at: number;
 };
 
@@ -69,8 +68,8 @@ export async function createDesktopAuthorization(
       await db.prepare(`
         INSERT INTO desktop_auth_requests (
           id, device_code_hash, user_code_hash, source_hash, device_name, client_version,
-          status, user_id, tenant_id, expires_at, approved_at, consumed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, NULL, NULL, ?, ?)
+          status, user_id, expires_at, approved_at, consumed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, NULL, ?, ?)
       `).bind(
         id,
         await sha256(deviceCode),
@@ -125,7 +124,7 @@ export async function approveDesktopAuthorization(userCode: string, user: Authen
   const now = epochSeconds();
   const db = authDatabase();
   const row = await db.prepare(`
-    SELECT id, status, user_id, tenant_id, expires_at
+    SELECT id, status, user_id, expires_at
     FROM desktop_auth_requests
     WHERE user_code_hash = ?
     LIMIT 1
@@ -133,7 +132,7 @@ export async function approveDesktopAuthorization(userCode: string, user: Authen
   if (!row || row.expires_at <= now) {
     throw new DesktopAuthorizationError("expired_token", "设备绑定请求不存在或已经过期。", 410);
   }
-  if (row.status === "approved" && row.user_id === user.id && row.tenant_id === user.tenantId) {
+  if (row.status === "approved" && row.user_id === user.id) {
     return { approved: true };
   }
   if (row.status !== "pending") {
@@ -141,25 +140,25 @@ export async function approveDesktopAuthorization(userCode: string, user: Authen
   }
   const approved = await db.prepare(`
     UPDATE desktop_auth_requests
-    SET status = 'approved', user_id = ?, tenant_id = ?, approved_at = ?, updated_at = ?
+    SET status = 'approved', user_id = ?, approved_at = ?, updated_at = ?
     WHERE id = ? AND status = 'pending'
-  `).bind(user.id, user.tenantId, now, now, row.id).run();
+  `).bind(user.id, now, now, row.id).run();
   if (!approved.meta.changes) {
     const current = await db.prepare(`
-      SELECT status, user_id, tenant_id
+      SELECT status, user_id
       FROM desktop_auth_requests
       WHERE id = ?
       LIMIT 1
-    `).bind(row.id).first<Pick<AuthorizationRow, "status" | "user_id" | "tenant_id">>();
-    if (current?.status === "approved" && current.user_id === user.id && current.tenant_id === user.tenantId) {
+    `).bind(row.id).first<Pick<AuthorizationRow, "status" | "user_id">>();
+    if (current?.status === "approved" && current.user_id === user.id) {
       return { approved: true };
     }
     throw new DesktopAuthorizationError("invalid_request", "设备绑定请求已经由其他账号处理。", 409);
   }
   await db.prepare(`
-    INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at)
-    VALUES (?, ?, ?, 'auth.desktop.approve', 'desktop_device', ?, '{}', ?)
-  `).bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, row.id, now).run();
+    INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at)
+    VALUES (?, ?, 'auth.desktop.approve', 'desktop_device', ?, '{}', ?)
+  `).bind(`audit_${crypto.randomUUID()}`, user.id, row.id, now).run();
   return { approved: true };
 }
 
@@ -171,7 +170,7 @@ export async function exchangeDesktopAuthorization(deviceCode: string) {
   const now = epochSeconds();
   const db = authDatabase();
   const row = await db.prepare(`
-    SELECT id, status, device_name, client_version, user_id, tenant_id, expires_at
+    SELECT id, status, device_name, client_version, user_id, expires_at
     FROM desktop_auth_requests
     WHERE device_code_hash = ?
     LIMIT 1
@@ -182,7 +181,7 @@ export async function exchangeDesktopAuthorization(deviceCode: string) {
   if (row.status === "pending") {
     throw new DesktopAuthorizationError("authorization_pending", "等待用户在浏览器中确认。", 428);
   }
-  if (row.status !== "approved" || !row.user_id || !row.tenant_id) {
+  if (row.status !== "approved" || !row.user_id) {
     throw new DesktopAuthorizationError("access_denied", "设备绑定未获批准。", 403);
   }
 
@@ -192,16 +191,16 @@ export async function exchangeDesktopAuthorization(deviceCode: string) {
   await db.batch([
     db.prepare(`
       INSERT INTO desktop_sessions (
-        id, token_hash, user_id, tenant_id, device_name, client_version,
+        id, token_hash, user_id, device_name, client_version,
         expires_at, revoked_at, last_used_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
       ON CONFLICT (token_hash) DO UPDATE SET expires_at = excluded.expires_at, revoked_at = NULL, last_used_at = excluded.last_used_at, updated_at = excluded.updated_at
-    `).bind(`dts_${row.id}`, tokenHash, row.user_id, row.tenant_id, row.device_name, row.client_version, expiresAt, now, now, now),
+    `).bind(`dts_${row.id}`, tokenHash, row.user_id, row.device_name, row.client_version, expiresAt, now, now, now),
     db.prepare("UPDATE desktop_auth_requests SET consumed_at = COALESCE(consumed_at, ?), updated_at = ? WHERE id = ?")
       .bind(now, now, row.id),
   ]);
   const user = await getDesktopSessionUser(accessToken);
-  if (!user) throw new DesktopAuthorizationError("account_unavailable", "账号已停用或不再属于该组织。", 403);
+  if (!user) throw new DesktopAuthorizationError("account_unavailable", "账号已停用或不可用。", 403);
   return { accessToken, tokenType: "Bearer", expiresAt, user };
 }
 
@@ -212,16 +211,13 @@ export async function getDesktopSessionUser(token: string | undefined): Promise<
   const db = authDatabase();
   const tokenHash = await sha256(token);
   const row = await db.prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
-           s.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
     FROM desktop_sessions s
     JOIN users u ON u.id = s.user_id
-    JOIN memberships m ON m.user_id = u.id AND m.tenant_id = s.tenant_id
-    JOIN tenants t ON t.id = s.tenant_id
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
     LIMIT 1
   `).bind(tokenHash, now).first<Record<string, string | number>>();
-  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  if (!row || row.status !== "active") return null;
   await db.prepare("UPDATE desktop_sessions SET last_used_at = ?, updated_at = ? WHERE token_hash = ?")
     .bind(now, now, tokenHash).run();
   return mapUser(row);
@@ -250,8 +246,6 @@ function mapUser(row: Record<string, string | number>): AuthenticatedUser {
     ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
     accountLocale: row.account_locale === "en" ? "en" : "zh",
     displayName: String(row.display_name),
-    tenantId: String(row.tenant_id),
-    tenantName: String(row.tenant_name),
     role: String(row.role) as AuthenticatedUser["role"],
   };
 }

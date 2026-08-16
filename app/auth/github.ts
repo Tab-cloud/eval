@@ -146,7 +146,7 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
   } catch {
     throw new GitHubAuthenticationError("github_not_configured", context);
   }
-  const { clientId, clientSecret, tenantId } = configuration;
+  const { clientId, clientSecret } = configuration;
   let tokenResponse: Response;
   try {
     tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
@@ -203,7 +203,7 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
     }
     return { user: current, returnPath: safeReturnPath(stored.return_path), linked: "github" };
   }
-  const user = await loginOrCreateExternalUser("github", String(profile.id), verifiedEmails, tenantId, stored.locale === "zh" ? "zh" : "en");
+  const user = await loginOrCreateExternalUser("github", String(profile.id), verifiedEmails, stored.locale === "zh" ? "zh" : "en");
   if (!user) throw new GitHubAuthenticationError("invalid_identity", context);
   return {
     user,
@@ -225,7 +225,6 @@ async function githubConfiguration() {
   if (!settings.githubEnabled) throw new GitHubConfigurationError("GitHub 登录已停用。");
   try {
     return {
-      tenantId: settings.tenantId,
       clientId: environmentValue(settings.githubClientIdRef),
       clientSecret: environmentValue(settings.githubClientSecretRef),
     };

@@ -7,7 +7,6 @@ import {
   SmsRateLimitError,
 } from "../../../../auth/sms";
 import { cookieToken, getSessionUser } from "../../../../auth/core";
-import { identityProviderSettings } from "../../../../auth/provider-settings";
 import { rejectCrossSiteWrite } from "../../../../security/request";
 
 export async function POST(request: Request) {
@@ -38,10 +37,9 @@ export async function POST(request: Request) {
     return Response.json({ error: purpose === "password_change" ? "当前账号尚未绑定手机号。" : "请输入有效的中国大陆手机号。" }, { status: 400 });
   }
   try {
-    const settings = sessionUser ? null : await identityProviderSettings();
     const context = sessionUser
-      ? { tenantId: sessionUser.tenantId, userId: sessionUser.id }
-      : settings ? { tenantId: settings.tenantId } : undefined;
+      ? { userId: sessionUser.id }
+      : undefined;
     const result = await requestSmsCode(purpose, phone, request, context);
     const messages: Record<SmsPurpose, string> = {
       login: "如果该手机号已绑定账号，验证码将发送至手机。",

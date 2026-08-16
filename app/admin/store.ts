@@ -1,10 +1,10 @@
 import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
-import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSettings } from "../auth/provider-settings";
-import { cleanText, contentSlug, ensureContentSchema, publicContentTenantSlug } from "../content/store";
+import { identityProviderSettings, providerSettingsSnapshot, saveProviderSettings } from "../auth/provider-settings";
+import { cleanText, contentSlug, ensureContentSchema } from "../content/store";
 import { normalizeSemver } from "../releases/public";
-import { releaseSettingsSnapshot, requireTenantReleaseSigningSettings, saveTenantReleaseSigningSettings, tenantReleaseSigningSettings } from "../releases/settings";
+import { releaseSettingsSnapshot, releaseSigningSettings, requireReleaseSigningSettings, saveReleaseSigningSettings } from "../releases/settings";
 import { artifactExists, deleteArtifact } from "../storage/artifacts";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -22,7 +22,7 @@ async function initializeAdminSchema() {
   await ensureContentSchema();
   const db = authDatabase();
   await db.batch([
-    "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agent_artifacts (id text PRIMARY KEY NOT NULL, file_name text NOT NULL, label text NOT NULL, format text NOT NULL, object_key text NOT NULL, size_bytes bigint NOT NULL, sha256 text NOT NULL, status text NOT NULL, created_at bigint NOT NULL)",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS updater_signature text",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS signature_verified_at bigint",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS signature_key_id text",
@@ -31,22 +31,19 @@ async function initializeAdminSchema() {
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS version_source text",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS architecture text NOT NULL DEFAULT 'x86_64'",
-    "CREATE INDEX IF NOT EXISTS agent_artifacts_tenant_idx ON agent_artifacts (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS release_versions_tenant_idx ON release_versions (tenant_id)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
-    "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (tenant_id, channel) WHERE status = 'published'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_embedded_version_uq ON agent_artifacts (embedded_version)",
+    "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_version_uq ON release_versions (version, channel)",
+    "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (channel) WHERE status = 'published'",
     "CREATE TABLE IF NOT EXISTS artifact_cleanup_queue (object_key text PRIMARY KEY NOT NULL, created_at bigint NOT NULL)",
-    "WITH ranked_artifacts AS (SELECT id, object_key, FIRST_VALUE(id) OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) INSERT INTO artifact_cleanup_queue (object_key, created_at) SELECT object_key, FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint FROM ranked_artifacts WHERE artifact_rank > 1 ON CONFLICT (object_key) DO NOTHING",
-    "WITH ranked_artifacts AS (SELECT id, FIRST_VALUE(id) OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) UPDATE release_versions SET artifact_id = ranked_artifacts.keeper_id FROM ranked_artifacts WHERE ranked_artifacts.artifact_rank > 1 AND release_versions.artifact_id = ranked_artifacts.id",
-    "WITH ranked_artifacts AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) DELETE FROM agent_artifacts WHERE id IN (SELECT id FROM ranked_artifacts WHERE artifact_rank > 1)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_tenant_embedded_version_uq ON agent_artifacts (tenant_id, embedded_version)",
-    "CREATE TABLE IF NOT EXISTS release_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
-    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
+    "WITH ranked_artifacts AS (SELECT id, object_key, FIRST_VALUE(id) OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) INSERT INTO artifact_cleanup_queue (object_key, created_at) SELECT object_key, FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint FROM ranked_artifacts WHERE artifact_rank > 1 ON CONFLICT (object_key) DO NOTHING",
+    "WITH ranked_artifacts AS (SELECT id, FIRST_VALUE(id) OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) UPDATE release_versions SET artifact_id = ranked_artifacts.keeper_id FROM ranked_artifacts WHERE ranked_artifacts.artifact_rank > 1 AND release_versions.artifact_id = ranked_artifacts.id",
+    "WITH ranked_artifacts AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) DELETE FROM agent_artifacts WHERE id IN (SELECT id FROM ranked_artifacts WHERE artifact_rank > 1)",
+    "CREATE TABLE IF NOT EXISTS release_settings (id text PRIMARY KEY NOT NULL DEFAULT 'global', updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_logs (created_at)",
   ].map(sql => db.prepare(sql)));
   await drainArtifactCleanupQueue(db);
 }
@@ -66,37 +63,36 @@ async function drainArtifactCleanupQueue(db: PostgresDatabase) {
 export async function adminSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
-  const tenantId = user.tenantId;
   const [users, artifacts, releases, plans, audits, blogPosts, forumTopics, forumReplies] = await Promise.all([
-    db.prepare("SELECT u.id, u.username, u.email, u.phone_e164 AS phoneE164, u.display_name AS displayName, u.status, m.role, u.last_login_at AS lastLoginAt FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.tenant_id = ? ORDER BY u.created_at DESC").bind(tenantId).all(),
-    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, signature_verified_at IS NOT NULL AS signed, signature_verified_at AS signatureVerifiedAt, signature_key_id AS signatureKeyId, embedded_version AS embeddedVersion, product_name AS productName, version_source AS versionSource, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE tenant_id = ? AND format = 'NSIS' ORDER BY created_at DESC").bind(tenantId).all(),
+    db.prepare("SELECT id, username, email, phone_e164 AS phoneE164, display_name AS displayName, status, role, last_login_at AS lastLoginAt FROM users ORDER BY created_at DESC").all(),
+    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, signature_verified_at IS NOT NULL AS signed, signature_verified_at AS signatureVerifiedAt, signature_key_id AS signatureKeyId, embedded_version AS embeddedVersion, product_name AS productName, version_source AS versionSource, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE format = 'NSIS' ORDER BY created_at DESC").all(),
     db.prepare(`SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName,
       r.notes, r.mandatory, r.status, r.published_at AS publishedAt
       FROM release_versions r
-      JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
-      WHERE r.tenant_id = ? ORDER BY r.created_at DESC`).bind(tenantId).all(),
-    db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, seat_limit AS seatLimit, features, status FROM billing_plans WHERE tenant_id = ? ORDER BY monthly_price_cents ASC").bind(tenantId).all(),
-    db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id WHERE a.tenant_id = ? ORDER BY a.created_at DESC LIMIT 100").bind(tenantId).all(),
+      JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+      ORDER BY r.created_at DESC`).all(),
+    db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, features, status FROM billing_plans ORDER BY monthly_price_cents ASC").all(),
+    db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id ORDER BY a.created_at DESC LIMIT 100").all(),
     db.prepare(`SELECT p.id, p.title, p.slug, p.excerpt, p.body, p.status, p.published_at AS publishedAt,
       p.updated_at AS updatedAt, u.display_name AS authorName
       FROM blog_posts p JOIN users u ON u.id = p.author_id
-      WHERE p.tenant_id = ? ORDER BY p.created_at DESC LIMIT 100`).bind(tenantId).all(),
+      ORDER BY p.created_at DESC LIMIT 100`).all(),
     db.prepare(`SELECT t.id, t.title, t.slug, t.category, t.status, t.pinned, t.created_at AS createdAt,
       t.last_activity_at AS lastActivityAt, u.display_name AS authorName,
       COUNT(r.id) FILTER (WHERE r.status = 'visible') AS replyCount
       FROM forum_topics t JOIN users u ON u.id = t.author_id
-      LEFT JOIN forum_replies r ON r.topic_id = t.id AND r.tenant_id = t.tenant_id
-      WHERE t.tenant_id = ? GROUP BY t.id, u.display_name
-      ORDER BY t.pinned DESC, t.last_activity_at DESC LIMIT 100`).bind(tenantId).all(),
+      LEFT JOIN forum_replies r ON r.topic_id = t.id
+      GROUP BY t.id, u.display_name
+      ORDER BY t.pinned DESC, t.last_activity_at DESC LIMIT 100`).all(),
     db.prepare(`SELECT r.id, r.topic_id AS topicId, r.body, r.status, r.created_at AS createdAt,
       t.title AS topicTitle, u.display_name AS authorName
       FROM forum_replies r JOIN forum_topics t ON t.id = r.topic_id JOIN users u ON u.id = r.author_id
-      WHERE r.tenant_id = ? ORDER BY r.created_at DESC LIMIT 50`).bind(tenantId).all(),
+      ORDER BY r.created_at DESC LIMIT 50`).all(),
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
-  const authSettings = providerSettingsSnapshot(await tenantProviderSettings(tenantId));
-  const signingSettings = await tenantReleaseSigningSettings(tenantId);
-  const releaseSettings = releaseSettingsSnapshot(signingSettings, authSettings.tenantSlug);
+  const authSettings = providerSettingsSnapshot(await identityProviderSettings());
+  const signingSettings = await releaseSigningSettings();
+  const releaseSettings = releaseSettingsSnapshot(signingSettings);
   const artifactRows = artifacts.results as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
@@ -133,8 +129,6 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     authSettings,
     releaseSettings,
     content: {
-      publicTenant: user.tenantId && user.tenantName ? publicContentTenantSlug() === await tenantSlug(tenantId) : false,
-      publicTenantSlug: publicContentTenantSlug(),
       blogPosts: blogPosts.results,
       forumTopics: forumTopics.results,
       forumReplies: forumReplies.results,
@@ -149,19 +143,18 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
   if (action === "create_user") {
     const email = text(input.email).toLowerCase();
     const displayName = text(input.displayName);
-    const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
+    const role = allowed(text(input.role), ["admin", "member"], "member");
     const username = text(input.username).toLowerCase();
     const password = text(input.password);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2) throw new Error("请填写有效邮箱和姓名。");
-    if (role === "tenant_admin" && (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) || password.length < 12 || password.length > 128)) {
+    if (role === "admin" && (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) || password.length < 12 || password.length > 128)) {
       throw new Error("管理员账号需要 3–32 位用户名和至少 12 位初始密码。");
     }
     const id = `usr_${crypto.randomUUID()}`;
     const statements = [
-      db.prepare("INSERT INTO users (id, username, email, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)").bind(id, role === "tenant_admin" ? username : null, email, displayName, now, now),
-      db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").bind(`mem_${crypto.randomUUID()}`, user.tenantId, id, role, now, now),
+      db.prepare("INSERT INTO users (id, username, email, display_name, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)").bind(id, role === "admin" ? username : null, email, displayName, role, now, now),
     ];
-    if (role === "tenant_admin") {
+    if (role === "admin") {
       const credential = await createPasswordHash(password);
       statements.push(
         db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)")
@@ -169,24 +162,23 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
       );
     }
     await db.batch(statements);
-    await recordAudit(db, user, "user.create", "user", id, { email, username: role === "tenant_admin" ? username : null, role });
+    await recordAudit(db, user, "user.create", "user", id, { email, username: role === "admin" ? username : null, role });
     return { id };
   }
   if (action === "update_user") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["active", "disabled"], "active");
-    const role = allowed(text(input.role), ["tenant_admin", "developer", "auditor", "viewer"], "developer");
+    const role = allowed(text(input.role), ["admin", "member"], "member");
     if (id === user.id && status === "disabled") throw new Error("不能停用当前登录账号。");
-    if (id === user.id && role !== "tenant_admin") throw new Error("不能移除当前登录账号的管理员权限。");
-    const target = await db.prepare("SELECT m.role, u.status FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.user_id = ? AND m.tenant_id = ?").bind(id, user.tenantId).first<{ role: string; status: string }>();
-    if (!target) throw new Error("用户不存在或不属于当前组织。");
-    if (target.role === "tenant_admin" && target.status === "active" && (role !== "tenant_admin" || status !== "active")) {
-      const admins = await db.prepare("SELECT COUNT(*) AS count FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.tenant_id = ? AND m.role IN ('tenant_admin','platform_admin') AND u.status = 'active'").bind(user.tenantId).first<{ count: number }>();
-      if (Number(admins?.count ?? 0) <= 1) throw new Error("当前组织至少需要保留一名可用管理员。");
+    if (id === user.id && role !== "admin") throw new Error("不能移除当前登录账号的管理员权限。");
+    const target = await db.prepare("SELECT role, status FROM users WHERE id = ?").bind(id).first<{ role: string; status: string }>();
+    if (!target) throw new Error("用户不存在。");
+    if (target.role === "admin" && target.status === "active" && (role !== "admin" || status !== "active")) {
+      const admins = await db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND status = 'active'").first<{ count: number }>();
+      if (Number(admins?.count ?? 0) <= 1) throw new Error("系统至少需要保留一名可用管理员。");
     }
     await db.batch([
-      db.prepare("UPDATE users SET status = ?, updated_at = ? WHERE id = ? AND id IN (SELECT user_id FROM memberships WHERE tenant_id = ?)").bind(status, now, id, user.tenantId),
-      db.prepare("UPDATE memberships SET role = ?, updated_at = ? WHERE user_id = ? AND tenant_id = ?").bind(role, now, id, user.tenantId),
+      db.prepare("UPDATE users SET status = ?, role = ?, updated_at = ? WHERE id = ?").bind(status, role, now, id),
     ]);
     await recordAudit(db, user, "user.update", "user", id, { status, role });
     return { id };
@@ -196,19 +188,19 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const rawPhone = text(input.phone);
     const phoneE164 = rawPhone ? normalizeChinesePhone(rawPhone) : null;
     if (!id || (rawPhone && !phoneE164)) throw new Error("请输入有效的中国大陆手机号。");
-    const target = await db.prepare("SELECT user_id FROM memberships WHERE user_id = ? AND tenant_id = ?")
-      .bind(id, user.tenantId)
+    const target = await db.prepare("SELECT id FROM users WHERE id = ?")
+      .bind(id)
       .first();
-    if (!target) throw new Error("用户不存在或不属于当前组织。");
+    if (!target) throw new Error("用户不存在。");
     await db.prepare(
-      "UPDATE users SET phone_e164 = ?, updated_at = ? WHERE id = ? AND id IN (SELECT user_id FROM memberships WHERE tenant_id = ?)",
-    ).bind(phoneE164, now, id, user.tenantId).run();
+      "UPDATE users SET phone_e164 = ?, updated_at = ? WHERE id = ?",
+    ).bind(phoneE164, now, id).run();
     await recordAudit(db, user, "user.phone.update", "user", id, { configured: Boolean(phoneE164) });
     return { id, phoneConfigured: Boolean(phoneE164) };
   }
   if (action === "save_auth_settings") {
-    const settings = await saveTenantProviderSettings(user.tenantId, input);
-    await recordAudit(db, user, "auth.providers.save", "auth_provider_settings", user.tenantId, {
+    const settings = await saveProviderSettings(input);
+    await recordAudit(db, user, "auth.providers.save", "auth_provider_settings", "global", {
       smsEnabled: settings.smsEnabled,
       googleEnabled: settings.googleEnabled,
       aliyunAccessKeyIdConfigured: Boolean(settings.aliyunAccessKeyId),
@@ -224,12 +216,12 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     return providerSettingsSnapshot(settings);
   }
   if (action === "save_release_settings") {
-    const settings = await saveTenantReleaseSigningSettings(user.tenantId, user.id, input.updaterPublicKey);
-    await recordAudit(db, user, "release.settings.save", "release_settings", user.tenantId, {
+    const settings = await saveReleaseSigningSettings(user.id, input.updaterPublicKey);
+    await recordAudit(db, user, "release.settings.save", "release_settings", "global", {
       updaterPublicKeyId: settings?.publicKeyId ?? null,
       source: settings?.source ?? "missing",
     });
-    return releaseSettingsSnapshot(settings, await tenantSlug(user.tenantId));
+    return releaseSettingsSnapshot(settings);
   }
   if (action === "save_blog_post") {
     const id = text(input.id);
@@ -241,31 +233,31 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     if (excerpt.length < 10 || excerpt.length > 320) throw new Error("博客摘要需要 10–320 个字符。");
     if (body.length < 40 || body.length > 50_000) throw new Error("博客正文需要 40–50,000 个字符。");
     if (id) {
-      const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ? AND tenant_id = ?")
-        .bind(id, user.tenantId).first<{ status: string; published_at: number | null }>();
-      if (!existing) throw new Error("博客文章不存在或不属于当前组织。");
+      const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ?")
+        .bind(id).first<{ status: string; published_at: number | null }>();
+      if (!existing) throw new Error("博客文章不存在。");
       const publishedAt = status === "published" ? (existing.status === "published" && existing.published_at ? existing.published_at : now) : existing.published_at;
-      await db.prepare("UPDATE blog_posts SET title = ?, excerpt = ?, body = ?, status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-        .bind(title, excerpt, body, status, publishedAt, now, id, user.tenantId).run();
+      await db.prepare("UPDATE blog_posts SET title = ?, excerpt = ?, body = ?, status = ?, published_at = ?, updated_at = ? WHERE id = ?")
+        .bind(title, excerpt, body, status, publishedAt, now, id).run();
       await recordAudit(db, user, "blog.post.update", "blog_post", id, { status, titleLength: title.length, bodyLength: body.length });
       return { id };
     }
     const postId = `post_${crypto.randomUUID()}`;
     const slug = contentSlug(title, "article");
-    await db.prepare("INSERT INTO blog_posts (id, tenant_id, author_id, title, slug, excerpt, body, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(postId, user.tenantId, user.id, title, slug, excerpt, body, status, status === "published" ? now : null, now, now).run();
+    await db.prepare("INSERT INTO blog_posts (id, author_id, title, slug, excerpt, body, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(postId, user.id, title, slug, excerpt, body, status, status === "published" ? now : null, now, now).run();
     await recordAudit(db, user, "blog.post.create", "blog_post", postId, { status, titleLength: title.length, bodyLength: body.length });
     return { id: postId, slug };
   }
   if (action === "set_blog_status") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["draft", "published", "archived"], "draft");
-    const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ? AND tenant_id = ?")
-      .bind(id, user.tenantId).first<{ status: string; published_at: number | null }>();
-    if (!existing) throw new Error("博客文章不存在或不属于当前组织。");
+    const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ?")
+      .bind(id).first<{ status: string; published_at: number | null }>();
+    if (!existing) throw new Error("博客文章不存在。");
     const publishedAt = status === "published" ? (existing.status === "published" && existing.published_at ? existing.published_at : now) : existing.published_at;
-    await db.prepare("UPDATE blog_posts SET status = ?, published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-      .bind(status, publishedAt, now, id, user.tenantId).run();
+    await db.prepare("UPDATE blog_posts SET status = ?, published_at = ?, updated_at = ? WHERE id = ?")
+      .bind(status, publishedAt, now, id).run();
     await recordAudit(db, user, "blog.post.status", "blog_post", id, { status });
     return { id, status };
   }
@@ -273,18 +265,18 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const id = text(input.id);
     const status = allowed(text(input.status), ["open", "locked", "hidden"], "open");
     const pinned = input.pinned === true;
-    const result = await db.prepare("UPDATE forum_topics SET status = ?, pinned = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-      .bind(status, pinned, now, id, user.tenantId).run();
-    if (!result.meta.changes) throw new Error("论坛主题不存在或不属于当前组织。");
+    const result = await db.prepare("UPDATE forum_topics SET status = ?, pinned = ?, updated_at = ? WHERE id = ?")
+      .bind(status, pinned, now, id).run();
+    if (!result.meta.changes) throw new Error("论坛主题不存在。");
     await recordAudit(db, user, "forum.topic.moderate", "forum_topic", id, { status, pinned });
     return { id, status, pinned };
   }
   if (action === "moderate_forum_reply") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["visible", "hidden"], "visible");
-    const result = await db.prepare("UPDATE forum_replies SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-      .bind(status, now, id, user.tenantId).run();
-    if (!result.meta.changes) throw new Error("论坛回复不存在或不属于当前组织。");
+    const result = await db.prepare("UPDATE forum_replies SET status = ?, updated_at = ? WHERE id = ?")
+      .bind(status, now, id).run();
+    if (!result.meta.changes) throw new Error("论坛回复不存在。");
     await recordAudit(db, user, "forum.reply.moderate", "forum_reply", id, { status });
     return { id, status };
   }
@@ -296,56 +288,56 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const normalizedVersion = normalizeSemver(version);
     if (!normalizedVersion || !artifactId) throw new Error("请选择 EXE 安装包，并填写有效的语义化版本号。");
     const artifactResult = await db.prepare(`SELECT id, format, object_key, status, signature_verified_at, signature_key_id, embedded_version
-      FROM agent_artifacts WHERE tenant_id = ? AND id = ? AND format = 'NSIS'`)
-      .bind(user.tenantId, artifactId)
+      FROM agent_artifacts WHERE id = ? AND format = 'NSIS'`)
+      .bind(artifactId)
       .all<PublishableArtifact>();
     const artifact = artifactResult.results[0];
-    if (!artifact) throw new Error("EXE 安装包不存在或不属于当前组织。");
-    const signingSettings = await requireTenantReleaseSigningSettings(user.tenantId);
+    if (!artifact) throw new Error("EXE 安装包不存在。");
+    const signingSettings = await requireReleaseSigningSettings();
     await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
     ensureArtifactVersionMatchesRelease(artifact, normalizedVersion.version);
-    const duplicate = await db.prepare("SELECT id, status FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?")
-      .bind(user.tenantId, normalizedVersion.version, channel)
+    const duplicate = await db.prepare("SELECT id, status FROM release_versions WHERE version = ? AND channel = ?")
+      .bind(normalizedVersion.version, channel)
       .first<{ id: string; status: string }>();
     if (duplicate) {
       if (duplicate.status === "published" && status === "draft") {
         throw new Error("当前版本已经公开发布；如需停止分发，请使用顶部的停止公开分发按钮。");
       }
       await db.batch([
-        ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published' AND id <> ?").bind(now, user.tenantId, channel, duplicate.id)] : []),
+        ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE channel = ? AND status = 'published' AND id <> ?").bind(now, channel, duplicate.id)] : []),
         status === "published"
-          ? db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ? AND tenant_id = ?")
-            .bind(artifactId, notes, Boolean(input.mandatory), now, now, duplicate.id, user.tenantId)
-          : db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND status = 'draft'")
-            .bind(artifactId, notes, Boolean(input.mandatory), now, duplicate.id, user.tenantId),
-        db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, 'release_version', ?, ?, ?)")
-          .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, status === "published" ? "release.publish" : "release.update", duplicate.id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory), reusedDraft: duplicate.status === "draft" }), now),
+          ? db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ?")
+            .bind(artifactId, notes, Boolean(input.mandatory), now, now, duplicate.id)
+          : db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
+            .bind(artifactId, notes, Boolean(input.mandatory), now, duplicate.id),
+        db.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'release_version', ?, ?, ?)")
+          .bind(`audit_${crypto.randomUUID()}`, user.id, status === "published" ? "release.publish" : "release.update", duplicate.id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory), reusedDraft: duplicate.status === "draft" }), now),
       ]);
       return { id: duplicate.id, status, reused: true };
     }
     const id = `rel_${crypto.randomUUID()}`;
     await db.batch([
-      ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published'").bind(now, user.tenantId, channel)] : []),
-      db.prepare("INSERT INTO release_versions (id, tenant_id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, user.tenantId, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now),
-      db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'release.create', 'release_version', ?, ?, ?)")
-        .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) }), now),
+      ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE channel = ? AND status = 'published'").bind(now, channel)] : []),
+      db.prepare("INSERT INTO release_versions (id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(id, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now),
+      db.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, 'release.create', 'release_version', ?, ?, ?)")
+        .bind(`audit_${crypto.randomUUID()}`, user.id, id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) }), now),
     ]);
     return { id };
   }
   if (action === "set_release_status") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["draft", "published"], "draft");
-    if (status === "published") await ensureReleasePublishable(db, user.tenantId, id);
-    const release = await db.prepare("SELECT channel FROM release_versions WHERE id = ? AND tenant_id = ?").bind(id, user.tenantId).first<{ channel: string }>();
+    if (status === "published") await ensureReleasePublishable(db, id);
+    const release = await db.prepare("SELECT channel FROM release_versions WHERE id = ?").bind(id).first<{ channel: string }>();
     if (!release) throw new Error("版本不存在。");
     if (status === "published") {
       await db.batch([
-        db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published'").bind(now, user.tenantId, release.channel),
-        db.prepare("UPDATE release_versions SET status = 'published', published_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(now, now, id, user.tenantId),
+        db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE channel = ? AND status = 'published'").bind(now, release.channel),
+        db.prepare("UPDATE release_versions SET status = 'published', published_at = ?, updated_at = ? WHERE id = ?").bind(now, now, id),
       ]);
     } else {
-      await db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE id = ? AND tenant_id = ?").bind(now, id, user.tenantId).run();
+      await db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE id = ?").bind(now, id).run();
     }
     await recordAudit(db, user, status === "published" ? "release.publish" : "release.rollback", "release_version", id, { status });
     return { id, status };
@@ -353,17 +345,17 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
   if (action === "save_plan") {
     const id = text(input.id) || `plan_${crypto.randomUUID()}`;
     const name = text(input.name), currency = allowed(text(input.currency), ["CNY", "USD"], "CNY");
-    const monthlyPriceCents = Math.max(0, number(input.monthlyPriceCents, 0)), seatLimit = Math.max(1, number(input.seatLimit, 1));
+    const monthlyPriceCents = Math.max(0, number(input.monthlyPriceCents, 0));
     const features = Array.isArray(input.features) ? input.features.map(text).filter(Boolean).slice(0, 12) : text(input.features).split("\n").map(item => item.trim()).filter(Boolean).slice(0, 12);
     if (!name) throw new Error("请输入套餐名称。");
-    await db.prepare("INSERT INTO billing_plans (id, tenant_id, name, monthly_price_cents, currency, seat_limit, features, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents, currency=excluded.currency, seat_limit=excluded.seat_limit, features=excluded.features, updated_at=excluded.updated_at WHERE tenant_id=excluded.tenant_id").bind(id, user.tenantId, name, monthlyPriceCents, currency, seatLimit, JSON.stringify(features), now, now).run();
-    await recordAudit(db, user, "billing_plan.save", "billing_plan", id, { currency, monthlyPriceCents, seatLimit });
+    await db.prepare("INSERT INTO billing_plans (id, name, monthly_price_cents, currency, features, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, monthly_price_cents=excluded.monthly_price_cents, currency=excluded.currency, features=excluded.features, updated_at=excluded.updated_at").bind(id, name, monthlyPriceCents, currency, JSON.stringify(features), now, now).run();
+    await recordAudit(db, user, "billing_plan.save", "billing_plan", id, { currency, monthlyPriceCents });
     return { id };
   }
   if (action === "set_plan_status") {
     const id = text(input.id);
     const status = allowed(text(input.status), ["active", "archived"], "archived");
-    const result = await db.prepare("UPDATE billing_plans SET status = ?, updated_at = ? WHERE id = ? AND tenant_id = ?").bind(status, now, id, user.tenantId).run();
+    const result = await db.prepare("UPDATE billing_plans SET status = ?, updated_at = ? WHERE id = ?").bind(status, now, id).run();
     if (!result.meta.changes) throw new Error("套餐不存在。");
     await recordAudit(db, user, "billing_plan.status", "billing_plan", id, { status });
     return { id, status };
@@ -402,14 +394,14 @@ function ensureArtifactVersionMatchesRelease(artifact: PublishableArtifact, rele
   }
 }
 
-async function ensureReleasePublishable(db: PostgresDatabase, tenantId: string, releaseId: string) {
-  const signingSettings = await requireTenantReleaseSigningSettings(tenantId);
+async function ensureReleasePublishable(db: PostgresDatabase, releaseId: string) {
+  const signingSettings = await requireReleaseSigningSettings();
   const artifact = await db.prepare(`SELECT a.id, a.format, a.object_key, a.status, a.signature_verified_at, a.signature_key_id,
       a.embedded_version, r.version AS releaseVersion
     FROM release_versions r
-    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
-    WHERE r.id = ? AND r.tenant_id = ?`)
-    .bind(releaseId, tenantId)
+    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+    WHERE r.id = ?`)
+    .bind(releaseId)
     .first<PublishableArtifact & { releaseVersion: string }>();
   if (!artifact) throw new Error("版本不存在或没有绑定 EXE 安装包。");
   await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
@@ -421,11 +413,6 @@ function number(value: unknown, fallback: number) { const parsed = Number(value)
 function allowed<T extends string>(value: string, values: readonly T[], fallback: T): T { return values.includes(value as T) ? value as T : fallback; }
 
 async function recordAudit(db: PostgresDatabase, user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>) {
-  await db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, action, resourceType, resourceId, JSON.stringify(metadata), Math.floor(Date.now() / 1000)).run();
-}
-
-async function tenantSlug(tenantId: string) {
-  const row = await authDatabase().prepare("SELECT slug FROM tenants WHERE id = ?").bind(tenantId).first<{ slug: string }>();
-  return row?.slug ?? "";
+  await db.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(`audit_${crypto.randomUUID()}`, user.id, action, resourceType, resourceId, JSON.stringify(metadata), Math.floor(Date.now() / 1000)).run();
 }

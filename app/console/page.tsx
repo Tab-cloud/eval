@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "用户控制台",
-  description: "Eval Agent 下载、社区、组织与账号控制台。",
+  description: "Eval Agent 下载、博客、社区与账号控制台。",
 };
 
 export default async function ConsolePage({ searchParams }: { searchParams: Promise<{ view?: string; linked?: string; error?: string }> }) {

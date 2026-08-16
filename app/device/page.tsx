@@ -25,7 +25,6 @@ export default async function DevicePage({
     clientVersion={request.clientVersion}
     displayName={user.displayName}
     accountIdentity={user.email ?? user.phoneE164 ?? user.username ?? user.displayName}
-    tenantName={user.tenantName}
   />;
 }
 

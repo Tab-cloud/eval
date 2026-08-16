@@ -24,7 +24,7 @@ const providerErrors: Record<Locale, Record<string, string>> = {
     expired_state: "登录请求已过期，请重新开始。",
     token_exchange_failed: "第三方身份服务无法完成本次登录。",
     invalid_identity: "第三方账号身份无法通过验证。",
-    account_not_provisioned: "该邮箱尚未由管理员加入组织。",
+    account_not_provisioned: "该邮箱尚未完成账号注册。",
     identity_already_linked: "该 GitHub 账号已经绑定其他用户。",
     link_session_required: "绑定会话已过期，请登录后重试。",
     provider_not_allowed: "该登录方式不适用于中文账号。",
@@ -268,10 +268,10 @@ export default function LoginPage() {
           <div className="login-kicker"><i/>EVAL AGENT ACCESS</div>
           {isChinese ? <>
             <h1>工程，始于<br/><em>可信的执行。</em></h1>
-            <p>登录你的团队空间，继续使用 Agent、工程工具、社区内容与每一次工程执行记录。</p>
+            <p>进入你的工程工作台，继续使用 Agent、工程工具、社区内容与每一次工程执行记录。</p>
           </> : <>
             <h1>Engineering,<br/><em>made accountable.</em></h1>
-            <p>Enter your team workspace for agents, engineering tools, community knowledge, and every recorded run.</p>
+            <p>Enter your engineering workspace for agents, tools, community knowledge, and every recorded run.</p>
           </>}
         </div>
         <div className="trust">
@@ -318,7 +318,7 @@ export default function LoginPage() {
             <a className="oauth-login github-login" href={oauthHref("github")}><GitHubMark/><span>使用 GitHub 登录</span><Icon name="arrow"/></a>
             <small className="policy">注册后，手机号、账号密码和绑定的 GitHub 都会进入同一个 Eval 账号。</small>
           </div> : <div className="google-method">
-            <div className="eyebrow">ORGANIZATION IDENTITY</div>
+            <div className="eyebrow">UNIFIED ACCOUNT</div>
             <h2>Sign in to Eval Agent</h2>
             <p>Continue with Google or GitHub. Your first verified identity creates one Eval account; the second can be linked from Profile.</p>
             {error && <div className="login-error" role="alert">{error}</div>}

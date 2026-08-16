@@ -7,7 +7,7 @@ import { TopicComposer } from "./ForumComposer";
 import "../content/style.css";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "工程论坛", description: "Eval Agent 组织成员的硬件、固件与 Agent 实践交流空间。" };
+export const metadata: Metadata = { title: "工程论坛", description: "Eval Agent 用户交流硬件、固件与 Agent 实践的空间。" };
 
 export default async function ForumPage({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
   const user = await requireUserSession();
@@ -19,8 +19,8 @@ export default async function ForumPage({ searchParams }: { searchParams: Promis
     <ContentHeader active="forum" user={{ displayName: user.displayName }}/>
     <main className="content-main">
       <section className="content-hero forum-hero">
-        <div><p>ENGINEERING COMMUNITY / {user.tenantName.toUpperCase()}</p><h1>把问题说清楚。<br/><em>把经验留下来。</em></h1></div>
-        <aside><span>组织论坛</span><strong>{total}</strong><small>个可见主题 · 仅组织成员可访问</small></aside>
+        <div><p>ENGINEERING COMMUNITY / EVAL AGENT</p><h1>把问题说清楚。<br/><em>把经验留下来。</em></h1></div>
+        <aside><span>用户论坛</span><strong>{total}</strong><small>个可见主题 · 登录后参与讨论</small></aside>
       </section>
 
       <section className="forum-layout">
@@ -41,13 +41,13 @@ export default async function ForumPage({ searchParams }: { searchParams: Promis
           </div>
         </div>
         <aside className="forum-compose-panel">
-          <div className="compose-heading"><span>NEW TOPIC</span><h2>发起讨论</h2><p>面向当前组织成员发布。正文仅按纯文本展示，不执行 HTML 或脚本。</p></div>
+          <div className="compose-heading"><span>NEW TOPIC</span><h2>发起讨论</h2><p>面向 Eval 用户发布。正文仅按纯文本展示，不执行 HTML 或脚本。</p></div>
           <TopicComposer/>
           <div className="community-guidance"><span>COMMUNITY NOTES</span><ul><li>提供足够的工程背景和复现条件</li><li>不要粘贴密钥、客户数据或未脱敏日志</li><li>每小时最多发布 5 个主题</li></ul></div>
         </aside>
       </section>
     </main>
-    <footer className="content-footer"><span>EVAL AGENT / ENGINEERING COMMUNITY</span><Link href="/blog">阅读团队博客</Link><span>{user.tenantName}</span></footer>
+    <footer className="content-footer"><span>EVAL AGENT / ENGINEERING COMMUNITY</span><Link href="/blog">阅读博客</Link><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2024097468号-10</a></footer>
   </div>;
 }
 

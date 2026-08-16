@@ -12,8 +12,7 @@ type DashboardUser = {
   phoneE164?: string;
   accountLocale: "zh" | "en";
   displayName: string;
-  tenantName: string;
-  role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer";
+  role: "admin" | "member";
 };
 
 type AccountSnapshot = {
@@ -25,8 +24,6 @@ type AccountSnapshot = {
 type ConsoleSnapshot = {
   generatedAt: number;
   metrics: {
-    activeMembers: number;
-    totalMembers: number;
     publishedReleases: number;
     forumTopics: number;
     forumReplies: number;
@@ -39,11 +36,11 @@ type ConsoleSnapshot = {
   audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
 };
 
-const nav: Array<{ id: string; label: string; icon: IconName }> = [
+const nav: Array<{ id: string; label: string; icon: IconName; href?: string }> = [
   { id: "overview", label: "总览", icon: "grid" },
   { id: "downloads", label: "下载", icon: "download" },
   { id: "community", label: "社区", icon: "users" },
-  { id: "organization", label: "组织", icon: "shield" },
+  { id: "blog", label: "博客", icon: "spark", href: "/blog" },
   { id: "activity", label: "活动", icon: "clock" },
 ];
 
@@ -93,21 +90,23 @@ export function Dashboard({ currentUser, initialView = "overview", initialNotice
     }
   };
 
-  const roleLabel = currentUser.role === "platform_admin" ? "平台管理员" : currentUser.role === "tenant_admin" ? "租户管理员" : currentUser.role === "developer" ? "开发者" : currentUser.role === "auditor" ? "审计员" : "查看者";
-  const isAdmin = currentUser.role === "tenant_admin" || currentUser.role === "platform_admin";
+  const roleLabel = currentUser.role === "admin" ? "管理员" : "普通用户";
+  const isAdmin = currentUser.role === "admin";
 
   return <div className="workspace-shell">
     <header className="workspace-header">
       <button className="workspace-brand" onClick={() => setActive("overview")} aria-label="返回总览">
         <Image src="/favicon.svg" width={28} height={28} alt=""/><span><b>Eval Agent</b><small>Workspace</small></span>
       </button>
-      <nav aria-label="主要导航">{nav.map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/>{item.label}</button>)}</nav>
+      <nav aria-label="主要导航">{nav.map(item => item.href
+        ? <Link key={item.id} href={item.href}><Icon name={item.icon}/>{item.label}</Link>
+        : <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/>{item.label}</button>)}</nav>
       <div className="workspace-actions">
         <Link href="/docs">使用指南</Link>
         <button className="workspace-icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
         <button className="workspace-avatar" onClick={() => setAccountOpen(value => !value)} aria-expanded={accountOpen}>{currentUser.displayName.slice(0, 2).toUpperCase()}</button>
         {accountOpen && <div className="workspace-account">
-          <strong>{currentUser.displayName}</strong><span>{currentUser.email || currentUser.phoneE164 || currentUser.username || "Eval Account"}</span><small>{currentUser.tenantName} · {roleLabel}</small>
+          <strong>{currentUser.displayName}</strong><span>{currentUser.email || currentUser.phoneE164 || currentUser.username || "Eval Account"}</span><small>{roleLabel}</small>
           {isAdmin && <Link href="/admin"><Icon name="shield"/>管理员平台</Link>}
           <button onClick={() => { setAccountOpen(false); setActive("profile"); history.replaceState(null, "", "/console?view=profile"); }}><Icon name="key"/>{currentUser.accountLocale === "zh" ? "个人中心" : "Profile"}</button>
           <button onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "正在退出…" : "退出登录"}</button>
@@ -120,12 +119,13 @@ export function Dashboard({ currentUser, initialView = "overview", initialNotice
       {active === "overview" && <Overview snapshot={snapshot}/>}
       {active === "downloads" && <Downloads snapshot={snapshot}/>}
       {active === "community" && <Community snapshot={snapshot}/>}
-      {active === "organization" && <Organization snapshot={snapshot} user={currentUser} roleLabel={roleLabel}/>}
       {active === "activity" && <Activity snapshot={snapshot}/>}
       {active === "profile" && <Profile currentUser={currentUser} notify={setToast}/>}
     </main>
 
-    <nav className="workspace-mobile-nav" aria-label="移动端导航">{nav.map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav>
+    <nav className="workspace-mobile-nav" aria-label="移动端导航">{nav.map(item => item.href
+      ? <Link key={item.id} href={item.href}><Icon name={item.icon}/><span>{item.label}</span></Link>
+      : <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav>
 
     {toast && <div className="workspace-toast"><Icon name="check"/>{toast}</div>}
   </div>;
@@ -136,7 +136,7 @@ function Overview({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   const latest = snapshot?.releases.find(item => item.status === "published");
   return <>
     <section className="workspace-hero">
-      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程社区，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与团队成员沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
+      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程社区，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与其他用户沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
       <aside><span>PRODUCT STATUS</span><strong>{latest ? `v${latest.version}` : "—"}</strong><small>{latest ? `${latest.channel.toUpperCase()} · 已发布` : "等待首个公开版本"}</small><i/></aside>
     </section>
     <section className="workspace-metrics">
@@ -160,12 +160,8 @@ function Community({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   return <section className="workspace-page"><div className="workspace-page-hero"><small>KNOWLEDGE & DISCUSSION</small><h2>讨论工程问题，沉淀团队经验。</h2><p>论坛用于交流与协作，博客用于发布经过整理的产品和技术内容。</p><div className="workspace-page-actions"><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div><div className="workspace-columns"><article className="workspace-panel"><PanelHead eyebrow="FORUM" title="活跃主题" href="/forum" link="全部主题"/><TopicList topics={snapshot?.forumTopics ?? []}/></article><article className="workspace-panel"><PanelHead eyebrow="BLOG" title="最新文章" href="/blog" link="全部文章"/><BlogList posts={snapshot?.blogPosts ?? []}/></article></div></section>;
 }
 
-function Organization({ snapshot, user, roleLabel }: { snapshot: ConsoleSnapshot | null; user: DashboardUser; roleLabel: string }) {
-  return <section className="workspace-page"><div className="workspace-page-hero"><small>ORGANIZATION</small><h2>账号归属与协作边界。</h2><p>组织身份由服务端会话确认，成员和内容始终限定在当前组织内。</p></div><div className="workspace-profile-grid"><article><span className="workspace-profile-avatar">{user.displayName.slice(0,2).toUpperCase()}</span><small>CURRENT ACCOUNT</small><h3>{user.displayName}</h3><p>{user.email || user.phoneE164 || user.username || "Eval Account"}</p><b>{roleLabel}</b></article><article><Icon name="users"/><small>CURRENT ORGANIZATION</small><h3>{user.tenantName}</h3><p>{snapshot?.metrics.activeMembers ?? 0} 名活动成员 / {snapshot?.metrics.totalMembers ?? 0} 名成员</p><b>服务端租户隔离</b></article><article><Icon name="terminal"/><small>DESKTOP SESSIONS</small><h3>{snapshot?.metrics.activeDesktopSessions ?? 0}</h3><p>当前账号仍有效的桌面端设备会话</p><b>可撤销授权</b></article></div></section>;
-}
-
 function Activity({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
-  return <section className="workspace-page"><div className="workspace-page-hero"><small>ACCOUNT ACTIVITY</small><h2>最近操作，清晰可追踪。</h2><p>普通成员只看到自己的操作；管理员可查看当前组织的审计活动。</p></div><div className="workspace-ledger"><header><span>操作</span><span>资源</span><span>时间</span><span>标识</span></header>{snapshot?.audits.length ? snapshot.audits.map(item => <article key={item.id}><b>{auditLabel(item.action)}<small>{item.action}</small></b><span>{item.resourceType}</span><time>{formatRelative(item.createdAt)}</time><code>{item.resourceId?.slice(0, 14) || "—"}</code></article>) : <Empty text="暂无可显示的操作记录。"/>}</div></section>;
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>ACCOUNT ACTIVITY</small><h2>最近操作，清晰可追踪。</h2><p>普通用户只看到自己的操作；管理员可以查看全站安全与运营活动。</p></div><div className="workspace-ledger"><header><span>操作</span><span>资源</span><span>时间</span><span>标识</span></header>{snapshot?.audits.length ? snapshot.audits.map(item => <article key={item.id}><b>{auditLabel(item.action)}<small>{item.action}</small></b><span>{item.resourceType}</span><time>{formatRelative(item.createdAt)}</time><code>{item.resourceId?.slice(0, 14) || "—"}</code></article>) : <Empty text="暂无可显示的操作记录。"/>}</div></section>;
 }
 
 function Profile({ currentUser, notify }: { currentUser: DashboardUser; notify: (message: string) => void }) {

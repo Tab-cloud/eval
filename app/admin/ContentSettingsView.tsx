@@ -3,8 +3,6 @@
 import { Icon } from "../ui/icons";
 
 export type ContentAdminSnapshot = {
-  publicTenant: boolean;
-  publicTenantSlug: string;
   blogPosts: Array<{ id: string; title: string; slug: string; excerpt: string; body: string; status: string; publishedAt?: number | null; updatedAt: number; authorName: string }>;
   forumTopics: Array<{ id: string; title: string; slug: string; category: string; status: string; pinned: boolean; createdAt: number; lastActivityAt: number; authorName: string; replyCount: number }>;
   forumReplies: Array<{ id: string; topicId: string; topicTitle: string; body: string; status: string; createdAt: number; authorName: string }>;
@@ -18,9 +16,9 @@ type Props = {
 
 export function ContentSettingsView({ content, busy, action }: Props) {
   return <div className="admin-module content-admin-view">
-    <section className={`content-publish-scope ${content.publicTenant ? "ready" : "secondary"}`}>
-      <div><span>PUBLIC CONTENT TENANT</span><h2>{content.publicTenant ? "当前组织负责公开博客" : "当前组织仅管理自己的内容"}</h2><p>公开博客读取组织标识 <code>{content.publicTenantSlug}</code> 中已发布的文章；论坛始终按当前登录组织隔离。</p></div>
-      <aside><i/>{content.publicTenant ? "PUBLICATION READY" : "TENANT CONTENT ONLY"}</aside>
+    <section className="content-publish-scope ready">
+      <div><span>PUBLIC CONTENT</span><h2>全站博客与论坛</h2><p>已发布文章会直接进入公开博客；论坛内容面向所有已登录的 Eval 用户。</p></div>
+      <aside><i/>PUBLICATION READY</aside>
     </section>
 
     <section className="content-admin-grid">
@@ -58,7 +56,7 @@ export function ContentSettingsView({ content, busy, action }: Props) {
       </div>
 
       <div>
-        <div className="content-admin-heading"><span>COMMUNITY MODERATION</span><h2>论坛治理</h2><p>锁定会保留阅读但停止新回复；隐藏会从成员论坛移除。置顶主题始终排在列表前方。</p></div>
+        <div className="content-admin-heading"><span>COMMUNITY MODERATION</span><h2>论坛治理</h2><p>锁定会保留阅读但停止新回复；隐藏会从用户论坛移除。置顶主题始终排在列表前方。</p></div>
         <div className="moderation-list topic-moderation-list">
           {content.forumTopics.map(topic => <article key={topic.id}>
             <div><span>{categoryLabel(topic.category)} · {topic.authorName}</span><h3>{topic.title}</h3><p>{Number(topic.replyCount)} 条可见回复 · {formatDate(topic.lastActivityAt)}</p></div>
@@ -68,7 +66,7 @@ export function ContentSettingsView({ content, busy, action }: Props) {
               <a href={`/forum/${topic.slug}`} target="_blank" rel="noreferrer">查看</a>
             </div>
           </article>)}
-          {!content.forumTopics.length && <div className="content-admin-empty">当前组织还没有论坛主题。</div>}
+          {!content.forumTopics.length && <div className="content-admin-empty">还没有论坛主题。</div>}
         </div>
 
         <div className="content-admin-heading reply-heading"><span>RECENT REPLIES</span><h2>最近回复</h2><p>单独隐藏不合适的回复，不影响主题中的其他讨论。</p></div>
@@ -77,7 +75,7 @@ export function ContentSettingsView({ content, busy, action }: Props) {
             <div><span>{reply.authorName} · {formatDate(reply.createdAt)}</span><h3>{reply.topicTitle}</h3><p>{compact(reply.body, 150)}</p></div>
             <button disabled={busy} className={reply.status === "hidden" ? "active" : ""} onClick={() => void action("moderate_forum_reply", { id: reply.id, status: reply.status === "hidden" ? "visible" : "hidden" }, reply.status === "hidden" ? "回复已恢复显示。" : "回复已隐藏。")}>{reply.status === "hidden" ? "恢复" : "隐藏"}</button>
           </article>)}
-          {!content.forumReplies.length && <div className="content-admin-empty">当前组织还没有论坛回复。</div>}
+          {!content.forumReplies.length && <div className="content-admin-empty">还没有论坛回复。</div>}
         </div>
       </div>
     </section>

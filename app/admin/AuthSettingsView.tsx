@@ -3,9 +3,6 @@
 import { Icon } from "../ui/icons";
 
 export type AuthSettingsSnapshot = {
-  tenantId: string;
-  tenantSlug: string;
-  identityTenant: boolean;
   callbackUrl: string;
   smsEnabled: boolean;
   aliyunSignName: string;
@@ -74,9 +71,9 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
         detail={settings.githubConfigured ? "OAuth App 部署凭据已就绪" : "GitHub Client ID 或 Client Secret 尚未注入"}
       />
       <article className="auth-provider-scope">
-        <span>IDENTITY TENANT</span>
-        <strong>{settings.tenantSlug}</strong>
-        <p>{settings.identityTenant ? "当前组织承载公开登录入口" : "当前组织不是公开 Google/GitHub 登录租户"}</p>
+        <span>ACCOUNT SYSTEM</span>
+        <strong>单站点账号</strong>
+        <p>手机号、账号密码、Google 与 GitHub 均绑定到同一个 Eval 用户。</p>
       </article>
     </section>
 
@@ -123,7 +120,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
           <div className="auth-callback-field">
             <span>最小授权范围</span>
             <code>user:email</code>
-            <small>仅用于读取当前 GitHub 账号的已验证邮箱；不申请仓库、组织或代码权限</small>
+            <small>仅用于读取当前 GitHub 账号的已验证邮箱；不申请仓库或代码权限</small>
           </div>
         </div>
       </ProviderForm>

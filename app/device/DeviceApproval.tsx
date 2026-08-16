@@ -8,7 +8,6 @@ interface Props {
   clientVersion: string;
   displayName: string;
   accountIdentity: string;
-  tenantName: string;
 }
 
 export function DeviceApproval(props: Props) {
@@ -46,12 +45,11 @@ export function DeviceApproval(props: Props) {
       </> : <>
         <p className="device-kicker">DESKTOP AUTHORIZATION</p>
         <h1>绑定此 Eval 设备</h1>
-        <p>确认后，这台设备将使用你的 Web 账号访问所属组织能力。本地文件权限仍由桌面端单独控制。</p>
+        <p>确认后，这台设备将使用你的 Web 账号访问 Eval 服务。本地文件权限仍由桌面端单独控制。</p>
         <dl>
           <div><dt>设备</dt><dd>{props.deviceName}</dd></div>
           <div><dt>客户端</dt><dd>Eval {props.clientVersion}</dd></div>
           <div><dt>账号</dt><dd>{props.displayName}<small>{props.accountIdentity}</small></dd></div>
-          <div><dt>组织</dt><dd>{props.tenantName}</dd></div>
           <div><dt>验证码</dt><dd className="device-code">{props.userCode}</dd></div>
         </dl>
         {error && <div className="device-error" role="alert">{error}</div>}

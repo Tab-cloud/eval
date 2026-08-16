@@ -20,9 +20,9 @@ export default function DocsPage() {
         <section id="section-3"><small>03 / DESKTOP AUTHORIZATION</small><h2>在浏览器确认桌面端设备</h2><p>桌面端发起授权后，会显示一次性用户码并打开浏览器确认页。登录后核对设备名称与客户端版本，再选择允许或拒绝。不要批准来源不明的设备。</p></section>
         <section id="section-4"><small>04 / RELEASES</small><h2>跟随正式发布渠道更新</h2><p>版本中心区分 Stable、Beta 与 Internal 渠道。已发布版本会进入下载目录；管理员可以设置可选升级或强制升级，并保留可追溯的发布记录。</p></section>
         <section id="section-5"><small>05 / COMMUNITY</small><h2>用论坛讨论，用博客沉淀</h2><p><Link href="/forum">工程论坛</Link>适合提问、协作和跟进问题；<Link href="/blog">团队博客</Link>用于发布产品动态、工程方法和整理后的知识内容。</p></section>
-        <section id="section-6"><small>06 / SECURITY</small><h2>账号、组织与设备始终分离</h2><p>登录会话、桌面端设备会话和组织成员关系由服务端验证。管理员操作会进入审计日志，密码、短信验证码与登录凭据不会以明文写入日志。</p></section>
+        <section id="section-6"><small>06 / SECURITY</small><h2>账号与设备授权始终分离</h2><p>登录会话和桌面端设备会话由服务端独立验证。管理员操作会进入审计日志，密码、短信验证码与登录凭据不会以明文写入日志。</p></section>
       </article>
     </section>
-    <footer><span>EVAL AGENT / PRODUCT GUIDE</span><span>正在连接（杭州）科技有限公司</span></footer>
+    <footer><span>EVAL AGENT / PRODUCT GUIDE</span><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2024097468号-10</a></footer>
   </main>;
 }

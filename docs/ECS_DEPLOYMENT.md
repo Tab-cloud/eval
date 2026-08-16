@@ -42,10 +42,7 @@ DATABASE_POOL_MAX=15
 DATABASE_CONNECT_TIMEOUT_MS=5000
 DATABASE_IDLE_TIMEOUT_MS=30000
 APP_ORIGIN=https://eval.zailink.space
-EVAL_PUBLIC_RELEASE_TENANT_SLUG=connecting-hangzhou
 EVAL_UPDATER_PUBLIC_KEY=replace-with-tauri-minisign-public-key
-EVAL_IDENTITY_TENANT_SLUG=connecting-hangzhou
-EVAL_PUBLIC_CONTENT_TENANT_SLUG=connecting-hangzhou
 ARTIFACT_STORAGE_PATH=/srv/eval-web/artifacts
 EVAL_ENABLE_SEEDED_ACCOUNTS=false
 EVAL_ENABLE_PASSWORD_LOGIN=false
@@ -59,7 +56,7 @@ GITHUB_OAUTH_CLIENT_ID=replace-with-oauth-app-client-id
 GITHUB_OAUTH_CLIENT_SECRET=replace-with-oauth-app-client-secret
 ```
 
-`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `tenant_admin` 或 `platform_admin` 角色的账号；公开注册和第三方首次登录只创建 `developer`，不会授予管理员角色。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
+`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `admin` 角色的账号；公开注册和第三方首次登录只创建 `member`，不会授予管理员权限。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
 
 桌面账号绑定复用 `APP_ORIGIN` 指定的 HTTPS 站点，并通过 `/device` 完成浏览器确认。部署新版本前必须执行数据库迁移；当前账号体系还要求 `users.account_locale`、可空邮箱、大小写不敏感的唯一用户名，以及 OAuth `intent`/`link_user_id` 字段。不得将桌面令牌、设备码或会话明文写入日志。
 
@@ -78,7 +75,7 @@ sudo chmod 0640 /etc/eval-web/eval-web.env
 https://eval.zailink.space/api/auth/google/callback
 ```
 
-如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。英文用户首次使用已验证的 Google 身份登录时，会在 `EVAL_IDENTITY_TENANT_SLUG` 指定的既有租户中创建普通成员；已登录英文用户可在个人中心显式绑定 Google。
+如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。英文用户首次使用已验证的 Google 身份登录时，会创建普通用户；已登录英文用户可在个人中心显式绑定 Google。
 
 在 GitHub 的 Developer settings 中创建 OAuth App，只申请 `user:email`，并把 Authorization callback URL 精确配置为：
 
@@ -86,11 +83,11 @@ https://eval.zailink.space/api/auth/google/callback
 https://eval.zailink.space/api/auth/github/callback
 ```
 
-GitHub 登录同时显示在中文和英文登录页。首次登录会在身份租户中创建普通成员；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
+GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
 
 中文注册依赖已审核的阿里云短信模板。发送与校验必须保持 `login`、`register`、`phone_bind`、`password_change` 四种用途隔离；修改密码后服务端撤销该用户其他 Web 会话并为当前浏览器签发新会话。上线前应分别完成四条真实短信流程和 Google/GitHub 绑定冲突测试。
 
-`EVAL_PUBLIC_CONTENT_TENANT_SLUG` 指定公开博客的唯一内容组织。论坛不使用这个变量，始终按登录成员的当前组织隔离。部署包含论坛/博客功能的版本前必须运行迁移，创建 `blog_posts`、`forum_topics` 与 `forum_replies`；上线后由该组织管理员在“内容中心”发布第一篇博客并治理论坛内容。
+博客与论坛均采用全站内容模型。部署包含论坛/博客功能的版本前必须运行迁移，创建 `blog_posts`、`forum_topics` 与 `forum_replies`；上线后由管理员在“内容中心”发布第一篇博客并治理论坛内容。
 
 ## 构建与首次启动
 
@@ -157,7 +154,7 @@ Nginx 模板已经包含：
 
 桌面安装包在独立的可信构建机生成，不在 ECS 上签名。构建环境设置 `TAURI_SIGNING_PRIVATE_KEY`（以及密钥有密码时的 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）和 `EVAL_UPDATER_PUBLIC_KEY`，执行 Tauri Windows 构建后会得到安装包及对应 `.sig`。同一个 `EVAL_UPDATER_PUBLIC_KEY` 必须写入 Web 服务环境并编译进桌面客户端，以便上传端和客户端验证同一把签名密钥；私钥不得复制到 ECS。
 
-管理员先在统一的“版本发布”页面粘贴并保存 `updater.pub` 公钥，再提交 NSIS/EXE 与同名 `.sig`，验签通过后创建发布。数据库公钥优先于 `EVAL_UPDATER_PUBLIC_KEY` 环境变量后备；切勿上传私钥。Web 服务会读取安装包内部版本。同一租户、同一内部版本只保留一个 EXE：重复上传会替换原对象，相同 SHA-256 不重复写盘；不同版本的历史 EXE 才继续私有保留。每个渠道只保留一个公开版本，已有同版本草稿会直接转为正式发布，发布新版会把旧版转为私有草稿。官网固定入口只提供最新稳定版 EXE，桌面客户端也只收到该最新公开升级。Nginx 的 `client_max_body_size` 必须覆盖单个安装包，仓库示例配置为 `128m`。发布后可验证：
+管理员先在统一的“版本发布”页面粘贴并保存 `updater.pub` 公钥，再提交 NSIS/EXE 与同名 `.sig`，验签通过后创建发布。数据库公钥优先于 `EVAL_UPDATER_PUBLIC_KEY` 环境变量后备；切勿上传私钥。Web 服务会读取安装包内部版本。全站同一内部版本只保留一个 EXE：重复上传会替换原对象，相同 SHA-256 不重复写盘；不同版本的历史 EXE 才继续私有保留。每个渠道只保留一个公开版本，已有同版本草稿会直接转为正式发布，发布新版会把旧版转为私有草稿。官网固定入口只提供最新稳定版 EXE，桌面客户端也只收到该最新公开升级。Nginx 的 `client_max_body_size` 必须覆盖单个安装包，仓库示例配置为 `128m`。发布后可验证：
 
 如果轮换 `EVAL_UPDATER_PUBLIC_KEY`，旧公钥验签的产物会立即退出公开下载与更新通道，也不能重新发布；必须用新私钥重新构建并上传安装包。公钥指纹只基于密钥内容，不受 `.pub` 注释或配置编码形式影响。
 

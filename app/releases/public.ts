@@ -1,9 +1,5 @@
 export type ReleaseChannel = "stable" | "beta" | "internal";
 
-export function publicReleaseTenantSlug() {
-  return process.env.EVAL_PUBLIC_RELEASE_TENANT_SLUG?.trim() || "connecting-hangzhou";
-}
-
 export function parseReleaseChannel(value: string | null): ReleaseChannel | null {
   return value === "stable" || value === "beta" || value === "internal" ? value : null;
 }

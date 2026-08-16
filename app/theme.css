@@ -1,4 +1,4 @@
 /* Theme behavior lives in globals.css. This file remains as the stable extension point
-   for future tenant-specific tokens without coupling them to page components. */
+   for future product-specific tokens without coupling them to page components. */
 .theme-toggle svg { transition: transform .22s ease; }
 .theme-toggle:hover svg { transform: rotate(12deg); }

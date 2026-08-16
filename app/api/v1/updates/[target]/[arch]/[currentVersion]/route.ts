@@ -5,7 +5,6 @@ import {
   normalizeSemver,
   parseReleaseChannel,
   publicApplicationOrigin,
-  publicReleaseTenantSlug,
 } from "../../../../../../releases/public";
 import { publicReleaseSigningSettings } from "../../../../../../releases/settings";
 
@@ -35,17 +34,16 @@ export async function GET(request: Request, context: { params: Promise<{ target:
     SELECT r.id, a.id AS artifact_id, r.version, r.notes, r.mandatory, r.published_at,
            a.updater_signature, a.sha256, a.size_bytes
     FROM release_versions r
-    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.tenant_id = r.tenant_id AND a.format = 'NSIS'
-    JOIN tenants t ON t.id = r.tenant_id
-    WHERE t.slug = ? AND r.status = 'published' AND r.channel = ?
+    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+    WHERE r.status = 'published' AND r.channel = ?
       AND r.id = (SELECT latest_r.id FROM release_versions latest_r
-        WHERE latest_r.tenant_id = r.tenant_id AND latest_r.channel = r.channel AND latest_r.status = 'published'
+        WHERE latest_r.channel = r.channel AND latest_r.status = 'published'
         ORDER BY latest_r.published_at DESC, latest_r.created_at DESC LIMIT 1)
       AND a.status = 'ready' AND a.platform = ? AND a.architecture = ?
       AND a.updater_signature IS NOT NULL AND a.signature_verified_at IS NOT NULL
       AND a.signature_key_id = ? AND a.embedded_version = r.version
     ORDER BY r.published_at DESC
-  `).bind(publicReleaseTenantSlug(), channel, target, arch, signingSettings.publicKeyId).all<UpdateRelease>();
+  `).bind(channel, target, arch, signingSettings.publicKeyId).all<UpdateRelease>();
 
   const releases = result.results.filter(item => normalizeSemver(item.version));
   releases.sort((left, right) => compareSemver(right.version, left.version));

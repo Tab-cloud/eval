@@ -2,10 +2,10 @@ import { authDatabase, ensureAuthSchema } from "./core";
 import { openSecret, sealSecret } from "./secret-store";
 
 const ENV_REF = /^[A-Z][A-Z0-9_]{2,63}$/;
+const SETTINGS_ID = "global";
+const GLOBAL_ENCRYPTION_CONTEXT = "global";
 
 export type IdentityProviderSettings = {
-  tenantId: string;
-  tenantSlug: string;
   smsEnabled: boolean;
   aliyunSignName: string;
   aliyunTemplateCode: string;
@@ -24,8 +24,8 @@ export type IdentityProviderSettings = {
 };
 
 type SettingsRow = {
-  tenant_id: string;
-  tenant_slug: string;
+  id: string;
+  encryption_context: string;
   sms_enabled: boolean;
   aliyun_sign_name: string | null;
   aliyun_template_code: string | null;
@@ -43,76 +43,36 @@ type SettingsRow = {
   updated_at: number;
 };
 
-export function identityTenantSlug() {
-  return process.env.EVAL_IDENTITY_TENANT_SLUG?.trim()
-    || process.env.EVAL_PUBLIC_RELEASE_TENANT_SLUG?.trim()
-    || "connecting-hangzhou";
-}
-
-export async function identityProviderSettings() {
-  await ensureAuthSchema();
-  const tenant = await authDatabase().prepare("SELECT id FROM tenants WHERE slug = ? AND status = 'active'")
-    .bind(identityTenantSlug())
-    .first<{ id: string }>();
-  if (!tenant) throw new Error("登录身份租户不存在或已停用。");
-  return tenantProviderSettings(tenant.id);
-}
-
-export async function tenantProviderSettings(tenantId: string): Promise<IdentityProviderSettings> {
+export async function identityProviderSettings(): Promise<IdentityProviderSettings> {
   await ensureAuthSchema();
   const row = await authDatabase().prepare(`
-    SELECT s.tenant_id, t.slug AS tenant_slug, s.sms_enabled, s.aliyun_sign_name,
-           s.aliyun_template_code, s.aliyun_template_code_key, s.aliyun_access_key_id,
-           s.aliyun_access_key_secret_encrypted, s.sms_code_pepper_encrypted, s.google_enabled,
-           s.google_client_id_ref, s.google_client_secret_ref, s.google_allowed_hosted_domain,
-           s.github_enabled, s.github_client_id_ref, s.github_client_secret_ref,
-           s.updated_at
-    FROM auth_provider_settings s
-    JOIN tenants t ON t.id = s.tenant_id
-    WHERE s.tenant_id = ?
-  `).bind(tenantId).first<SettingsRow>();
-  if (row) return mapSettings(row);
-
-  const tenant = await authDatabase().prepare("SELECT id, slug FROM tenants WHERE id = ?")
-    .bind(tenantId)
-    .first<{ id: string; slug: string }>();
-  if (!tenant) throw new Error("组织不存在。");
-  return {
-    tenantId,
-    tenantSlug: tenant.slug,
-    smsEnabled: true,
-    aliyunSignName: process.env.ALIYUN_SMS_SIGN_NAME?.trim() || "",
-    aliyunTemplateCode: process.env.ALIYUN_SMS_TEMPLATE_CODE?.trim() || "",
-    aliyunTemplateCodeKey: process.env.ALIYUN_SMS_TEMPLATE_CODE_KEY?.trim() || "code",
-    aliyunAccessKeyId: "",
-    aliyunAccessKeySecret: "",
-    smsCodePepper: "",
-    googleEnabled: true,
-    googleClientIdRef: "GOOGLE_OAUTH_CLIENT_ID",
-    googleClientSecretRef: "GOOGLE_OAUTH_CLIENT_SECRET",
-    googleAllowedHostedDomain: process.env.GOOGLE_ALLOWED_HOSTED_DOMAIN?.trim().toLowerCase() || "",
-    githubEnabled: false,
-    githubClientIdRef: "GITHUB_OAUTH_CLIENT_ID",
-    githubClientSecretRef: "GITHUB_OAUTH_CLIENT_SECRET",
-    updatedAt: null,
-  };
+    SELECT id, encryption_context, sms_enabled, aliyun_sign_name,
+           aliyun_template_code, aliyun_template_code_key, aliyun_access_key_id,
+           aliyun_access_key_secret_encrypted, sms_code_pepper_encrypted, google_enabled,
+           google_client_id_ref, google_client_secret_ref, google_allowed_hosted_domain,
+           github_enabled, github_client_id_ref, github_client_secret_ref, updated_at
+    FROM auth_provider_settings
+    WHERE id = ?
+  `).bind(SETTINGS_ID).first<SettingsRow>();
+  return row ? mapSettings(row) : defaultSettings();
 }
 
-export async function saveTenantProviderSettings(tenantId: string, input: Record<string, unknown>) {
-  const existing = await tenantProviderSettings(tenantId);
-  const settings = validateSettings(tenantId, input, existing);
+export async function saveProviderSettings(input: Record<string, unknown>) {
+  const existing = await identityProviderSettings();
+  const settings = validateSettings(input, existing);
   const now = Math.floor(Date.now() / 1000);
-  const accessKeySecretEncrypted = sealSecret(settings.aliyunAccessKeySecret, secretContext(tenantId, "aliyun-access-key-secret"));
-  const smsCodePepperEncrypted = sealSecret(settings.smsCodePepper, secretContext(tenantId, "sms-code-pepper"));
+  const accessKeySecretEncrypted = sealSecret(settings.aliyunAccessKeySecret, secretContext("aliyun-access-key-secret"));
+  const smsCodePepperEncrypted = sealSecret(settings.smsCodePepper, secretContext("sms-code-pepper"));
   await authDatabase().prepare(`
     INSERT INTO auth_provider_settings (
-      tenant_id, sms_enabled, aliyun_sign_name, aliyun_template_code,
+      id, encryption_context, sms_enabled, aliyun_sign_name, aliyun_template_code,
       aliyun_template_code_key, aliyun_access_key_id, aliyun_access_key_secret_encrypted,
       sms_code_pepper_encrypted, google_enabled, google_client_id_ref,
       google_client_secret_ref, google_allowed_hosted_domain, github_enabled,
       github_client_id_ref, github_client_secret_ref, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(tenant_id) DO UPDATE SET
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      encryption_context=excluded.encryption_context,
       sms_enabled=excluded.sms_enabled,
       aliyun_sign_name=excluded.aliyun_sign_name,
       aliyun_template_code=excluded.aliyun_template_code,
@@ -129,7 +89,8 @@ export async function saveTenantProviderSettings(tenantId: string, input: Record
       github_client_secret_ref=excluded.github_client_secret_ref,
       updated_at=excluded.updated_at
   `).bind(
-    tenantId,
+    SETTINGS_ID,
+    GLOBAL_ENCRYPTION_CONTEXT,
     settings.smsEnabled,
     settings.aliyunSignName || null,
     settings.aliyunTemplateCode || null,
@@ -147,7 +108,7 @@ export async function saveTenantProviderSettings(tenantId: string, input: Record
     now,
     now,
   ).run();
-  return tenantProviderSettings(tenantId);
+  return identityProviderSettings();
 }
 
 export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
@@ -171,7 +132,6 @@ export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
     aliyunAccessKeyIdConfigured: smsCredentials.accessKeyId,
     aliyunAccessKeySecretConfigured: smsCredentials.accessKeySecret,
     smsCodePepperConfigured: smsCredentials.pepper,
-    identityTenant: settings.tenantSlug === identityTenantSlug(),
     callbackUrl: `${new URL(origin).origin}/api/auth/google/callback`,
     githubCallbackUrl: `${new URL(origin).origin}/api/auth/github/callback`,
     smsCredentials,
@@ -196,7 +156,27 @@ function environmentConfigured(reference: string) {
   return ENV_REF.test(reference) && Boolean(process.env[reference]?.trim());
 }
 
-function validateSettings(tenantId: string, input: Record<string, unknown>, existing: IdentityProviderSettings): IdentityProviderSettings {
+function defaultSettings(): IdentityProviderSettings {
+  return {
+    smsEnabled: true,
+    aliyunSignName: process.env.ALIYUN_SMS_SIGN_NAME?.trim() || "",
+    aliyunTemplateCode: process.env.ALIYUN_SMS_TEMPLATE_CODE?.trim() || "",
+    aliyunTemplateCodeKey: process.env.ALIYUN_SMS_TEMPLATE_CODE_KEY?.trim() || "code",
+    aliyunAccessKeyId: "",
+    aliyunAccessKeySecret: "",
+    smsCodePepper: "",
+    googleEnabled: true,
+    googleClientIdRef: "GOOGLE_OAUTH_CLIENT_ID",
+    googleClientSecretRef: "GOOGLE_OAUTH_CLIENT_SECRET",
+    googleAllowedHostedDomain: process.env.GOOGLE_ALLOWED_HOSTED_DOMAIN?.trim().toLowerCase() || "",
+    githubEnabled: false,
+    githubClientIdRef: "GITHUB_OAUTH_CLIENT_ID",
+    githubClientSecretRef: "GITHUB_OAUTH_CLIENT_SECRET",
+    updatedAt: null,
+  };
+}
+
+function validateSettings(input: Record<string, unknown>, existing: IdentityProviderSettings): IdentityProviderSettings {
   const value = (key: string) => typeof input[key] === "string" ? input[key].trim() : "";
   const reference = (key: string, fallback = "") => {
     const result = value(key) || fallback;
@@ -221,8 +201,6 @@ function validateSettings(tenantId: string, input: Record<string, unknown>, exis
     throw new Error("Google Workspace 域格式无效。");
   }
   return {
-    tenantId,
-    tenantSlug: "",
     smsEnabled: input.smsEnabled === true,
     aliyunSignName: value("aliyunSignName").slice(0, 64),
     aliyunTemplateCode: templateCode,
@@ -242,16 +220,15 @@ function validateSettings(tenantId: string, input: Record<string, unknown>, exis
 }
 
 function mapSettings(row: SettingsRow): IdentityProviderSettings {
+  const context = row.encryption_context || GLOBAL_ENCRYPTION_CONTEXT;
   return {
-    tenantId: row.tenant_id,
-    tenantSlug: row.tenant_slug,
     smsEnabled: Boolean(row.sms_enabled),
     aliyunSignName: row.aliyun_sign_name || "",
     aliyunTemplateCode: row.aliyun_template_code || "",
     aliyunTemplateCodeKey: row.aliyun_template_code_key,
     aliyunAccessKeyId: row.aliyun_access_key_id || "",
-    aliyunAccessKeySecret: openSecret(row.aliyun_access_key_secret_encrypted, secretContext(row.tenant_id, "aliyun-access-key-secret")),
-    smsCodePepper: openSecret(row.sms_code_pepper_encrypted, secretContext(row.tenant_id, "sms-code-pepper")),
+    aliyunAccessKeySecret: openSecret(row.aliyun_access_key_secret_encrypted, secretContext("aliyun-access-key-secret", context)),
+    smsCodePepper: openSecret(row.sms_code_pepper_encrypted, secretContext("sms-code-pepper", context)),
     googleEnabled: Boolean(row.google_enabled),
     googleClientIdRef: row.google_client_id_ref,
     googleClientSecretRef: row.google_client_secret_ref,
@@ -263,6 +240,6 @@ function mapSettings(row: SettingsRow): IdentityProviderSettings {
   };
 }
 
-function secretContext(tenantId: string, field: string) {
-  return `auth-provider-settings:${tenantId}:${field}`;
+function secretContext(field: string, context = GLOBAL_ENCRYPTION_CONTEXT) {
+  return `auth-provider-settings:${context}:${field}`;
 }

@@ -7,15 +7,6 @@ const timestamps = {
   updatedAt: epoch("updated_at").notNull(),
 };
 
-export const tenants = pgTable("tenants", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  slug: text("slug").notNull(),
-  plan: text("plan", { enum: ["starter", "team", "enterprise"] }).notNull().default("team"),
-  status: text("status", { enum: ["active", "suspended"] }).notNull().default("active"),
-  ...timestamps,
-}, (table) => [uniqueIndex("tenants_slug_uq").on(table.slug)]);
-
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
   username: text("username"),
@@ -25,6 +16,7 @@ export const users = pgTable("users", {
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url"),
   status: text("status", { enum: ["invited", "active", "disabled"] }).notNull(),
+  role: text("role", { enum: ["admin", "member"] }).notNull().default("member"),
   lastLoginAt: epoch("last_login_at"),
   ...timestamps,
 }, (table) => [
@@ -32,17 +24,6 @@ export const users = pgTable("users", {
   uniqueIndex("users_username_ci_uq").on(sql`lower(${table.username})`).where(sql`${table.username} IS NOT NULL`),
   uniqueIndex("users_email_uq").on(table.email),
   uniqueIndex("users_phone_uq").on(table.phoneE164),
-]);
-
-export const memberships = pgTable("memberships", {
-  id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  role: text("role", { enum: ["platform_admin", "tenant_admin", "developer", "auditor", "viewer"] }).notNull(),
-  ...timestamps,
-}, (table) => [
-  uniqueIndex("membership_tenant_user_uq").on(table.tenantId, table.userId),
-  index("membership_tenant_idx").on(table.tenantId),
 ]);
 
 export const passwordCredentials = pgTable("password_credentials", {
@@ -57,7 +38,6 @@ export const authSessions = pgTable("auth_sessions", {
   id: text("id").primaryKey(),
   tokenHash: text("token_hash").notNull(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   expiresAt: epoch("expires_at").notNull(),
   createdAt: epoch("created_at").notNull(),
 }, (table) => [
@@ -67,7 +47,6 @@ export const authSessions = pgTable("auth_sessions", {
 
 export const auditLogs = pgTable("audit_logs", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   actorId: text("actor_id"),
   action: text("action").notNull(),
   resourceType: text("resource_type").notNull(),
@@ -75,22 +54,20 @@ export const auditLogs = pgTable("audit_logs", {
   ipHash: text("ip_hash"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   createdAt: epoch("created_at").notNull(),
-}, (table) => [index("audit_tenant_time_idx").on(table.tenantId, table.createdAt)]);
+}, (table) => [index("audit_time_idx").on(table.createdAt)]);
 
 export const releases = pgTable("releases", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   version: text("version").notNull(),
   objectKey: text("object_key").notNull(),
   sha256: text("sha256").notNull(),
-  visibility: text("visibility", { enum: ["public", "tenant", "internal"] }).notNull(),
+  visibility: text("visibility", { enum: ["public", "internal"] }).notNull(),
   ...timestamps,
-}, (table) => [index("releases_tenant_idx").on(table.tenantId)]);
+});
 
 export const agentArtifacts = pgTable("agent_artifacts", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   fileName: text("file_name").notNull(),
   label: text("label").notNull(),
   format: text("format", { enum: ["NSIS"] }).notNull(),
@@ -108,9 +85,8 @@ export const agentArtifacts = pgTable("agent_artifacts", {
   status: text("status", { enum: ["ready", "archived"] }).notNull().default("ready"),
   createdAt: epoch("created_at").notNull(),
 }, (table) => [
-  index("agent_artifacts_tenant_idx").on(table.tenantId),
   uniqueIndex("agent_artifacts_object_key_uq").on(table.objectKey),
-  uniqueIndex("agent_artifacts_tenant_embedded_version_uq").on(table.tenantId, table.embeddedVersion),
+  uniqueIndex("agent_artifacts_embedded_version_uq").on(table.embeddedVersion),
 ]);
 
 export const artifactCleanupQueue = pgTable("artifact_cleanup_queue", {
@@ -120,7 +96,6 @@ export const artifactCleanupQueue = pgTable("artifact_cleanup_queue", {
 
 export const releaseVersions = pgTable("release_versions", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   version: text("version").notNull(),
   channel: text("channel", { enum: ["stable", "beta", "internal"] }).notNull(),
   artifactId: text("artifact_id").notNull().references(() => agentArtifacts.id),
@@ -130,13 +105,12 @@ export const releaseVersions = pgTable("release_versions", {
   publishedAt: epoch("published_at"),
   ...timestamps,
 }, (table) => [
-  index("release_versions_tenant_idx").on(table.tenantId),
-  uniqueIndex("release_versions_tenant_version_uq").on(table.tenantId, table.version, table.channel),
-  uniqueIndex("release_versions_one_published_channel_uq").on(table.tenantId, table.channel).where(sql`${table.status} = 'published'`),
+  uniqueIndex("release_versions_version_uq").on(table.version, table.channel),
+  uniqueIndex("release_versions_one_published_channel_uq").on(table.channel).where(sql`${table.status} = 'published'`),
 ]);
 
 export const releaseSettings = pgTable("release_settings", {
-  tenantId: text("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  id: text("id").primaryKey().default("global"),
   updaterPublicKey: text("updater_public_key").notNull(),
   updaterPublicKeyId: text("updater_public_key_id").notNull(),
   updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
@@ -145,15 +119,13 @@ export const releaseSettings = pgTable("release_settings", {
 
 export const billingPlans = pgTable("billing_plans", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   monthlyPriceCents: integer("monthly_price_cents").notNull(),
   currency: text("currency", { enum: ["CNY", "USD"] }).notNull().default("CNY"),
-  seatLimit: integer("seat_limit").notNull(),
   features: jsonb("features").$type<string[]>().notNull(),
   status: text("status", { enum: ["active", "archived"] }).notNull().default("active"),
   ...timestamps,
-}, (table) => [index("billing_plans_tenant_idx").on(table.tenantId)]);
+});
 
 export const authLoginAttempts = pgTable("auth_login_attempts", {
   keyHash: text("key_hash").primaryKey(),
@@ -205,7 +177,6 @@ export const desktopAuthRequests = pgTable("desktop_auth_requests", {
   clientVersion: text("client_version").notNull(),
   status: text("status", { enum: ["pending", "approved", "denied"] }).notNull(),
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
-  tenantId: text("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
   expiresAt: epoch("expires_at").notNull(),
   approvedAt: epoch("approved_at"),
   consumedAt: epoch("consumed_at"),
@@ -220,7 +191,6 @@ export const desktopSessions = pgTable("desktop_sessions", {
   id: text("id").primaryKey(),
   tokenHash: text("token_hash").notNull(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   deviceName: text("device_name").notNull(),
   clientVersion: text("client_version").notNull(),
   expiresAt: epoch("expires_at").notNull(),
@@ -246,7 +216,8 @@ export const authOidcIdentities = pgTable("auth_oidc_identities", {
 ]);
 
 export const authProviderSettings = pgTable("auth_provider_settings", {
-  tenantId: text("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  id: text("id").primaryKey().default("global"),
+  encryptionContext: text("encryption_context").notNull().default("global"),
   smsEnabled: boolean("sms_enabled").notNull().default(false),
   aliyunSignName: text("aliyun_sign_name"),
   aliyunTemplateCode: text("aliyun_template_code"),
@@ -266,7 +237,6 @@ export const authProviderSettings = pgTable("auth_provider_settings", {
 
 export const forumTopics = pgTable("forum_topics", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   slug: text("slug").notNull(),
@@ -277,14 +247,13 @@ export const forumTopics = pgTable("forum_topics", {
   lastActivityAt: epoch("last_activity_at").notNull(),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("forum_topics_tenant_slug_uq").on(table.tenantId, table.slug),
-  index("forum_topics_tenant_activity_idx").on(table.tenantId, table.lastActivityAt),
+  uniqueIndex("forum_topics_slug_uq").on(table.slug),
+  index("forum_topics_activity_idx").on(table.lastActivityAt),
   index("forum_topics_author_time_idx").on(table.authorId, table.createdAt),
 ]);
 
 export const forumReplies = pgTable("forum_replies", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   topicId: text("topic_id").notNull().references(() => forumTopics.id, { onDelete: "cascade" }),
   authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   body: text("body").notNull(),
@@ -292,13 +261,11 @@ export const forumReplies = pgTable("forum_replies", {
   ...timestamps,
 }, (table) => [
   index("forum_replies_topic_time_idx").on(table.topicId, table.createdAt),
-  index("forum_replies_tenant_time_idx").on(table.tenantId, table.createdAt),
   index("forum_replies_author_time_idx").on(table.authorId, table.createdAt),
 ]);
 
 export const blogPosts = pgTable("blog_posts", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   slug: text("slug").notNull(),
@@ -308,6 +275,6 @@ export const blogPosts = pgTable("blog_posts", {
   publishedAt: epoch("published_at"),
   ...timestamps,
 }, (table) => [
-  uniqueIndex("blog_posts_tenant_slug_uq").on(table.tenantId, table.slug),
-  index("blog_posts_tenant_status_time_idx").on(table.tenantId, table.status, table.publishedAt),
+  uniqueIndex("blog_posts_slug_uq").on(table.slug),
+  index("blog_posts_status_time_idx").on(table.status, table.publishedAt),
 ]);

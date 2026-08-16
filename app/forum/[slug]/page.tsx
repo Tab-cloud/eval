@@ -37,7 +37,7 @@ export default async function ForumTopicPage({ params }: { params: Promise<{ slu
         {data.topic.status === "open" ? <ReplyComposer topicId={data.topic.id}/> : <div className="topic-locked-note">管理员已锁定该主题，现有内容仍可阅读，但不再接受新回复。</div>}
       </section>
     </main>
-    <footer className="content-footer"><span>EVAL AGENT / ENGINEERING COMMUNITY</span><Link href="/forum">返回论坛</Link><span>{user.tenantName}</span></footer>
+      <footer className="content-footer"><span>EVAL AGENT / ENGINEERING COMMUNITY</span><Link href="/forum">返回论坛</Link><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2024097468号-10</a></footer>
   </div>;
 }
 

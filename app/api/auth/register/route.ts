@@ -5,7 +5,6 @@ import {
   sessionCookie,
 } from "../../../auth/core";
 import { normalizeChinesePhone } from "../../../auth/phone";
-import { identityProviderSettings } from "../../../auth/provider-settings";
 import { SmsConfigurationError, verifySmsCode } from "../../../auth/sms";
 import { rejectCrossSiteWrite } from "../../../security/request";
 
@@ -22,11 +21,10 @@ export async function POST(request: Request) {
   if (!phone || !/^\d{6}$/.test(code)) return Response.json({ error: "手机号或验证码无效。" }, { status: 400 });
   if (!validPassword(password)) return Response.json({ error: "密码至少 10 位，并同时包含字母与数字。" }, { status: 400 });
   try {
-    const settings = await identityProviderSettings();
-    if (!await verifySmsCode("register", phone, code, settings.tenantId)) {
+    if (!await verifySmsCode("register", phone, code)) {
       return Response.json({ error: "验证码错误或已过期。" }, { status: 401 });
     }
-    const user = await registerChineseAccount({ username, phoneE164: phone, password, tenantId: settings.tenantId });
+    const user = await registerChineseAccount({ username, phoneE164: phone, password });
     if (!user) return Response.json({ error: "账号创建失败。" }, { status: 500 });
     const token = await createSession(user);
     return Response.json(

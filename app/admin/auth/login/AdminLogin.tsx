@@ -121,11 +121,11 @@ export function AdminLogin() {
           <button className="admin-auth-submit" type="submit" disabled={loading}>
             <span>{loading ? "正在验证身份…" : "进入管理员控制室"}</span><Icon name="arrow"/>
           </button>
-          <div className="admin-auth-policy"><Icon name="shield"/><p>该入口不会创建账号。登录身份必须已启用，并拥有租户管理员或平台管理员权限。</p></div>
+          <div className="admin-auth-policy"><Icon name="shield"/><p>该入口不会创建账号。登录身份必须已启用，并拥有管理员权限。</p></div>
         </form>
       </section>
 
-      <footer><span>正在连接（杭州）科技有限公司</span><i/><span>GOVERNED OPERATIONS</span></footer>
+      <footer><span>EVAL AGENT</span><i/><span>GOVERNED OPERATIONS</span></footer>
     </main>
   );
 }
