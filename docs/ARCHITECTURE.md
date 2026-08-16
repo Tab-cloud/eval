@@ -63,7 +63,7 @@ PostgreSQL 保存租户、用户、手机号、成员关系、短信挑战、OAu
 - RBAC：`platform_admin`、`tenant_admin`、`developer`、`auditor`、`viewer`。
 - 账号注册、身份绑定、管理员写操作、密码修改和桌面端授权操作进入租户审计日志；审计元数据中的手机号只保留掩码。
 
-管理员平台的“登录与身份”模块保存短信签名、模板代码、Google Workspace 域，以及 Google/GitHub OAuth 部署变量引用。AccessKey、OAuth Client Secret 与验证码 Pepper 只通过 ECS 环境变量注入；数据库和管理员接口只返回变量是否已配置。
+管理员平台的“登录与身份”模块保存短信签名、模板代码、阿里云 AccessKey ID、Google Workspace 域，以及 Secret/Pepper/OAuth 凭据的部署变量引用。AccessKey ID 不是秘密，可由管理员直接填写；AccessKey Secret、OAuth Client Secret 与验证码 Pepper 仍只通过 ECS 环境变量注入，数据库和管理员接口只返回这些敏感变量是否已配置。
 
 ## 论坛与博客
 

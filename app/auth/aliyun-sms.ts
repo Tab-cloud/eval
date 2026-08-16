@@ -51,7 +51,8 @@ export async function sendLoginVerificationCode(tenantId: string, phoneE164: str
   let accessKeyId: string;
   let accessKeySecret: string;
   try {
-    accessKeyId = environmentValue(settings.aliyunAccessKeyIdRef);
+    accessKeyId = settings.aliyunAccessKeyId;
+    if (!accessKeyId) throw new Error("管理员平台尚未保存阿里云 AccessKey ID。");
     accessKeySecret = environmentValue(settings.aliyunAccessKeySecretRef);
   } catch (error) {
     throw new SmsConfigurationError(error instanceof Error ? error.message : "阿里云短信凭据尚未配置。");

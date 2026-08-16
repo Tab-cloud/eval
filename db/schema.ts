@@ -251,7 +251,7 @@ export const authProviderSettings = pgTable("auth_provider_settings", {
   aliyunSignName: text("aliyun_sign_name"),
   aliyunTemplateCode: text("aliyun_template_code"),
   aliyunTemplateCodeKey: text("aliyun_template_code_key").notNull().default("code"),
-  aliyunAccessKeyIdRef: text("aliyun_access_key_id_ref").notNull().default("ALIBABA_CLOUD_ACCESS_KEY_ID"),
+  aliyunAccessKeyId: text("aliyun_access_key_id"),
   aliyunAccessKeySecretRef: text("aliyun_access_key_secret_ref").notNull().default("ALIBABA_CLOUD_ACCESS_KEY_SECRET"),
   smsCodePepperRef: text("sms_code_pepper_ref").notNull().default("AUTH_SMS_CODE_PEPPER"),
   googleEnabled: boolean("google_enabled").notNull().default(false),

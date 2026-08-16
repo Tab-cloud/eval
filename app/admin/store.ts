@@ -211,7 +211,7 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     await recordAudit(db, user, "auth.providers.save", "auth_provider_settings", user.tenantId, {
       smsEnabled: settings.smsEnabled,
       googleEnabled: settings.googleEnabled,
-      aliyunAccessKeyIdRef: settings.aliyunAccessKeyIdRef,
+      aliyunAccessKeyIdConfigured: Boolean(settings.aliyunAccessKeyId),
       aliyunAccessKeySecretRef: settings.aliyunAccessKeySecretRef,
       smsCodePepperRef: settings.smsCodePepperRef,
       googleClientIdRef: settings.googleClientIdRef,

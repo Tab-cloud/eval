@@ -238,7 +238,8 @@ test("SMS verification uses Alibaba Cloud, purpose-bound hashed codes, and datab
   assert.match(provider, /dysmsapi\.aliyuncs\.com/);
   assert.match(provider, /environmentValue/);
   assert.match(provider, /tenantProviderSettings/);
-  assert.match(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
+  assert.match(settings, /aliyunAccessKeyId/);
+  assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.match(settings, /AUTH_SMS_CODE_PEPPER/);
   assert.match(sms, /smsCodePepperRef/);
   assert.match(sms, /challengeCodeHash/);
@@ -345,8 +346,8 @@ test("personal center exposes locale-specific identities and binds them to one u
   assert.match(css, /\.identity-form-panel/);
 });
 
-test("admin identity settings store only deployment references and drive all login providers", async () => {
-  const [consoleUi, identityUi, settings, store, google, github, sms, schema, config] = await Promise.all([
+test("admin identity settings accept a direct AccessKey ID while keeping secrets in deployment references", async () => {
+  const [consoleUi, identityUi, settings, store, google, github, sms, schema, config, migration] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
     source("../app/admin/AuthSettingsView.tsx"),
     source("../app/auth/provider-settings.ts"),
@@ -356,23 +357,41 @@ test("admin identity settings store only deployment references and drive all log
     source("../app/auth/aliyun-sms.ts"),
     source("../db/schema.ts"),
     source("../.env.example"),
+    source("../drizzle/0013_fluffy_punisher.sql"),
   ]);
   assert.match(consoleUi, /登录与身份/);
   assert.match(consoleUi, /AuthSettingsView/);
+  assert.match(identityUi, /name="aliyunAccessKeyId"/);
+  assert.match(identityUi, /type="password"/);
+  assert.match(identityUi, /defaultValue=""/);
+  assert.match(identityUi, /只填写 LTAI\.\.\. 的真实 ID/);
+  assert.match(identityUi, /真实值不会回显；留空将保留当前配置/);
+  assert.doesNotMatch(identityUi, /AccessKey ID 变量/);
   assert.match(identityUi, /aliyunAccessKeySecretRef/);
   assert.match(identityUi, /googleClientSecretRef/);
   assert.match(identityUi, /githubClientSecretRef/);
   assert.match(identityUi, /githubCallbackUrl/);
   assert.doesNotMatch(identityUi, /name="(?:accessKeySecret|clientSecret)"/);
   assert.match(settings, /process\.env\[reference\]/);
+  assert.match(settings, /const \{ aliyunAccessKeyId, \.\.\.safeSettings \} = settings/);
+  assert.match(settings, /aliyunAccessKeyIdMasked/);
+  assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.match(settings, /saveTenantProviderSettings/);
   assert.match(store, /auth\.providers\.save/);
+  assert.match(store, /aliyunAccessKeyIdConfigured/);
+  assert.doesNotMatch(store, /aliyunAccessKeyId:\s*settings\.aliyunAccessKeyId/);
   assert.match(google, /identityProviderSettings/);
   assert.match(github, /identityProviderSettings/);
   assert.match(sms, /tenantProviderSettings/);
+  assert.match(sms, /accessKeyId = settings\.aliyunAccessKeyId/);
   assert.match(schema, /authProviderSettings/);
+  assert.match(schema, /aliyunAccessKeyId/);
+  assert.doesNotMatch(schema, /aliyunAccessKeyIdRef/);
+  assert.match(migration, /ADD COLUMN "aliyun_access_key_id" text/);
+  assert.match(migration, /DROP COLUMN "aliyun_access_key_id_ref"/);
   assert.match(config, /EVAL_IDENTITY_TENANT_SLUG/);
   assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
+  assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
 });
 
 test("public blog exposes only published posts from the configured content tenant", async () => {

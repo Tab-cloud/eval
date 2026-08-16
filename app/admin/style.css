@@ -329,6 +329,7 @@
 .auth-field > span { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .auth-field input { width: 100%; min-height: 45px; padding: 0 13px; border: 1px solid var(--line-strong); background: var(--surface-muted); color: var(--primary); font: 10px var(--font-mono); outline: none; }
 .auth-field input:focus { border-color: var(--admin-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--admin-accent) 9%, transparent); }
+.auth-protected-field > small { color: var(--muted); font-size: 8px; line-height: 1.5; }
 .auth-env-field i { padding: 3px 6px; border: 1px solid var(--line); font: 650 7px var(--font-mono); font-style: normal; letter-spacing: .08em; }
 .auth-env-field i.configured { color: var(--admin-green); border-color: color-mix(in srgb, var(--admin-green) 35%, var(--line)); }
 .auth-env-field i.missing { color: #ffb94c; border-color: color-mix(in srgb, #ffb94c 35%, var(--line)); }

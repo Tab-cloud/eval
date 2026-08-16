@@ -11,7 +11,8 @@ export type AuthSettingsSnapshot = {
   aliyunSignName: string;
   aliyunTemplateCode: string;
   aliyunTemplateCodeKey: string;
-  aliyunAccessKeyIdRef: string;
+  aliyunAccessKeyIdConfigured: boolean;
+  aliyunAccessKeyIdMasked: string;
   aliyunAccessKeySecretRef: string;
   smsCodePepperRef: string;
   googleEnabled: boolean;
@@ -88,7 +89,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
           <Field label="短信签名名称"><input name="aliyunSignName" defaultValue={settings.aliyunSignName} placeholder="已通过阿里云审核的签名"/></Field>
           <Field label="短信模板代码"><input name="aliyunTemplateCode" defaultValue={settings.aliyunTemplateCode} placeholder="SMS_123456789"/></Field>
           <Field label="模板验证码变量"><input name="aliyunTemplateCodeKey" defaultValue={settings.aliyunTemplateCodeKey} pattern="[A-Za-z][A-Za-z0-9_]{0,31}" required/></Field>
-          <EnvironmentField label="AccessKey ID 变量" name="aliyunAccessKeyIdRef" value={settings.aliyunAccessKeyIdRef} configured={settings.smsEnvironment.accessKeyId}/>
+          <ProtectedValueField label="AccessKey ID" name="aliyunAccessKeyId" configured={settings.aliyunAccessKeyIdConfigured} masked={settings.aliyunAccessKeyIdMasked}/>
           <EnvironmentField label="AccessKey Secret 变量" name="aliyunAccessKeySecretRef" value={settings.aliyunAccessKeySecretRef} configured={settings.smsEnvironment.accessKeySecret}/>
           <EnvironmentField label="验证码 Pepper 变量" name="smsCodePepperRef" value={settings.smsCodePepperRef} configured={settings.smsEnvironment.pepper}/>
         </div>
@@ -127,7 +128,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       </ProviderForm>
 
       <section className="auth-secret-policy">
-        <div><Icon name="shield"/><span><b>凭据隔离</b><small>这里只保存环境变量名称。AccessKey、Client Secret 和 Pepper 不会进入 PostgreSQL、审计日志或浏览器响应。</small></span></div>
+        <div><Icon name="shield"/><span><b>凭据隔离</b><small>AccessKey ID 直接保存但不会明文回显或写入审计日志；AccessKey Secret、OAuth Client Secret 和 Pepper 仍只保存环境变量名称。</small></span></div>
         <button disabled={busy} type="submit">{busy ? "正在保存…" : "保存登录配置"}<Icon name="arrow"/></button>
       </section>
     </form>
@@ -159,5 +160,13 @@ function EnvironmentField({ label, name, value, configured }: { label: string; n
   return <label className="auth-field auth-env-field">
     <span>{label}<i className={configured ? "configured" : "missing"}>{configured ? "已注入" : "未注入"}</i></span>
     <input name={name} defaultValue={value} pattern="[A-Z][A-Z0-9_]{2,63}" required/>
+  </label>;
+}
+
+function ProtectedValueField({ label, name, configured, masked }: { label: string; name: string; configured: boolean; masked: string }) {
+  return <label className="auth-field auth-env-field auth-protected-field">
+    <span>{label}<i className={configured ? "configured" : "missing"}>{configured ? "已保存" : "未配置"}</i></span>
+    <input name={name} type="password" defaultValue="" placeholder={configured ? masked || "••••••••" : "只填写 LTAI... 的真实 ID"} pattern="[A-Za-z0-9]{16,128}" autoComplete="off"/>
+    <small>{configured ? "真实值不会回显；留空将保留当前配置" : "保存后只显示掩码，不会再次返回真实值"}</small>
   </label>;
 }

@@ -49,7 +49,6 @@ EVAL_PUBLIC_CONTENT_TENANT_SLUG=connecting-hangzhou
 ARTIFACT_STORAGE_PATH=/srv/eval-web/artifacts
 EVAL_ENABLE_SEEDED_ACCOUNTS=false
 EVAL_ENABLE_PASSWORD_LOGIN=false
-ALIBABA_CLOUD_ACCESS_KEY_ID=replace-with-server-side-credential
 ALIBABA_CLOUD_ACCESS_KEY_SECRET=replace-with-server-side-credential
 ALIYUN_SMS_SIGN_NAME=已审核短信签名
 ALIYUN_SMS_TEMPLATE_CODE=已审核验证码模板代码
@@ -74,7 +73,7 @@ sudo chmod 0640 /etc/eval-web/eval-web.env
 
 不要把数据库密码、证书、短信凭据或 OAuth Secret 提交到 Git。
 
-阿里云短信签名和验证码模板必须先审核通过，RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，并把授权回调 URI 精确配置为：
+阿里云短信签名和验证码模板必须先审核通过。管理员平台的“AccessKey ID”输入框只填写 `LTAI...` 形式的真实 ID，不填写变量名或 `ALIBABA_CLOUD_ACCESS_KEY_ID=` 前缀；保存后页面只返回掩码，留空不会覆盖已有值。AccessKey Secret 和验证码 Pepper 仍通过环境变量注入。RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，并把授权回调 URI 精确配置为：
 
 ```text
 https://eval.zailink.space/api/auth/google/callback
