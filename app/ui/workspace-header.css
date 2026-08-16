@@ -2,7 +2,7 @@
 .workspace-brand { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--text); display: flex; align-items: center; gap: 11px; cursor: pointer; text-decoration: none; }
 .workspace-brand span,.workspace-brand b,.workspace-brand small { display: block; text-align: left; }
 .workspace-brand b { font-size: 14px; letter-spacing: -.02em; }
-.workspace-brand small { color: var(--tertiary); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+.workspace-brand small { color: var(--tertiary); font-size: var(--font-micro); letter-spacing: .14em; text-transform: uppercase; }
 .workspace-header > nav { display: flex; justify-content: center; gap: 4px; }
 .workspace-header > nav :is(button,a) { min-height: 38px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: var(--secondary); display: flex; align-items: center; gap: 7px; cursor: pointer; text-decoration: none; }
 .workspace-header > nav :is(button,a):hover,.workspace-header > nav :is(button,a).active { background: var(--surface-solid); color: var(--text); box-shadow: 0 3px 14px rgba(0,0,0,.05); }
@@ -12,15 +12,15 @@
 .workspace-actions > a:hover { color: var(--text); }
 .workspace-icon-button,.workspace-avatar { width: 35px; height: 35px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; }
 .workspace-icon-button svg { width: 15px; }
-.workspace-avatar { border: 0; background: #174765; color: white; font-size: 10px; font-weight: 700; }
+.workspace-avatar { border: 0; background: #174765; color: white; font-size: var(--font-caption); font-weight: 700; }
 .workspace-account { position: absolute; right: 0; top: 46px; width: 270px; padding: 19px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-solid); box-shadow: 0 24px 70px rgba(0,0,0,.16); display: grid; gap: 5px; }
 .workspace-account > strong { font-size: 15px; }
-.workspace-account > span,.workspace-account > small { color: var(--secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.workspace-account > span,.workspace-account > small { color: var(--secondary); font-size: var(--font-caption); overflow: hidden; text-overflow: ellipsis; }
 .workspace-account > small { margin-bottom: 10px; }
 .workspace-account a,.workspace-account button { min-height: 40px; padding: 0; border: 0; border-top: 1px solid var(--line); background: transparent; display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--text); cursor: pointer; }
 .workspace-account svg { width: 15px; }
 .workspace-mobile-nav { display: none; }
-.workspace-header-error { position: fixed; z-index: 80; top: 82px; right: 24px; min-height: 42px; padding: 0 16px; border: 1px solid color-mix(in srgb,var(--orange) 45%,var(--line)); border-radius: 12px; background: var(--surface-solid); color: var(--orange); display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow); font-size: 11px; }
+.workspace-header-error { position: fixed; z-index: 80; top: 82px; right: 24px; min-height: 42px; padding: 0 16px; border: 1px solid color-mix(in srgb,var(--orange) 45%,var(--line)); border-radius: 12px; background: var(--surface-solid); color: var(--orange); display: flex; align-items: center; gap: 8px; box-shadow: var(--shadow); font-size: var(--font-caption); }
 .workspace-header-error svg { width: 14px; }
 
 @media(max-width:900px) {
@@ -28,7 +28,7 @@
   .workspace-header > nav { display: none; }
   .workspace-actions > a { display: none; }
   .workspace-mobile-nav { position: fixed; z-index: 65; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); min-height: 62px; padding: 6px; border: 1px solid var(--line); border-radius: 20px; background: color-mix(in srgb,var(--surface-solid) 90%,transparent); backdrop-filter: blur(20px); display: grid; grid-template-columns: repeat(5,1fr); box-shadow: 0 18px 55px rgba(0,0,0,.18); }
-  .workspace-mobile-nav :is(button,a) { min-width: 44px; min-height: 44px; border: 0; border-radius: 14px; background: transparent; color: var(--tertiary); display: grid; place-items: center; align-content: center; gap: 3px; font-size: 9px; text-decoration: none; }
+  .workspace-mobile-nav :is(button,a) { min-width: 44px; min-height: 44px; border: 0; border-radius: 14px; background: transparent; color: var(--tertiary); display: grid; place-items: center; align-content: center; gap: 3px; font-size: var(--font-micro); text-decoration: none; }
   .workspace-mobile-nav :is(button,a).active { background: var(--surface-muted); color: var(--text); }
   .workspace-mobile-nav svg { width: 17px; }
 }

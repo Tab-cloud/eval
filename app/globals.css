@@ -18,6 +18,8 @@
   --shadow: 0 12px 38px rgba(0, 0, 0, .055);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --font-micro: 12px;
+  --font-caption: 12px;
 }
 
 html[data-theme="dark"] {

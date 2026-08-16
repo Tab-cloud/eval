@@ -58,6 +58,33 @@ test("keeps public download metadata readable across responsive layouts", async 
   assert.match(css, /\.closing-scene footer \{[^}]*justify-content:\s*center/);
 });
 
+test("keeps user-visible text above the global readability floor", async () => {
+  const paths = [
+    "../app/globals.css",
+    "../app/ui/workspace-header.css",
+    "../app/device/style.css",
+    "../app/content/style.css",
+    "../app/console/style.css",
+    "../app/login/style.css",
+    "../app/agent/landing.css",
+    "../app/docs/style.css",
+    "../app/admin/style.css",
+    "../app/admin/auth/login/style.css",
+  ];
+  const styles = await Promise.all(paths.map(source));
+  assert.match(styles[0], /--font-micro:\s*12px/);
+  assert.match(styles[0], /--font-caption:\s*12px/);
+
+  const directTooSmall = /(?:font-size\s*:\s*|font\s*:\s*[^;{}]*?)(?<![\d.])(?:[0-9](?:\.\d+)?|1[01])px\b/;
+  for (const [index, css] of styles.entries()) {
+    assert.doesNotMatch(css, directTooSmall, `${paths[index]} contains text smaller than 12px`);
+  }
+
+  assert.match(styles[3], /\.content-footer \{[^}]*font:\s*500 var\(--font-caption\)/);
+  assert.match(styles[7], /\.docs-page footer \{[^}]*font:\s*500 var\(--font-caption\)/);
+  assert.match(styles[8], /\.admin-frame > footer \{[^}]*font:\s*600 var\(--font-caption\)/);
+});
+
 test("admin has a dedicated username login that never grants normal users control-plane access", async () => {
   const [page, client, route, core, store, schema, migration, css] = await Promise.all([
     source("../app/admin/auth/login/page.tsx"),
@@ -287,9 +314,9 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /payload\.code === "ACCOUNT_SETUP_REQUIRED"/);
   assert.match(login, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>浙ICP备2024097468号-10<\/a>/);
   assert.doesNotMatch(login, /正在连接（杭州）科技有限公司|CONNECTING \(HANGZHOU\) TECHNOLOGY|© 2026/);
-  assert.match(loginCss, /\.trust span \{[^}]*font: 560 11px\/1\.4/);
+  assert.match(loginCss, /\.trust span \{[^}]*font: 560 var\(--font-caption\)\/1\.4/);
   assert.match(loginCss, /\.login-copy-foot p \{[^}]*font-size: 12px/);
-  assert.match(loginCss, /\.login-page > footer \{[^}]*font: 550 9px/);
+  assert.match(loginCss, /\.login-page > footer \{[^}]*font: 550 var\(--font-caption\)/);
   assert.doesNotMatch(login + loginCss, /ORGANIZATION|团队空间|租户|组织/);
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });

@@ -3,20 +3,20 @@
 .device-brand { display: flex; align-items: center; gap: 10px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
 .device-brand span { width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(135deg,var(--blue),color-mix(in srgb,var(--blue) 38%,var(--green))); box-shadow: 0 0 20px color-mix(in srgb,var(--blue) 30%,transparent); }
 .device-brand strong { font: 620 14px var(--font-mono); }
-.device-kicker { margin: 28px 0 8px; color: var(--blue); font: 600 8px var(--font-mono); letter-spacing: .15em; }
+.device-kicker { margin: 28px 0 8px; color: var(--blue); font: 600 var(--font-micro) var(--font-mono); letter-spacing: .15em; }
 .device-card h1 { margin: 0; font-size: 32px; letter-spacing: -.04em; }
 .device-card > p:not(.device-kicker) { color: var(--secondary); font-size: 12px; line-height: 1.75; }
 .device-card dl { margin: 26px 0; border-top: 1px solid var(--line); }
 .device-card dl div { min-height: 54px; padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 90px 1fr; align-items: center; }
-.device-card dt { color: var(--tertiary); font: 600 9px var(--font-mono); }
+.device-card dt { color: var(--tertiary); font: 600 var(--font-micro) var(--font-mono); }
 .device-card dd { margin: 0; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
-.device-card dd small { display: block; margin-top: 3px; color: var(--tertiary); font-size: 10px; }
+.device-card dd small { display: block; margin-top: 3px; color: var(--tertiary); font-size: var(--font-caption); }
 .device-card .device-code { color: var(--blue); font: 650 18px var(--font-mono); letter-spacing: .12em; }
 .device-primary,.device-secondary { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: center; text-decoration: none; font-size: 12px; cursor: pointer; }
 .device-primary { border: 0; background: var(--blue); color: white; font-weight: 620; }
 .device-primary:disabled { cursor: wait; opacity: .62; }
 .device-secondary { margin-top: 10px; border: 1px solid var(--line); color: var(--secondary); }
 .device-secondary:hover { color: var(--text); border-color: var(--line-strong); }
-.device-error { margin: 0 0 16px; padding: 11px 12px; border-left: 2px solid #ff5b57; background: rgba(255,91,87,.08); color: color-mix(in srgb,#ff5b57 76%,var(--text)); font-size: 11px; }
+.device-error { margin: 0 0 16px; padding: 11px 12px; border-left: 2px solid #ff5b57; background: rgba(255,91,87,.08); color: color-mix(in srgb,#ff5b57 76%,var(--text)); font-size: var(--font-caption); }
 .device-status.success { width: 34px; height: 34px; margin-top: 28px; border: 2px solid var(--green); border-radius: 50%; box-shadow: 0 0 22px color-mix(in srgb,var(--green) 30%,transparent); }
 @media (max-width: 470px) { .device-page { padding: 16px; }.device-card { padding: 26px 22px; }.device-card dl div { grid-template-columns: 72px 1fr; } }
