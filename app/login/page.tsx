@@ -63,6 +63,7 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [chineseMethod, setChineseMethod] = useState<ChineseMethod>("sms");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -135,6 +136,7 @@ export default function LoginPage() {
     const next: Locale = locale === "zh" ? "en" : "zh";
     setLocale(next);
     setCheckingPhone(false);
+    setPasswordVisible(false);
     setError("");
     setNotice("");
     localStorage.setItem("eval-locale", next);
@@ -288,7 +290,7 @@ export default function LoginPage() {
             <h2>{chineseMethod === "register" ? "注册 Eval Agent" : "登录 Eval Agent"}</h2>
             <p>{chineseMethod === "register" ? "验证手机号并设置账号密码，完成后可继续绑定 GitHub。" : "手机号验证码、账号密码或 GitHub 均可进入同一账号。"}</p>
             <div className="login-method-tabs" role="tablist" aria-label="登录方式">
-              {(["sms", "password", "register"] as const).map(method => <button key={method} type="button" className={chineseMethod === method ? "active" : ""} onClick={() => { setChineseMethod(method); setCheckingPhone(false); setError(""); setNotice(""); setCode(""); }}>
+              {(["sms", "password", "register"] as const).map(method => <button key={method} type="button" className={chineseMethod === method ? "active" : ""} onClick={() => { setChineseMethod(method); setCheckingPhone(false); setPasswordVisible(false); setError(""); setNotice(""); setCode(""); }}>
                 {method === "sms" ? "手机验证码" : method === "password" ? "账号密码" : "注册账号"}
               </button>)}
             </div>
@@ -300,13 +302,13 @@ export default function LoginPage() {
             </form>}
             {chineseMethod === "password" && <form onSubmit={completeUsernameLogin}>
               <label>账号<input required value={username} onChange={event => setUsername(event.target.value)} name="username" type="text" placeholder="请输入账号" autoComplete="username" minLength={3} maxLength={32}/></label>
-              <label>密码<input required value={password} onChange={event => setPassword(event.target.value)} name="password" type="password" placeholder="请输入密码" autoComplete="current-password" minLength={10} maxLength={128}/></label>
+              <div className="password-field-group"><label htmlFor="login-password">密码</label><div className="password-field"><input id="login-password" required value={password} onChange={event => setPassword(event.target.value)} name="password" type={passwordVisible ? "text" : "password"} placeholder="请输入密码" autoComplete="current-password" minLength={10} maxLength={128}/><button type="button" className="password-toggle" onClick={() => setPasswordVisible(value => !value)} aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} title={passwordVisible ? "隐藏密码" : "显示密码"}><Icon name={passwordVisible ? "eyeOff" : "eye"}/></button></div></div>
               {error && <div className="login-error" role="alert">{error}</div>}
               <button type="submit" className="login-submit" disabled={loading}>{loading ? "正在登录…" : <>账号登录 <Icon name="arrow"/></>}</button>
             </form>}
             {chineseMethod === "register" && <form onSubmit={completeRegistration}>
               <label>账号<input required value={username} onChange={event => setUsername(event.target.value)} name="username" type="text" placeholder="3–32 位账号" autoComplete="username" minLength={3} maxLength={32}/></label>
-              <label>设置密码<input required value={password} onChange={event => setPassword(event.target.value)} name="password" type="password" placeholder="至少 10 位，包含字母与数字" autoComplete="new-password" minLength={10} maxLength={128}/></label>
+              <div className="password-field-group"><label htmlFor="register-password">设置密码</label><div className="password-field"><input id="register-password" required value={password} onChange={event => setPassword(event.target.value)} name="password" type={passwordVisible ? "text" : "password"} placeholder="至少 10 位，包含字母与数字" autoComplete="new-password" minLength={10} maxLength={128}/><button type="button" className="password-toggle" onClick={() => setPasswordVisible(value => !value)} aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} title={passwordVisible ? "隐藏密码" : "显示密码"}><Icon name={passwordVisible ? "eyeOff" : "eye"}/></button></div></div>
               <label>手机号<input required value={phone} onChange={event => { setPhone(event.target.value); setCode(""); setNotice(""); }} name="phone" type="tel" placeholder="中国大陆手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
               <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("register")} disabled={sending || countdown > 0 || phone.trim().length < 11}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
               {notice && <div className="login-notice" role="status">{notice}</div>}{error && <div className="login-error" role="alert">{error}</div>}

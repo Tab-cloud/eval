@@ -244,6 +244,12 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /手机号验证/);
   assert.match(login, /注册账号/);
   assert.match(login, /账号密码/);
+  assert.match(login, /id="login-password"/);
+  assert.match(login, /id="register-password"/);
+  assert.match(login, /type=\{passwordVisible \? "text" : "password"\}/);
+  assert.match(login, /aria-label=\{passwordVisible \? "隐藏密码" : "显示密码"\}/);
+  assert.match(login, /name=\{passwordVisible \? "eyeOff" : "eye"\}/);
+  assert.match(loginCss, /\.password-toggle \{[^}]*width: 46px;[^}]*height: 46px/);
   assert.match(login, /Only Google and GitHub are available for English accounts/);
   assert.match(login, /fetch\("\/api\/auth\/phone\/status"/);
   assert.match(login, /payload\.status === "registration_required"/);
