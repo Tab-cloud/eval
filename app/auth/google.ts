@@ -1,9 +1,14 @@
 import { OAuth2Client } from "google-auth-library";
 import {
   authDatabase,
+  cookieToken,
   createSession,
   ensureAuthSchema,
-  findOrLinkGoogleUser,
+  ExternalIdentityConflictError,
+  ExternalIdentityPolicyError,
+  getSessionUser,
+  linkExternalIdentity,
+  loginOrCreateExternalUser,
   sessionCookie,
   type AuthenticatedUser,
 } from "./core";
@@ -16,10 +21,14 @@ const GOOGLE_STATE_TTL_SECONDS = 10 * 60;
 export class GoogleConfigurationError extends Error {}
 export class GoogleAuthenticationError extends Error {
   readonly reason: string;
+  readonly returnPath: string;
+  readonly locale: "zh" | "en";
 
-  constructor(reason: string) {
+  constructor(reason: string, context?: { returnPath?: string; locale?: string }) {
     super(reason);
     this.reason = reason;
+    this.returnPath = safeReturnPath(context?.returnPath);
+    this.locale = context?.locale === "zh" ? "zh" : "en";
   }
 }
 
@@ -28,8 +37,21 @@ export async function beginGoogleAuthorization(request: Request) {
   const { clientId } = await googleConfiguration();
   const redirectUri = `${applicationOrigin(request)}/api/auth/google/callback`;
   const requestUrl = new URL(request.url);
-  const returnPath = safeReturnPath(requestUrl.searchParams.get("returnTo"));
-  const locale = requestUrl.searchParams.get("lang") === "zh" ? "zh" : "en";
+  const intent = requestUrl.searchParams.get("intent") === "link" ? "link" : "login";
+  let returnPath = safeReturnPath(requestUrl.searchParams.get("returnTo"));
+  let locale: "zh" | "en" = requestUrl.searchParams.get("lang") === "zh" ? "zh" : "en";
+  let linkUserId: string | null = null;
+  if (intent === "login" && locale !== "en") {
+    throw new GoogleAuthenticationError("provider_not_allowed", { returnPath, locale });
+  }
+  if (intent === "link") {
+    const current = await getSessionUser(cookieToken(request));
+    if (!current) throw new GoogleAuthenticationError("link_session_required", { returnPath, locale });
+    if (current.accountLocale !== "en") throw new GoogleAuthenticationError("provider_not_allowed", { returnPath, locale });
+    linkUserId = current.id;
+    locale = current.accountLocale;
+    returnPath = "/console?view=profile";
+  }
   const state = randomBase64Url(32);
   const nonce = randomBase64Url(32);
   const codeVerifier = randomBase64Url(64);
@@ -39,8 +61,8 @@ export async function beginGoogleAuthorization(request: Request) {
   await db.batch([
     db.prepare("DELETE FROM auth_oauth_states WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now - 60 * 60),
     db.prepare(
-      "INSERT INTO auth_oauth_states (state_hash, provider, locale, code_verifier, nonce, redirect_uri, return_path, expires_at, consumed_at, created_at) VALUES (?, 'google', ?, ?, ?, ?, ?, ?, NULL, ?)",
-    ).bind(await sha256Hex(state), locale, codeVerifier, nonce, redirectUri, returnPath, now + GOOGLE_STATE_TTL_SECONDS, now),
+      "INSERT INTO auth_oauth_states (state_hash, provider, locale, code_verifier, nonce, redirect_uri, return_path, intent, link_user_id, expires_at, consumed_at, created_at) VALUES (?, 'google', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+    ).bind(await sha256Hex(state), locale, codeVerifier, nonce, redirectUri, returnPath, intent, linkUserId, now + GOOGLE_STATE_TTL_SECONDS, now),
   ]);
 
   const authorization = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -62,13 +84,13 @@ export async function beginGoogleAuthorization(request: Request) {
   };
 }
 
-export async function finishGoogleAuthorization(request: Request): Promise<{ user: AuthenticatedUser; session: string; returnPath: string }> {
+export async function finishGoogleAuthorization(request: Request): Promise<{ user: AuthenticatedUser; session?: string; returnPath: string; linked?: "google" }> {
   await ensureAuthSchema();
   const url = new URL(request.url);
   const state = url.searchParams.get("state") ?? "";
   const code = url.searchParams.get("code") ?? "";
   const cookieState = cookieValue(request, GOOGLE_STATE_COOKIE);
-  if (!state || !code || !cookieState || !timingSafeStringEqual(state, cookieState)) {
+  if (!state || !cookieState || !timingSafeStringEqual(state, cookieState)) {
     throw new GoogleAuthenticationError("invalid_state");
   }
 
@@ -77,12 +99,18 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
     UPDATE auth_oauth_states
     SET consumed_at = ?
     WHERE state_hash = ? AND provider = 'google' AND consumed_at IS NULL AND expires_at > ?
-    RETURNING code_verifier, nonce, redirect_uri, return_path
+    RETURNING code_verifier, nonce, redirect_uri, return_path, locale, intent, link_user_id
   `).bind(now, await sha256Hex(state), now).run();
-  const stored = stateResult.results[0] as { code_verifier?: string; nonce?: string; redirect_uri?: string; return_path?: string } | undefined;
+  const stored = stateResult.results[0] as { code_verifier?: string; nonce?: string; redirect_uri?: string; return_path?: string; locale?: string; intent?: string; link_user_id?: string } | undefined;
   if (!stored?.code_verifier || !stored.nonce || !stored.redirect_uri) {
     throw new GoogleAuthenticationError("expired_state");
   }
+  const context = { returnPath: stored.return_path, locale: stored.locale };
+  const providerError = url.searchParams.get("error");
+  if (providerError) {
+    throw new GoogleAuthenticationError(providerError === "access_denied" ? "google_cancelled" : "google_failed", context);
+  }
+  if (!code) throw new GoogleAuthenticationError("google_failed", context);
 
   const { clientId, clientSecret, allowedHostedDomain, tenantId } = await googleConfiguration();
   const client = new OAuth2Client({ clientId, clientSecret, redirectUri: stored.redirect_uri });
@@ -117,8 +145,27 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
   if (allowedHostedDomain && payload.hd?.toLowerCase() !== allowedHostedDomain) {
     throw new GoogleAuthenticationError("hosted_domain_denied");
   }
-  const user = await findOrLinkGoogleUser(payload.sub, payload.email.toLowerCase(), tenantId);
-  if (!user) throw new GoogleAuthenticationError("account_not_provisioned");
+  const verifiedEmail = payload.email.toLowerCase();
+  if (stored.intent === "link") {
+    const current = await getSessionUser(cookieToken(request));
+    if (!current || current.id !== stored.link_user_id) throw new GoogleAuthenticationError("link_session_required", context);
+    if (current.accountLocale !== "en") throw new GoogleAuthenticationError("provider_not_allowed", context);
+    try { await linkExternalIdentity(current, "google", payload.sub, verifiedEmail); }
+    catch (error) {
+      if (error instanceof ExternalIdentityConflictError) throw new GoogleAuthenticationError("identity_already_linked", context);
+      throw error;
+    }
+    return { user: current, returnPath: safeReturnPath(stored.return_path), linked: "google" };
+  }
+  let user: AuthenticatedUser | null;
+  try {
+    user = await loginOrCreateExternalUser("google", payload.sub, [verifiedEmail], tenantId, stored.locale === "zh" ? "zh" : "en");
+  } catch (error) {
+    if (error instanceof ExternalIdentityPolicyError) throw new GoogleAuthenticationError("provider_not_allowed", context);
+    if (error instanceof ExternalIdentityConflictError) throw new GoogleAuthenticationError("identity_already_linked", context);
+    throw error;
+  }
+  if (!user) throw new GoogleAuthenticationError("invalid_identity", context);
   return { user, session: await createSession(user), returnPath: safeReturnPath(stored.return_path) };
 }
 

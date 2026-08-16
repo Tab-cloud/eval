@@ -9,6 +9,7 @@ import { safeReturnPath } from "../auth/return-path";
 import "./style.css";
 
 type Locale = "zh" | "en";
+type ChineseMethod = "sms" | "password" | "register";
 
 const providerErrors: Record<Locale, Record<string, string>> = {
   zh: {
@@ -23,6 +24,9 @@ const providerErrors: Record<Locale, Record<string, string>> = {
     token_exchange_failed: "第三方身份服务无法完成本次登录。",
     invalid_identity: "第三方账号身份无法通过验证。",
     account_not_provisioned: "该邮箱尚未由管理员加入组织。",
+    identity_already_linked: "该 GitHub 账号已经绑定其他用户。",
+    link_session_required: "绑定会话已过期，请登录后重试。",
+    provider_not_allowed: "该登录方式不适用于中文账号。",
     provider_failed: "第三方账号登录失败，请重试。",
   },
   en: {
@@ -44,6 +48,9 @@ const providerErrors: Record<Locale, Record<string, string>> = {
     invalid_identity: "This identity could not be verified.",
     hosted_domain_denied: "This Google Workspace domain is not allowed.",
     account_not_provisioned: "This email has not been invited by an administrator.",
+    identity_already_linked: "This identity is already linked to another user.",
+    link_session_required: "Your linking session expired. Sign in and try again.",
+    provider_not_allowed: "This sign-in method is not available for this account.",
     provider_failed: "Third-party sign-in failed. Please try again.",
   },
 };
@@ -53,6 +60,9 @@ export default function LoginPage() {
   const [locale, setLocale] = useState<Locale>("zh");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [chineseMethod, setChineseMethod] = useState<ChineseMethod>("sms");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -92,7 +102,7 @@ export default function LoginPage() {
     history.replaceState(null, "", `/login?${query.toString()}`);
   };
 
-  const sendCode = async () => {
+  const sendCode = async (purpose: "login" | "register") => {
     if (sending || countdown > 0) return;
     setSending(true);
     setError("");
@@ -101,7 +111,7 @@ export default function LoginPage() {
       const response = await fetch("/api/auth/sms/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, purpose }),
       });
       const payload = await response.json() as { error?: string; message?: string; retryAfter?: number };
       if (!response.ok) {
@@ -109,12 +119,52 @@ export default function LoginPage() {
         if (response.status === 429) setCountdown(Math.min(Math.max(payload.retryAfter ?? 60, 1), 3600));
         return;
       }
-      setNotice(payload.message ?? "如果手机号已绑定账号，验证码将发送至手机。");
+      setNotice(payload.message ?? "验证码请求已受理。");
       setCountdown(payload.retryAfter ?? 60);
     } catch {
       setError("暂时无法连接短信服务，请稍后再试。");
     } finally {
       setSending(false);
+    }
+  };
+
+  const completeUsernameLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/username/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "登录失败，请稍后再试。");
+      location.href = returnTo;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "登录失败，请稍后再试。");
+      setLoading(false);
+    }
+  };
+
+  const completeRegistration = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, phone, code, password }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "注册失败，请稍后再试。");
+      location.href = returnTo;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "注册失败，请稍后再试。");
+      setLoading(false);
     }
   };
 
@@ -185,36 +235,47 @@ export default function LoginPage() {
       <section className="login-card">
         <div className="card-glow"/>
         <div className="login-form">
-          {isChinese ? <form onSubmit={completeSmsLogin}>
-            <div className="eyebrow">手机号验证</div>
-            <h2>登录 Eval Agent</h2>
-            <p>使用管理员已绑定的中国大陆手机号继续访问用户控制台</p>
-            <label>手机号
-              <input required value={phone} onChange={event => setPhone(event.target.value)} name="phone" type="tel" placeholder="请输入手机号" inputMode="tel" autoComplete="tel" maxLength={17}/>
-            </label>
-            <label>短信验证码
-              <div className="sms-code-row">
-                <input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/>
-                <button type="button" className="sms-send" onClick={() => void sendCode()} disabled={sending || countdown > 0 || phone.trim().length < 11}>
-                  {sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}
-                </button>
-              </div>
-            </label>
-            {notice && <div className="login-notice" role="status">{notice}</div>}
-            {error && <div className="login-error" role="alert">{error}</div>}
-            <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在验证…" : <>安全登录 <Icon name="arrow"/></>}</button>
+          {isChinese ? <div className="zh-method">
+            <div className="eyebrow">统一账号</div>
+            <h2>{chineseMethod === "register" ? "注册 Eval Agent" : "登录 Eval Agent"}</h2>
+            <p>{chineseMethod === "register" ? "验证手机号并设置账号密码，完成后可继续绑定 GitHub。" : "手机号验证码、账号密码或 GitHub 均可进入同一账号。"}</p>
+            <div className="login-method-tabs" role="tablist" aria-label="登录方式">
+              {(["sms", "password", "register"] as const).map(method => <button key={method} type="button" className={chineseMethod === method ? "active" : ""} onClick={() => { setChineseMethod(method); setError(""); setNotice(""); setCode(""); }}>
+                {method === "sms" ? "手机验证码" : method === "password" ? "账号密码" : "注册账号"}
+              </button>)}
+            </div>
+            {chineseMethod === "sms" && <form onSubmit={completeSmsLogin}>
+              <label>手机号<input required value={phone} onChange={event => setPhone(event.target.value)} name="phone" type="tel" placeholder="请输入手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
+              <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("login")} disabled={sending || countdown > 0 || phone.trim().length < 11}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
+              {notice && <div className="login-notice" role="status">{notice}</div>}{error && <div className="login-error" role="alert">{error}</div>}
+              <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在验证…" : <>安全登录 <Icon name="arrow"/></>}</button>
+            </form>}
+            {chineseMethod === "password" && <form onSubmit={completeUsernameLogin}>
+              <label>账号<input required value={username} onChange={event => setUsername(event.target.value)} name="username" type="text" placeholder="请输入账号" autoComplete="username" minLength={3} maxLength={32}/></label>
+              <label>密码<input required value={password} onChange={event => setPassword(event.target.value)} name="password" type="password" placeholder="请输入密码" autoComplete="current-password" minLength={10} maxLength={128}/></label>
+              {error && <div className="login-error" role="alert">{error}</div>}
+              <button type="submit" className="login-submit" disabled={loading}>{loading ? "正在登录…" : <>账号登录 <Icon name="arrow"/></>}</button>
+            </form>}
+            {chineseMethod === "register" && <form onSubmit={completeRegistration}>
+              <label>账号<input required value={username} onChange={event => setUsername(event.target.value)} name="username" type="text" placeholder="3–32 位账号" autoComplete="username" minLength={3} maxLength={32}/></label>
+              <label>设置密码<input required value={password} onChange={event => setPassword(event.target.value)} name="password" type="password" placeholder="至少 10 位，包含字母与数字" autoComplete="new-password" minLength={10} maxLength={128}/></label>
+              <label>手机号<input required value={phone} onChange={event => setPhone(event.target.value)} name="phone" type="tel" placeholder="中国大陆手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
+              <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("register")} disabled={sending || countdown > 0 || phone.trim().length < 11}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
+              {notice && <div className="login-notice" role="status">{notice}</div>}{error && <div className="login-error" role="alert">{error}</div>}
+              <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在创建…" : <>注册并登录 <Icon name="arrow"/></>}</button>
+            </form>}
             <div className="identity-divider"><span>或使用第三方账号</span></div>
             <a className="oauth-login github-login" href={oauthHref("github")}><GitHubMark/><span>使用 GitHub 登录</span><Icon name="arrow"/></a>
-            <small className="policy">短信或 GitHub 登录都只接受管理员预先绑定的组织账号，不会在登录时自动创建用户、租户或角色。</small>
-          </form> : <div className="google-method">
+            <small className="policy">注册后，手机号、账号密码和绑定的 GitHub 都会进入同一个 Eval 账号。</small>
+          </div> : <div className="google-method">
             <div className="eyebrow">ORGANIZATION IDENTITY</div>
             <h2>Sign in to Eval Agent</h2>
-            <p>Use a Google or GitHub email address provisioned by your administrator.</p>
+            <p>Continue with Google or GitHub. Your first verified identity creates one Eval account; the second can be linked from Profile.</p>
             {error && <div className="login-error" role="alert">{error}</div>}
             <a className="oauth-login google-login" href={oauthHref("google")}><GoogleMark/><span>Continue with Google</span><Icon name="arrow"/></a>
             <a className="oauth-login github-login" href={oauthHref("github")}><GitHubMark/><span>Continue with GitHub</span><Icon name="arrow"/></a>
-            <div className="login-security-note"><Icon name="shield"/><span>The identity provider verifies your account. Eval grants access only after a verified email matches an active organization user.</span></div>
-            <small className="policy">No workspace is created during sign-in. Tenant membership and permissions remain controlled by your Eval administrator.</small>
+            <div className="login-security-note"><Icon name="shield"/><span>Verified Google and GitHub identities can be linked to the same Eval account from Profile.</span></div>
+            <small className="policy">Only Google and GitHub are available for English accounts. Password and SMS credentials are not enabled.</small>
           </div>}
         </div>
       </section>

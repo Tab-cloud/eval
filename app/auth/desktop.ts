@@ -212,7 +212,7 @@ export async function getDesktopSessionUser(token: string | undefined): Promise<
   const db = authDatabase();
   const tokenHash = await sha256(token);
   const row = await db.prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.display_name, u.status,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
            s.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM desktop_sessions s
     JOIN users u ON u.id = s.user_id
@@ -246,8 +246,9 @@ function mapUser(row: Record<string, string | number>): AuthenticatedUser {
   return {
     id: String(row.id),
     ...(row.username ? { username: String(row.username) } : {}),
-    email: String(row.email),
+    ...(row.email ? { email: String(row.email) } : {}),
     ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
+    accountLocale: row.account_locale === "en" ? "en" : "zh",
     displayName: String(row.display_name),
     tenantId: String(row.tenant_id),
     tenantName: String(row.tenant_name),

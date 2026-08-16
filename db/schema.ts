@@ -19,8 +19,9 @@ export const tenants = pgTable("tenants", {
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
   username: text("username"),
-  email: text("email").notNull(),
+  email: text("email"),
   phoneE164: text("phone_e164"),
+  accountLocale: text("account_locale", { enum: ["zh", "en"] }).notNull().default("zh"),
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url"),
   status: text("status", { enum: ["invited", "active", "disabled"] }).notNull(),
@@ -28,6 +29,7 @@ export const users = pgTable("users", {
   ...timestamps,
 }, (table) => [
   uniqueIndex("users_username_uq").on(table.username),
+  uniqueIndex("users_username_ci_uq").on(sql`lower(${table.username})`).where(sql`${table.username} IS NOT NULL`),
   uniqueIndex("users_email_uq").on(table.email),
   uniqueIndex("users_phone_uq").on(table.phoneE164),
 ]);
@@ -187,6 +189,8 @@ export const authOauthStates = pgTable("auth_oauth_states", {
   nonce: text("nonce").notNull(),
   redirectUri: text("redirect_uri").notNull(),
   returnPath: text("return_path").notNull().default("/console"),
+  intent: text("intent", { enum: ["login", "link"] }).notNull().default("login"),
+  linkUserId: text("link_user_id").references(() => users.id, { onDelete: "cascade" }),
   expiresAt: epoch("expires_at").notNull(),
   consumedAt: epoch("consumed_at"),
   createdAt: epoch("created_at").notNull(),

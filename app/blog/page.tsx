@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { optionalEmailSession } from "../auth/server";
+import { optionalUserSession } from "../auth/server";
 import { ContentHeader } from "../content/ContentHeader";
 import { publishedBlogPosts } from "../content/store";
 import "../content/style.css";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "博客", description: "Eval Agent 团队的产品进展、工程方法与 Agent 实践文章。" };
 
 export default async function BlogPage() {
-  const [user, posts] = await Promise.all([optionalEmailSession(), publishedBlogPosts()]);
+  const [user, posts] = await Promise.all([optionalUserSession(), publishedBlogPosts()]);
   const [featured, ...rest] = posts;
 
   return <div className="content-site blog-site">

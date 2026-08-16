@@ -6,18 +6,15 @@ import {
 } from "../../../../auth/google";
 
 export async function GET(request: Request) {
-  const requestUrl = new URL(request.url);
-  const providerError = requestUrl.searchParams.get("error");
-  if (providerError) {
-    return redirectToLogin(request, providerError === "access_denied" ? "google_cancelled" : "google_failed");
-  }
   try {
     const result = await finishGoogleAuthorization(request);
+    const destination = new URL(result.returnPath, request.url);
+    if (result.linked) destination.searchParams.set("linked", result.linked);
     const headers = new Headers({
-      Location: new URL(result.returnPath, request.url).toString(),
+      Location: destination.toString(),
       "Cache-Control": "no-store",
     });
-    headers.append("Set-Cookie", googleSessionCookie(result.session, request));
+    if (result.session) headers.append("Set-Cookie", googleSessionCookie(result.session, request));
     headers.append("Set-Cookie", clearGoogleStateCookie(request));
     return new Response(null, {
       status: 302,
@@ -25,15 +22,20 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const reason = error instanceof GoogleAuthenticationError ? error.reason : "google_failed";
-    return redirectToLogin(request, reason);
+    if (error instanceof GoogleAuthenticationError && error.returnPath.includes("view=profile")) {
+      const location = new URL(error.returnPath, request.url);
+      location.searchParams.set("error", reason);
+      return new Response(null, { status: 302, headers: { Location: location.toString(), "Set-Cookie": clearGoogleStateCookie(request), "Cache-Control": "no-store" } });
+    }
+    return redirectToLogin(request, reason, error instanceof GoogleAuthenticationError ? error.locale : "en");
   }
 }
 
-function redirectToLogin(request: Request, reason: string) {
+function redirectToLogin(request: Request, reason: string, locale: "zh" | "en" = "en") {
   return new Response(null, {
     status: 302,
     headers: {
-      Location: new URL(`/login?lang=en&error=${encodeURIComponent(reason)}`, request.url).toString(),
+      Location: new URL(`/login?lang=${locale}&error=${encodeURIComponent(reason)}`, request.url).toString(),
       "Set-Cookie": clearGoogleStateCookie(request),
       "Cache-Control": "no-store",
     },

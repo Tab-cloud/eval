@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   }
   try {
     const user = await authenticateSmsCode(phone, code);
-    if (!user) {
+    if (!user || user.accountLocale !== "zh") {
       await recordFailedLogin(attemptKey);
       return Response.json({ error: "手机号或验证码错误。" }, { status: 401 });
     }

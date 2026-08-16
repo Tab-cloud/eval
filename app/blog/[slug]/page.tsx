@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { optionalEmailSession } from "../../auth/server";
+import { optionalUserSession } from "../../auth/server";
 import { ContentHeader } from "../../content/ContentHeader";
 import { publishedBlogPost } from "../../content/store";
 import "../../content/style.css";
@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function BlogPostPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [user, post] = await Promise.all([optionalEmailSession(), publishedBlogPost(slug)]);
+  const [user, post] = await Promise.all([optionalUserSession(), publishedBlogPost(slug)]);
   if (!post) notFound();
   const paragraphs = post.body.split(/\n{2,}/).map(item => item.trim()).filter(Boolean);
 

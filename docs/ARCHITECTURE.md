@@ -49,17 +49,19 @@ PostgreSQL 保存租户、用户、手机号、成员关系、短信挑战、OAu
 
 ## 身份与权限
 
-- 中文登录：管理员预绑定中国大陆手机号，阿里云短信发送一次性验证码；也可以使用 Google、GitHub 或已启用的账号密码。
-- 英文登录：Google、GitHub 或已启用的账号密码。
+- 中文登录：用户使用中国大陆手机号验证码完成注册，并同时设置唯一用户名与密码；之后可使用手机号验证码、用户名密码或绑定的 GitHub 登录。修改密码和补充本地身份都必须使用对应用途的短信验证码。
+- 英文登录：仅支持 Google 与 GitHub。首次登录创建普通成员账号，个人中心可将另一提供商显式绑定到同一用户。
 - Google 使用 OpenID Connect 授权码流程以及 state、nonce、PKCE；GitHub 使用 OAuth Web Flow、state 和 PKCE，只申请 `user:email`。
-- 第三方 access token 只用于本次身份校验，不写入数据库、Cookie 或日志。登录流程不会自动创建租户、账号或角色。
+- OAuth state 同时保存登录/绑定意图和待绑定用户；显式绑定回调必须仍有同一用户的有效会话。第三方 access token 只用于本次身份校验，不写入数据库、Cookie 或日志。
+- 公开注册与第三方首次登录只会在 `EVAL_IDENTITY_TENANT_SLUG` 指定的既有租户中创建 `developer` 成员，不会创建租户或管理员角色。相同的已验证邮箱可复用现有用户，提供商 subject 具有全局唯一约束。
+- 短信验证码使用服务端 Pepper 哈希保存，按 `login`、`register`、`phone_bind`、`password_change` 和用户身份生成隔离键，并具有过期、尝试次数与手机号/IP 频率限制。
 - 管理员入口 `/admin/auth/login` 使用独立用户名密码认证，并要求 `tenant_admin` 或 `platform_admin` 角色。
 - 管理员密码保存 PBKDF2 哈希；登录入口具有同源保护和按用户名与来源组合的失败次数限制。
 - 桌面端创建短期设备授权请求并打开系统浏览器，用户完成现有登录后明确批准设备；服务端只保存设备码、用户码和长期令牌的不可逆哈希。
 - 桌面长期令牌可撤销、30 天过期，并只由 Windows 凭据管理器保存。
 - 租户从服务端会话反查，不信任请求头或表单中的租户 ID。
 - RBAC：`platform_admin`、`tenant_admin`、`developer`、`auditor`、`viewer`。
-- 管理员写操作、密码修改和桌面端授权操作进入租户审计日志。
+- 账号注册、身份绑定、管理员写操作、密码修改和桌面端授权操作进入租户审计日志；审计元数据中的手机号只保留掩码。
 
 管理员平台的“登录与身份”模块保存短信签名、模板代码、Google Workspace 域，以及 Google/GitHub OAuth 部署变量引用。AccessKey、OAuth Client Secret 与验证码 Pepper 只通过 ECS 环境变量注入；数据库和管理员接口只返回变量是否已配置。
 

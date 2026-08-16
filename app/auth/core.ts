@@ -7,8 +7,9 @@ const PASSWORD_ITERATIONS = 210_000;
 export type AuthenticatedUser = {
   id: string;
   username?: string;
-  email: string;
+  email?: string;
   phoneE164?: string;
+  accountLocale: "zh" | "en";
   displayName: string;
   tenantId: string;
   tenantName: string;
@@ -61,10 +62,13 @@ async function initializeSchema() {
   const statements = [
     "CREATE TABLE IF NOT EXISTS tenants (id text PRIMARY KEY NOT NULL, name text NOT NULL, slug text NOT NULL, plan text DEFAULT 'team' NOT NULL, status text DEFAULT 'active' NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS tenants_slug_uq ON tenants (slug)",
-    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text, display_name text NOT NULL, avatar_url text, status text NOT NULL, last_login_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username text",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 text",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS account_locale text DEFAULT 'zh' NOT NULL",
+    "ALTER TABLE users ALTER COLUMN email DROP NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (username)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci_uq ON users (lower(username)) WHERE username IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_uq ON users (phone_e164)",
     "CREATE TABLE IF NOT EXISTS memberships (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, role text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
@@ -81,6 +85,8 @@ async function initializeSchema() {
     "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS provider text DEFAULT 'google' NOT NULL",
     "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS locale text DEFAULT 'en' NOT NULL",
     "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS return_path text DEFAULT '/console' NOT NULL",
+    "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS intent text DEFAULT 'login' NOT NULL",
+    "ALTER TABLE auth_oauth_states ADD COLUMN IF NOT EXISTS link_user_id text REFERENCES users(id) ON DELETE CASCADE",
     "CREATE TABLE IF NOT EXISTS auth_oidc_identities (id text PRIMARY KEY NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider text NOT NULL, subject text NOT NULL, email_at_link text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_subject_uq ON auth_oidc_identities (provider, subject)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_oidc_provider_user_uq ON auth_oidc_identities (provider, user_id)",
@@ -133,7 +139,7 @@ async function initializeSchema() {
 export async function authenticateEmail(email: string, password: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status, c.password_hash, c.password_salt, c.iterations,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, c.password_hash, c.password_salt, c.iterations,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM users u
     JOIN password_credentials c ON c.user_id = u.id
@@ -151,14 +157,14 @@ export async function authenticateEmail(email: string, password: string): Promis
 export async function authenticateUsername(username: string, password: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.display_name, u.status,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
            c.password_hash, c.password_salt, c.iterations,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM users u
     JOIN password_credentials c ON c.user_id = u.id
     JOIN memberships m ON m.user_id = u.id
     JOIN tenants t ON t.id = m.tenant_id
-    WHERE u.username = ?
+    WHERE lower(u.username) = lower(?)
     LIMIT 1
   `).bind(username).first<Record<string, string | number>>();
   if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
@@ -170,7 +176,7 @@ export async function authenticateUsername(username: string, password: string): 
 export async function findActiveUserByPhone(phoneE164: string): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM users u
     JOIN memberships m ON m.user_id = u.id
@@ -182,26 +188,34 @@ export async function findActiveUserByPhone(phoneE164: string): Promise<Authenti
   return mapUser(row);
 }
 
-export async function findOrLinkGoogleUser(subject: string, verifiedEmail: string, tenantId: string): Promise<AuthenticatedUser | null> {
-  return findOrLinkExternalUser("google", subject, [verifiedEmail], tenantId);
-}
+export type ExternalProvider = "google" | "github";
 
-export async function findOrLinkGitHubUser(subject: string, verifiedEmails: string[], tenantId: string): Promise<AuthenticatedUser | null> {
-  return findOrLinkExternalUser("github", subject, verifiedEmails, tenantId);
-}
+export class ExternalIdentityConflictError extends Error {}
+export class ExternalIdentityPolicyError extends Error {}
 
-async function findOrLinkExternalUser(provider: "google" | "github", subject: string, verifiedEmails: string[], tenantId: string): Promise<AuthenticatedUser | null> {
+export async function loginOrCreateExternalUser(
+  provider: ExternalProvider,
+  subject: string,
+  verifiedEmails: string[],
+  tenantId: string,
+  accountLocale: "zh" | "en",
+): Promise<AuthenticatedUser | null> {
   await ensureAuthSchema();
   const db = database();
   const existing = await externalUserBySubject(provider, subject, tenantId);
-  if (existing) return existing;
+  if (existing) {
+    if (provider === "google" && existing.accountLocale !== "en") {
+      throw new ExternalIdentityPolicyError("Google 仅用于英文账号。");
+    }
+    return existing;
+  }
 
   let candidate: Record<string, string | number> | null = null;
   let emailAtLink = "";
   const uniqueEmails = Array.from(new Set(verifiedEmails.map(email => email.trim().toLowerCase()).filter(Boolean)));
   for (const verifiedEmail of uniqueEmails) {
     candidate = await db.prepare(`
-      SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
              m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
       FROM users u
       JOIN memberships m ON m.user_id = u.id
@@ -214,18 +228,91 @@ async function findOrLinkExternalUser(provider: "google" | "github", subject: st
       break;
     }
   }
-  if (!candidate || candidate.status !== "active" || candidate.tenant_status !== "active") return null;
-
   const now = Math.floor(Date.now() / 1000);
-  await db.prepare(
-    "INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-  ).bind(`oidc_${crypto.randomUUID()}`, String(candidate.id), provider, subject, emailAtLink, now, now).run();
+  if (!candidate) {
+    const primaryEmail = uniqueEmails[0];
+    if (!primaryEmail) return null;
+    const userId = `usr_${crypto.randomUUID()}`;
+    const displayName = primaryEmail.split("@")[0].slice(0, 64) || (accountLocale === "zh" ? "Eval 用户" : "Eval User");
+    try {
+      await db.batch([
+        db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, created_at, updated_at) VALUES (?, NULL, ?, NULL, ?, ?, 'active', ?, ?)")
+          .bind(userId, primaryEmail, accountLocale, displayName, now, now),
+        db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, 'developer', ?, ?)")
+          .bind(`mem_${crypto.randomUUID()}`, tenantId, userId, now, now),
+        db.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .bind(`oidc_${crypto.randomUUID()}`, userId, provider, subject, primaryEmail, now, now),
+        auditStatement(tenantId, userId, "auth.account.register", "user", userId, { locale: accountLocale, provider }, now),
+      ]);
+    } catch {
+      const raced = await externalUserBySubject(provider, subject, tenantId);
+      if (raced) return raced;
+      candidate = await userByVerifiedEmails(uniqueEmails, tenantId);
+      if (!candidate) throw new ExternalIdentityConflictError("该第三方邮箱已绑定其他账号。");
+    }
+    return externalUserBySubject(provider, subject, tenantId);
+  }
+  if (candidate.status !== "active" || candidate.tenant_status !== "active") return null;
+
+  if (!candidate.username && !candidate.phone_e164 && candidate.account_locale !== accountLocale) {
+    const existingIdentity = await db.prepare("SELECT id FROM auth_oidc_identities WHERE user_id = ? LIMIT 1")
+      .bind(String(candidate.id)).first<{ id: string }>();
+    if (!existingIdentity) {
+      await db.prepare("UPDATE users SET account_locale = ?, updated_at = ? WHERE id = ?")
+        .bind(accountLocale, now, String(candidate.id)).run();
+      candidate.account_locale = accountLocale;
+    }
+  }
+  if (provider === "google" && candidate.account_locale !== "en") {
+    throw new ExternalIdentityPolicyError("Google 仅用于英文账号。");
+  }
+
+  await linkExternalIdentity(mapUser(candidate), provider, subject, emailAtLink);
   return externalUserBySubject(provider, subject, tenantId);
+}
+
+export async function linkExternalIdentity(user: AuthenticatedUser, provider: ExternalProvider, subject: string, verifiedEmail: string) {
+  await ensureAuthSchema();
+  const db = database();
+  const owned = await db.prepare("SELECT user_id FROM auth_oidc_identities WHERE provider = ? AND subject = ?")
+    .bind(provider, subject).first<{ user_id: string }>();
+  if (owned && owned.user_id !== user.id) throw new ExternalIdentityConflictError("该第三方账号已绑定其他用户。");
+  const current = await db.prepare("SELECT subject FROM auth_oidc_identities WHERE provider = ? AND user_id = ?")
+    .bind(provider, user.id).first<{ subject: string }>();
+  if (current && current.subject !== subject) throw new ExternalIdentityConflictError("当前账号已经绑定另一个第三方账号。");
+  if (current) return;
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await db.batch([
+      db.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .bind(`oidc_${crypto.randomUUID()}`, user.id, provider, subject, verifiedEmail, now, now),
+      auditStatement(user.tenantId, user.id, "auth.identity.link", "user", user.id, { provider }, now),
+    ]);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ExternalIdentityConflictError("该第三方账号已经绑定其他用户。");
+    throw error;
+  }
+}
+
+async function userByVerifiedEmails(verifiedEmails: string[], tenantId: string) {
+  for (const email of verifiedEmails) {
+    const row = await database().prepare(`
+      SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
+             m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+      FROM users u
+      JOIN memberships m ON m.user_id = u.id
+      JOIN tenants t ON t.id = m.tenant_id
+      WHERE lower(u.email) = lower(?) AND m.tenant_id = ?
+      LIMIT 1
+    `).bind(email, tenantId).first<Record<string, string | number>>();
+    if (row) return row;
+  }
+  return null;
 }
 
 async function externalUserBySubject(provider: "google" | "github", subject: string, tenantId: string): Promise<AuthenticatedUser | null> {
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
            m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
     FROM auth_oidc_identities i
     JOIN users u ON u.id = i.user_id
@@ -290,7 +377,7 @@ export async function getSessionUser(token: string | undefined): Promise<Authent
   await ensureAuthSchema();
   const now = Math.floor(Date.now() / 1000);
   const row = await database().prepare(`
-    SELECT u.id, u.email, u.phone_e164, u.display_name, u.status, s.tenant_id, m.role,
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, s.tenant_id, m.role,
            t.name AS tenant_name, t.status AS tenant_status
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
@@ -309,22 +396,91 @@ export async function revokeSession(token: string | undefined) {
   await database().prepare("DELETE FROM auth_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
 }
 
-export async function changePassword(user: AuthenticatedUser, currentPassword: string, nextPassword: string) {
+export class AccountConflictError extends Error {}
+
+export async function registerChineseAccount(input: { username: string; phoneE164: string; password: string; tenantId: string }) {
   await ensureAuthSchema();
   const db = database();
-  const credential = await db.prepare("SELECT password_hash, password_salt, iterations FROM password_credentials WHERE user_id = ?")
-    .bind(user.id).first<{ password_hash: string; password_salt: string; iterations: number }>();
-  if (!credential || !await verifyPassword(currentPassword, credential.password_salt, credential.iterations, credential.password_hash)) return false;
+  const conflict = await db.prepare("SELECT id FROM users WHERE lower(username) = lower(?) OR phone_e164 = ? LIMIT 1")
+    .bind(input.username, input.phoneE164).first<{ id: string }>();
+  if (conflict) throw new AccountConflictError("用户名或手机号已被使用。");
+  const credential = await createPasswordHash(input.password);
+  const now = Math.floor(Date.now() / 1000);
+  const userId = `usr_${crypto.randomUUID()}`;
+  try {
+    await db.batch([
+      db.prepare("INSERT INTO users (id, username, email, phone_e164, account_locale, display_name, status, created_at, updated_at) VALUES (?, ?, NULL, ?, 'zh', ?, 'active', ?, ?)")
+        .bind(userId, input.username, input.phoneE164, input.username, now, now),
+      db.prepare("INSERT INTO memberships (id, tenant_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, 'developer', ?, ?)")
+        .bind(`mem_${crypto.randomUUID()}`, input.tenantId, userId, now, now),
+      db.prepare("INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(userId, credential.passwordHash, credential.salt, credential.iterations, now),
+      auditStatement(input.tenantId, userId, "auth.account.register", "user", userId, { locale: "zh", provider: "phone" }, now),
+    ]);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
+    throw error;
+  }
+  return userById(userId, input.tenantId);
+}
+
+export async function bindChineseLocalIdentity(user: AuthenticatedUser, input: { username: string; phoneE164: string; password: string }) {
+  if (user.accountLocale !== "zh") throw new AccountConflictError("英文账号不支持绑定手机号或密码。");
+  await ensureAuthSchema();
+  const db = database();
+  const owner = await db.prepare("SELECT id FROM users WHERE id <> ? AND (lower(username) = lower(?) OR phone_e164 = ?) LIMIT 1")
+    .bind(user.id, input.username, input.phoneE164).first<{ id: string }>();
+  if (owner) throw new AccountConflictError("用户名或手机号已被使用。");
+  const credential = await createPasswordHash(input.password);
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await db.batch([
+      db.prepare("UPDATE users SET username = ?, phone_e164 = ?, display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END, updated_at = ? WHERE id = ?")
+        .bind(input.username, input.phoneE164, input.username, now, user.id),
+      db.prepare(`INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
+        .bind(user.id, credential.passwordHash, credential.salt, credential.iterations, now),
+      auditStatement(user.tenantId, user.id, "auth.local_identity.bind", "user", user.id, { phone: maskPhoneForAudit(input.phoneE164) }, now),
+    ]);
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
+    throw error;
+  }
+  return userById(user.id, user.tenantId);
+}
+
+export async function replacePassword(user: AuthenticatedUser, nextPassword: string) {
+  if (user.accountLocale !== "zh" || !user.phoneE164) throw new AccountConflictError("当前账号尚未绑定中国大陆手机号。");
+  await ensureAuthSchema();
+  const db = database();
   const next = await createPasswordHash(nextPassword);
   const now = Math.floor(Date.now() / 1000);
   await db.batch([
-    db.prepare("UPDATE password_credentials SET password_hash = ?, password_salt = ?, iterations = ?, updated_at = ? WHERE user_id = ?")
-      .bind(next.passwordHash, next.salt, next.iterations, now, user.id),
+    db.prepare(`INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
+      .bind(user.id, next.passwordHash, next.salt, next.iterations, now),
     db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(user.id),
-    db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'auth.password.change', 'user', ?, '{}', ?)")
-      .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, user.id, now),
+    auditStatement(user.tenantId, user.id, "auth.password.change", "user", user.id, { verifiedBy: "sms" }, now),
   ]);
-  return true;
+}
+
+export async function accountIdentitySnapshot(user: AuthenticatedUser) {
+  await ensureAuthSchema();
+  const db = database();
+  const [identities, credential] = await Promise.all([
+    db.prepare("SELECT provider, email_at_link AS \"emailAtLink\" FROM auth_oidc_identities WHERE user_id = ? ORDER BY provider").bind(user.id).all<{ provider: string; emailAtLink: string }>(),
+    db.prepare("SELECT user_id FROM password_credentials WHERE user_id = ?").bind(user.id).first<{ user_id: string }>(),
+  ]);
+  return {
+    user: { id: user.id, username: user.username ?? null, email: user.email ?? null, phoneE164: user.phoneE164 ?? null, displayName: user.displayName, accountLocale: user.accountLocale },
+    providers: {
+      google: identities.results.find(item => item.provider === "google") ?? null,
+      github: identities.results.find(item => item.provider === "github") ?? null,
+    },
+    passwordConfigured: Boolean(credential),
+  };
 }
 
 export function sessionCookie(token: string, secure: boolean) {
@@ -358,12 +514,40 @@ async function verifyPassword(password: string, saltBase64: string, iterations: 
   return difference === 0;
 }
 
+async function userById(userId: string, tenantId: string): Promise<AuthenticatedUser | null> {
+  const row = await database().prepare(`
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status,
+           m.tenant_id, m.role, t.name AS tenant_name, t.status AS tenant_status
+    FROM users u
+    JOIN memberships m ON m.user_id = u.id
+    JOIN tenants t ON t.id = m.tenant_id
+    WHERE u.id = ? AND m.tenant_id = ?
+    LIMIT 1
+  `).bind(userId, tenantId).first<Record<string, string | number>>();
+  if (!row || row.status !== "active" || row.tenant_status !== "active") return null;
+  return mapUser(row);
+}
+
+function auditStatement(tenantId: string, actorId: string, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>, now: number) {
+  return database().prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(`audit_${crypto.randomUUID()}`, tenantId, actorId, action, resourceType, resourceId, JSON.stringify(metadata), now);
+}
+
+function isUniqueViolation(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "23505");
+}
+
+function maskPhoneForAudit(phoneE164: string) {
+  return phoneE164.replace(/^(\+86\d{3})\d{4}(\d{4})$/, "$1****$2");
+}
+
 function mapUser(row: Record<string, string | number>): AuthenticatedUser {
   return {
     id: String(row.id),
     ...(row.username ? { username: String(row.username) } : {}),
-    email: String(row.email),
+    ...(row.email ? { email: String(row.email) } : {}),
     ...(row.phone_e164 ? { phoneE164: String(row.phone_e164) } : {}),
+    accountLocale: row.account_locale === "en" ? "en" : "zh",
     displayName: String(row.display_name),
     tenantId: String(row.tenant_id),
     tenantName: String(row.tenant_name),

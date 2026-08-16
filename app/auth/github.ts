@@ -1,8 +1,12 @@
 import {
   authDatabase,
+  cookieToken,
   createSession,
   ensureAuthSchema,
-  findOrLinkGitHubUser,
+  ExternalIdentityConflictError,
+  getSessionUser,
+  linkExternalIdentity,
+  loginOrCreateExternalUser,
   sessionCookie,
   type AuthenticatedUser,
 } from "./core";
@@ -20,6 +24,8 @@ type StoredAuthorization = {
   redirect_uri?: string;
   return_path?: string;
   locale?: string;
+  intent?: string;
+  link_user_id?: string;
 };
 
 type GitHubTokenResponse = {
@@ -59,8 +65,17 @@ export async function beginGitHubAuthorization(request: Request) {
   const { clientId } = await githubConfiguration();
   const redirectUri = `${applicationOrigin(request)}/api/auth/github/callback`;
   const requestUrl = new URL(request.url);
-  const returnPath = safeReturnPath(requestUrl.searchParams.get("returnTo"));
-  const locale: LoginLocale = requestUrl.searchParams.get("lang") === "zh" ? "zh" : "en";
+  const intent = requestUrl.searchParams.get("intent") === "link" ? "link" : "login";
+  let returnPath = safeReturnPath(requestUrl.searchParams.get("returnTo"));
+  let locale: LoginLocale = requestUrl.searchParams.get("lang") === "zh" ? "zh" : "en";
+  let linkUserId: string | null = null;
+  if (intent === "link") {
+    const current = await getSessionUser(cookieToken(request));
+    if (!current) throw new GitHubAuthenticationError("link_session_required", { returnPath, locale });
+    linkUserId = current.id;
+    locale = current.accountLocale;
+    returnPath = "/console?view=profile";
+  }
   const state = randomBase64Url(32);
   const codeVerifier = randomBase64Url(64);
   const codeChallenge = await sha256Base64Url(codeVerifier);
@@ -71,9 +86,9 @@ export async function beginGitHubAuthorization(request: Request) {
     db.prepare(`
       INSERT INTO auth_oauth_states (
         state_hash, provider, locale, code_verifier, nonce, redirect_uri,
-        return_path, expires_at, consumed_at, created_at
-      ) VALUES (?, 'github', ?, ?, '', ?, ?, ?, NULL, ?)
-    `).bind(await sha256Hex(state), locale, codeVerifier, redirectUri, returnPath, now + GITHUB_STATE_TTL_SECONDS, now),
+        return_path, intent, link_user_id, expires_at, consumed_at, created_at
+      ) VALUES (?, 'github', ?, ?, '', ?, ?, ?, ?, ?, NULL, ?)
+    `).bind(await sha256Hex(state), locale, codeVerifier, redirectUri, returnPath, intent, linkUserId, now + GITHUB_STATE_TTL_SECONDS, now),
   ]);
 
   const authorization = new URL("https://github.com/login/oauth/authorize");
@@ -94,8 +109,9 @@ export async function beginGitHubAuthorization(request: Request) {
 
 export async function finishGitHubAuthorization(request: Request): Promise<{
   user: AuthenticatedUser;
-  session: string;
+  session?: string;
   returnPath: string;
+  linked?: "github";
 }> {
   await ensureAuthSchema();
   const url = new URL(request.url);
@@ -111,7 +127,7 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
     UPDATE auth_oauth_states
     SET consumed_at = ?
     WHERE state_hash = ? AND provider = 'github' AND consumed_at IS NULL AND expires_at > ?
-    RETURNING code_verifier, redirect_uri, return_path, locale
+    RETURNING code_verifier, redirect_uri, return_path, locale, intent, link_user_id
   `).bind(now, await sha256Hex(state), now).run();
   const stored = stateResult.results[0] as StoredAuthorization | undefined;
   if (!stored?.code_verifier || !stored.redirect_uri) {
@@ -177,8 +193,18 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
   if (!verifiedEmails.length) {
     throw new GitHubAuthenticationError("verified_email_required", context);
   }
-  const user = await findOrLinkGitHubUser(String(profile.id), verifiedEmails, tenantId);
-  if (!user) throw new GitHubAuthenticationError("account_not_provisioned", context);
+  if (stored.intent === "link") {
+    const current = await getSessionUser(cookieToken(request));
+    if (!current || current.id !== stored.link_user_id) throw new GitHubAuthenticationError("link_session_required", context);
+    try { await linkExternalIdentity(current, "github", String(profile.id), verifiedEmails[0]); }
+    catch (error) {
+      if (error instanceof ExternalIdentityConflictError) throw new GitHubAuthenticationError("identity_already_linked", context);
+      throw error;
+    }
+    return { user: current, returnPath: safeReturnPath(stored.return_path), linked: "github" };
+  }
+  const user = await loginOrCreateExternalUser("github", String(profile.id), verifiedEmails, tenantId, stored.locale === "zh" ? "zh" : "en");
+  if (!user) throw new GitHubAuthenticationError("invalid_identity", context);
   return {
     user,
     session: await createSession(user),

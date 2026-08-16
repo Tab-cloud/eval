@@ -201,7 +201,7 @@ export function AgentLanding() {
       <section className="closing-scene">
         <div className="closing-beam" aria-hidden="true"/>
         <div data-reveal><BrandMark/><p>THE NEXT BUILD STARTS HERE</p><h2>{isZh ? <>把复杂，交给系统。<br/><em>把创造，留给工程师。</em></> : <>Give complexity to the system.<br/><em>Keep invention with engineers.</em></>}</h2><a href="/login">{isZh ? "登录 Eval Agent" : "Sign in to Eval Agent"} <span className="css-arrow" aria-hidden="true"/></a></div>
-        <footer><span>EVAL AGENT / EMBEDDED INTELLIGENCE</span><span>{isZh ? "正在连接（杭州）科技有限公司" : "Connecting (Hangzhou) Technology Co., Ltd."}</span><span>© 2026 CONNECTING TECHNOLOGY</span></footer>
+        <footer><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">浙ICP备2024097468号-10</a></footer>
       </section>
     </main>
   </div>;

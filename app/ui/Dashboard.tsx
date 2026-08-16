@@ -7,10 +7,19 @@ import { Icon, type IconName } from "./icons";
 import { useTheme } from "./useTheme";
 
 type DashboardUser = {
-  email: string;
+  username?: string;
+  email?: string;
+  phoneE164?: string;
+  accountLocale: "zh" | "en";
   displayName: string;
   tenantName: string;
   role: "platform_admin" | "tenant_admin" | "developer" | "auditor" | "viewer";
+};
+
+type AccountSnapshot = {
+  user: { id: string; username: string | null; email: string | null; phoneE164: string | null; displayName: string; accountLocale: "zh" | "en" };
+  providers: { google: { provider: string; emailAtLink: string } | null; github: { provider: string; emailAtLink: string } | null };
+  passwordConfigured: boolean;
 };
 
 type ConsoleSnapshot = {
@@ -38,14 +47,12 @@ const nav: Array<{ id: string; label: string; icon: IconName }> = [
   { id: "activity", label: "活动", icon: "clock" },
 ];
 
-export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
-  const [active, setActive] = useState("overview");
+export function Dashboard({ currentUser, initialView = "overview", initialNotice = "" }: { currentUser: DashboardUser; initialView?: string; initialNotice?: string }) {
+  const [active, setActive] = useState(initialView);
   const [snapshot, setSnapshot] = useState<ConsoleSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState(initialNotice);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [passwordOpen, setPasswordOpen] = useState(false);
-  const [passwordSaving, setPasswordSaving] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const { theme, toggleTheme } = useTheme();
 
@@ -86,26 +93,6 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
     }
   };
 
-  const updatePassword = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (passwordSaving) return;
-    setPasswordSaving(true);
-    const form = new FormData(event.currentTarget);
-    try {
-      const response = await fetch("/api/auth/password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentPassword: form.get("currentPassword"), nextPassword: form.get("nextPassword") }),
-      });
-      const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "密码修改失败。");
-      location.href = "/login";
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "密码修改失败。");
-      setPasswordSaving(false);
-    }
-  };
-
   const roleLabel = currentUser.role === "platform_admin" ? "平台管理员" : currentUser.role === "tenant_admin" ? "租户管理员" : currentUser.role === "developer" ? "开发者" : currentUser.role === "auditor" ? "审计员" : "查看者";
   const isAdmin = currentUser.role === "tenant_admin" || currentUser.role === "platform_admin";
 
@@ -120,26 +107,26 @@ export function Dashboard({ currentUser }: { currentUser: DashboardUser }) {
         <button className="workspace-icon-button theme-toggle" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色模式" : "切换到深色模式"}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
         <button className="workspace-avatar" onClick={() => setAccountOpen(value => !value)} aria-expanded={accountOpen}>{currentUser.displayName.slice(0, 2).toUpperCase()}</button>
         {accountOpen && <div className="workspace-account">
-          <strong>{currentUser.displayName}</strong><span>{currentUser.email}</span><small>{currentUser.tenantName} · {roleLabel}</small>
+          <strong>{currentUser.displayName}</strong><span>{currentUser.email || currentUser.phoneE164 || currentUser.username || "Eval Account"}</span><small>{currentUser.tenantName} · {roleLabel}</small>
           {isAdmin && <Link href="/admin"><Icon name="shield"/>管理员平台</Link>}
-          <button onClick={() => { setAccountOpen(false); setPasswordOpen(true); }}><Icon name="key"/>修改密码</button>
+          <button onClick={() => { setAccountOpen(false); setActive("profile"); history.replaceState(null, "", "/console?view=profile"); }}><Icon name="key"/>{currentUser.accountLocale === "zh" ? "个人中心" : "Profile"}</button>
           <button onClick={() => void logout()} disabled={logoutLoading}><Icon name="logout"/>{logoutLoading ? "正在退出…" : "退出登录"}</button>
         </div>}
       </div>
     </header>
 
     <main className="workspace-main">
-      <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : nav.find(item => item.id === active)?.label}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
+      <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : active === "profile" ? (currentUser.accountLocale === "zh" ? "个人中心" : "Profile") : nav.find(item => item.id === active)?.label}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
       {active === "overview" && <Overview snapshot={snapshot}/>}
       {active === "downloads" && <Downloads snapshot={snapshot}/>}
       {active === "community" && <Community snapshot={snapshot}/>}
       {active === "organization" && <Organization snapshot={snapshot} user={currentUser} roleLabel={roleLabel}/>}
       {active === "activity" && <Activity snapshot={snapshot}/>}
+      {active === "profile" && <Profile currentUser={currentUser} notify={setToast}/>}
     </main>
 
     <nav className="workspace-mobile-nav" aria-label="移动端导航">{nav.map(item => <button key={item.id} className={active === item.id ? "active" : ""} onClick={() => setActive(item.id)}><Icon name={item.icon}/><span>{item.label}</span></button>)}</nav>
 
-    {passwordOpen && <div className="workspace-overlay" onMouseDown={event => event.currentTarget === event.target && setPasswordOpen(false)}><div className="workspace-modal"><button className="workspace-modal-close" onClick={() => setPasswordOpen(false)} aria-label="关闭">×</button><small>ACCOUNT SECURITY</small><h2>修改登录密码</h2><p>修改成功后会撤销已登录会话，需要使用新密码重新登录。</p><form onSubmit={event => void updatePassword(event)}><label>当前密码<input name="currentPassword" type="password" autoComplete="current-password" required/></label><label>新密码<input name="nextPassword" type="password" autoComplete="new-password" minLength={10} required placeholder="至少 10 位，包含字母与数字"/></label><button disabled={passwordSaving}>{passwordSaving ? "正在更新…" : "更新密码并退出"}<Icon name="arrow"/></button></form></div></div>}
     {toast && <div className="workspace-toast"><Icon name="check"/>{toast}</div>}
   </div>;
 }
@@ -174,12 +161,105 @@ function Community({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
 }
 
 function Organization({ snapshot, user, roleLabel }: { snapshot: ConsoleSnapshot | null; user: DashboardUser; roleLabel: string }) {
-  return <section className="workspace-page"><div className="workspace-page-hero"><small>ORGANIZATION</small><h2>账号归属与协作边界。</h2><p>组织身份由服务端会话确认，成员和内容始终限定在当前组织内。</p></div><div className="workspace-profile-grid"><article><span className="workspace-profile-avatar">{user.displayName.slice(0,2).toUpperCase()}</span><small>CURRENT ACCOUNT</small><h3>{user.displayName}</h3><p>{user.email}</p><b>{roleLabel}</b></article><article><Icon name="users"/><small>CURRENT ORGANIZATION</small><h3>{user.tenantName}</h3><p>{snapshot?.metrics.activeMembers ?? 0} 名活动成员 / {snapshot?.metrics.totalMembers ?? 0} 名成员</p><b>服务端租户隔离</b></article><article><Icon name="terminal"/><small>DESKTOP SESSIONS</small><h3>{snapshot?.metrics.activeDesktopSessions ?? 0}</h3><p>当前账号仍有效的桌面端设备会话</p><b>可撤销授权</b></article></div></section>;
+  return <section className="workspace-page"><div className="workspace-page-hero"><small>ORGANIZATION</small><h2>账号归属与协作边界。</h2><p>组织身份由服务端会话确认，成员和内容始终限定在当前组织内。</p></div><div className="workspace-profile-grid"><article><span className="workspace-profile-avatar">{user.displayName.slice(0,2).toUpperCase()}</span><small>CURRENT ACCOUNT</small><h3>{user.displayName}</h3><p>{user.email || user.phoneE164 || user.username || "Eval Account"}</p><b>{roleLabel}</b></article><article><Icon name="users"/><small>CURRENT ORGANIZATION</small><h3>{user.tenantName}</h3><p>{snapshot?.metrics.activeMembers ?? 0} 名活动成员 / {snapshot?.metrics.totalMembers ?? 0} 名成员</p><b>服务端租户隔离</b></article><article><Icon name="terminal"/><small>DESKTOP SESSIONS</small><h3>{snapshot?.metrics.activeDesktopSessions ?? 0}</h3><p>当前账号仍有效的桌面端设备会话</p><b>可撤销授权</b></article></div></section>;
 }
 
 function Activity({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   return <section className="workspace-page"><div className="workspace-page-hero"><small>ACCOUNT ACTIVITY</small><h2>最近操作，清晰可追踪。</h2><p>普通成员只看到自己的操作；管理员可查看当前组织的审计活动。</p></div><div className="workspace-ledger"><header><span>操作</span><span>资源</span><span>时间</span><span>标识</span></header>{snapshot?.audits.length ? snapshot.audits.map(item => <article key={item.id}><b>{auditLabel(item.action)}<small>{item.action}</small></b><span>{item.resourceType}</span><time>{formatRelative(item.createdAt)}</time><code>{item.resourceId?.slice(0, 14) || "—"}</code></article>) : <Empty text="暂无可显示的操作记录。"/>}</div></section>;
 }
+
+function Profile({ currentUser, notify }: { currentUser: DashboardUser; notify: (message: string) => void }) {
+  const [account, setAccount] = useState<AccountSnapshot | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const isZh = currentUser.accountLocale === "zh";
+
+  const refreshAccount = useCallback(async () => {
+    const response = await fetch("/api/auth/account", { cache: "no-store" });
+    if (!response.ok) throw new Error(isZh ? "个人中心加载失败。" : "Could not load your profile.");
+    setAccount(await response.json());
+  }, [isZh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/account", { cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<AccountSnapshot> : Promise.reject(new Error(isZh ? "个人中心加载失败。" : "Could not load your profile.")))
+      .then(snapshot => { if (!cancelled) setAccount(snapshot); })
+      .catch(error => { if (!cancelled) notify(error instanceof Error ? error.message : "Profile unavailable"); });
+    return () => { cancelled = true; };
+  }, [isZh, notify]);
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = window.setInterval(() => setCountdown(value => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [countdown]);
+
+  const sendVerification = async (purpose: "phone_bind" | "password_change", phone?: string) => {
+    if (sending || countdown > 0) return;
+    setSending(true);
+    try {
+      const response = await fetch("/api/auth/sms/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ purpose, phone }) });
+      const payload = await response.json() as { error?: string; message?: string; retryAfter?: number };
+      if (!response.ok) throw new Error(payload.error || "验证码发送失败。");
+      notify(payload.message || "验证码已发送。");
+      setCountdown(payload.retryAfter ?? 60);
+    } catch (error) { notify(error instanceof Error ? error.message : "验证码发送失败。"); }
+    finally { setSending(false); }
+  };
+
+  const bindLocal = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/auth/account/local", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: form.get("username"), phone: form.get("phone"), code: form.get("code"), password: form.get("password") }) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "本地账号绑定失败。");
+      notify("账号、手机号和密码已绑定。");
+      await refreshAccount();
+    } catch (error) { notify(error instanceof Error ? error.message : "本地账号绑定失败。"); }
+    finally { setSaving(false); }
+  };
+
+  const updatePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    const form = new FormData(event.currentTarget);
+    try {
+      const response = await fetch("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: form.get("code"), nextPassword: form.get("nextPassword") }) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "密码修改失败。");
+      notify("密码已更新，其他登录会话已撤销。");
+      event.currentTarget.reset();
+    } catch (error) { notify(error instanceof Error ? error.message : "密码修改失败。"); }
+    finally { setSaving(false); }
+  };
+
+  const providerHref = (provider: "google" | "github") => `/api/auth/${provider}/start?${new URLSearchParams({ lang: currentUser.accountLocale, intent: "link", returnTo: "/console?view=profile" }).toString()}`;
+  if (!account) return <section className="workspace-page"><Empty text={isZh ? "正在读取账号身份…" : "Loading account identities…"}/></section>;
+  const localComplete = Boolean(account.user.username && account.user.phoneE164 && account.passwordConfigured);
+
+  return <section className="workspace-page workspace-profile-center">
+    <div className="workspace-page-hero"><small>ACCOUNT IDENTITY</small><h2>{isZh ? "一个账号，连接每种登录方式。" : "One account. Two verified identities."}</h2><p>{isZh ? "手机号、账号密码和 GitHub 绑定到同一用户，任一方式登录都会进入相同的工作区与数据。" : "Link Google and GitHub to the same Eval account. Either identity will open the same workspace and data."}</p></div>
+    <div className="identity-status-grid">
+      {isZh && <IdentityStatus title="账号密码" value={account.user.username || "尚未绑定"} connected={Boolean(account.user.username && account.passwordConfigured)}/>}
+      {isZh && <IdentityStatus title="手机验证码" value={account.user.phoneE164 ? maskPhone(account.user.phoneE164) : "尚未绑定"} connected={Boolean(account.user.phoneE164)}/>}
+      {!isZh && <IdentityStatus title="Google" value={account.providers.google?.emailAtLink || "Not linked"} connected={Boolean(account.providers.google)} action={!account.providers.google ? providerHref("google") : undefined}/>}
+      <IdentityStatus title="GitHub" value={account.providers.github?.emailAtLink || (isZh ? "尚未绑定" : "Not linked")} connected={Boolean(account.providers.github)} action={!account.providers.github ? providerHref("github") : undefined}/>
+    </div>
+    {isZh && !localComplete && <article className="identity-form-panel"><header><small>LOCAL IDENTITY</small><h3>绑定账号、手机号与密码</h3><p>适用于首次通过 GitHub 登录的中文用户。验证码会发送到待绑定手机号。</p></header><form onSubmit={bindLocal}><label>账号<input name="username" defaultValue={account.user.username || ""} required minLength={3} maxLength={32} autoComplete="username"/></label><label>手机号<div className="identity-code-row"><input name="phone" type="tel" defaultValue={account.user.phoneE164?.replace(/^\+86/, "") || ""} required inputMode="tel" autoComplete="tel"/><button type="button" onClick={event => { const form = event.currentTarget.form; void sendVerification("phone_bind", String(new FormData(form!).get("phone") || "")); }} disabled={sending || countdown > 0}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "发送验证码"}</button></div></label><label>验证码<input name="code" required inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6}/></label><label>设置密码<input name="password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="至少 10 位，包含字母与数字"/></label><button className="identity-primary" disabled={saving}>{saving ? "正在绑定…" : "完成统一绑定"}<Icon name="arrow"/></button></form></article>}
+    {isZh && localComplete && <article className="identity-form-panel"><header><small>ACCOUNT SECURITY</small><h3>通过手机验证码修改密码</h3><p>验证码发送到 {maskPhone(account.user.phoneE164!)}。更新后其他网页登录会话会被撤销。</p></header><form onSubmit={updatePassword}><label>短信验证码<div className="identity-code-row"><input name="code" required inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6}/><button type="button" onClick={() => void sendVerification("password_change")} disabled={sending || countdown > 0}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "发送验证码"}</button></div></label><label>新密码<input name="nextPassword" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="至少 10 位，包含字母与数字"/></label><button className="identity-primary" disabled={saving}>{saving ? "正在更新…" : "验证并更新密码"}<Icon name="arrow"/></button></form></article>}
+  </section>;
+}
+
+function IdentityStatus({ title, value, connected, action }: { title: string; value: string; connected: boolean; action?: string }) {
+  return <article className={connected ? "connected" : "pending"}><Icon name={connected ? "check" : "key"}/><small>{title}</small><b>{value}</b><span>{connected ? "CONNECTED" : "NOT LINKED"}</span>{action && <a href={action}>绑定 / Link<Icon name="arrow"/></a>}</article>;
+}
+
+function maskPhone(value: string) { return value.replace(/^\+86(\d{3})\d{4}(\d{4})$/, "$1 **** $2"); }
 
 function Metric({ icon, value, label }: { icon: IconName; value: number; label: string }) { return <article><Icon name={icon}/><strong>{value.toLocaleString("zh-CN")}</strong><span>{label}</span></article>; }
 function PanelHead({ eyebrow, title, href, link }: { eyebrow: string; title: string; href: string; link: string }) { return <header><div><small>{eyebrow}</small><h3>{title}</h3></div><Link href={href}>{link}<Icon name="arrow"/></Link></header>; }

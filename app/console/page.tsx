@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireEmailSession } from "../auth/server";
+import { requireUserSession } from "../auth/server";
 import { Dashboard } from "../ui/Dashboard";
 import "./style.css";
 
@@ -10,7 +10,15 @@ export const metadata: Metadata = {
   description: "Eval Agent 下载、社区、组织与账号控制台。",
 };
 
-export default async function ConsolePage() {
-  const currentUser = await requireEmailSession();
-  return <Dashboard currentUser={currentUser}/>;
+export default async function ConsolePage({ searchParams }: { searchParams: Promise<{ view?: string; linked?: string; error?: string }> }) {
+  const currentUser = await requireUserSession();
+  const query = await searchParams;
+  const initialView = query.view === "profile" ? "profile" : "overview";
+  const linked = query.linked === "google" || query.linked === "github" ? query.linked : null;
+  const initialNotice = linked
+    ? currentUser.accountLocale === "zh" ? `${linked === "github" ? "GitHub" : "Google"} 账号已绑定` : `${linked === "github" ? "GitHub" : "Google"} account linked`
+    : query.error
+      ? currentUser.accountLocale === "zh" ? "账号绑定失败，请重试" : "Account linking failed. Please try again."
+      : "";
+  return <Dashboard currentUser={currentUser} initialView={initialView} initialNotice={initialNotice}/>;
 }

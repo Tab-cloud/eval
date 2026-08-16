@@ -13,13 +13,28 @@ test("keeps the public landing page and protected consoles separated", async () 
     source("../app/admin/auth/login/page.tsx"),
   ]);
   assert.match(home, /<AgentLanding\s*\/>/);
-  assert.match(consolePage, /requireEmailSession/);
+  assert.match(consolePage, /requireUserSession/);
   assert.match(adminPage, /requireAdminSession/);
   assert.match(authServer, /tenant_admin/);
   assert.match(authServer, /platform_admin/);
   assert.match(authServer, /redirect\("\/console"\)/);
   assert.match(authServer, /redirect\("\/admin\/auth\/login"\)/);
   assert.match(adminLoginPage, /<AdminLogin\s*\/>/);
+});
+
+test("keeps public download metadata readable across responsive layouts", async () => {
+  const [landing, css] = await Promise.all([
+    source("../app/agent/AgentLanding.tsx"),
+    source("../app/agent/landing.css"),
+  ]);
+  assert.match(css, /\.release-spec span \{[^}]*font:\s*600 12px/);
+  assert.match(css, /\.release-action \{[^}]*font-size:\s*13px/);
+  assert.match(css, /\.release-truth p \{[^}]*font-size:\s*14px/);
+  assert.match(css, /\.download-heading > p \{[^}]*font-size:\s*16px/);
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*\.release-truth \{ grid-template-columns:\s*1fr/);
+  assert.match(landing, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>浙ICP备2024097468号-10<\/a>/);
+  assert.doesNotMatch(landing, /正在连接（杭州）科技有限公司|Connecting \(Hangzhou\) Technology|© 2026 CONNECTING TECHNOLOGY/);
+  assert.match(css, /\.closing-scene footer \{[^}]*justify-content:\s*center/);
 });
 
 test("admin has a dedicated username login that never grants normal users control-plane access", async () => {
@@ -44,7 +59,7 @@ test("admin has a dedicated username login that never grants normal users contro
   assert.match(route, /isLoginBlocked/);
   assert.match(route, /rejectCrossSiteWrite/);
   assert.match(route, /x-forwarded-proto/);
-  assert.match(core, /WHERE u\.username = \?/);
+  assert.match(core, /WHERE lower\(u\.username\) = lower\(\?\)/);
   assert.match(core, /verifyPassword/);
   assert.match(store, /createPasswordHash/);
   assert.match(schema, /username: text\("username"\)/);
@@ -132,7 +147,8 @@ test("browser writes are same-origin protected and login attempts are limited", 
   assert.match(login, /isLoginBlocked/);
   assert.match(login, /EVAL_ENABLE_PASSWORD_LOGIN/);
   assert.match(login, /Retry-After/);
-  assert.match(password, /changePassword/);
+  assert.match(password, /verifySmsCode\("password_change"/);
+  assert.match(password, /replacePassword/);
   assert.match(password, /至少 10 位/);
 });
 
@@ -191,6 +207,8 @@ test("locale selects phone SMS and the configured external identity entry points
   const login = await source("../app/login/page.tsx");
   assert.match(login, /\/api\/auth\/sms\/send/);
   assert.match(login, /\/api\/auth\/sms\/login/);
+  assert.match(login, /\/api\/auth\/username\/login/);
+  assert.match(login, /\/api\/auth\/register/);
   assert.match(login, /`\/api\/auth\/\$\{provider\}\/start/);
   assert.match(login, /oauthHref\("google"\)/);
   assert.match(login, /oauthHref\("github"\)/);
@@ -200,16 +218,21 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /Continue with GitHub/);
   assert.match(login, /使用 GitHub 登录/);
   assert.match(login, /手机号验证/);
+  assert.match(login, /注册账号/);
+  assert.match(login, /账号密码/);
+  assert.match(login, /Only Google and GitHub are available for English accounts/);
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });
 
-test("SMS login uses Alibaba Cloud, hashed one-time codes, and database rate limits", async () => {
-  const [provider, settings, sms, schema, sendRoute] = await Promise.all([
+test("SMS verification uses Alibaba Cloud, purpose-bound hashed codes, and database rate limits", async () => {
+  const [provider, settings, sms, schema, sendRoute, passwordRoute, registrationRoute] = await Promise.all([
     source("../app/auth/aliyun-sms.ts"),
     source("../app/auth/provider-settings.ts"),
     source("../app/auth/sms.ts"),
     source("../db/schema.ts"),
     source("../app/api/auth/sms/send/route.ts"),
+    source("../app/api/auth/password/route.ts"),
+    source("../app/api/auth/register/route.ts"),
   ]);
   assert.match(provider, /@alicloud\/dysmsapi20170525/);
   assert.match(provider, /dysmsapi\.aliyuncs\.com/);
@@ -222,30 +245,52 @@ test("SMS login uses Alibaba Cloud, hashed one-time codes, and database rate lim
   assert.match(sms, /sms:cooldown/);
   assert.match(sms, /sms:phone/);
   assert.match(sms, /sms:ip/);
+  assert.match(sms, /"login" \| "register" \| "phone_bind" \| "password_change"/);
+  assert.match(sms, /user\.accountLocale !== "zh"/);
+  assert.match(sms, /`\$\{purpose\}:\$\{userId \?\? "public"\}:\$\{phoneE164\}`/);
   assert.match(schema, /authSmsChallenges/);
   assert.match(schema, /authSmsRateLimits/);
-  assert.match(sendRoute, /如果该手机号已绑定账号/);
+  assert.match(sendRoute, /purpose === "password_change"/);
+  assert.match(sendRoute, /sessionUser\.accountLocale !== "zh"/);
+  assert.match(passwordRoute, /verifySmsCode\("password_change"/);
+  assert.match(passwordRoute, /replacePassword/);
+  assert.doesNotMatch(passwordRoute, /currentPassword|authenticateUsername/);
+  assert.match(registrationRoute, /verifySmsCode\("register"/);
+  assert.match(registrationRoute, /registerChineseAccount/);
 });
 
-test("Google sign-in uses OIDC protections and only links pre-provisioned users", async () => {
-  const [google, authCore, schema] = await Promise.all([
+test("Google sign-in uses OIDC protections, creates English accounts, and supports explicit linking", async () => {
+  const [google, authCore, schema, migration] = await Promise.all([
     source("../app/auth/google.ts"),
     source("../app/auth/core.ts"),
     source("../db/schema.ts"),
+    source("../drizzle/0012_illegal_machine_man.sql"),
   ]);
   assert.match(google, /code_challenge_method:\s*"S256"/);
   assert.match(google, /state/);
   assert.match(google, /nonce/);
   assert.match(google, /verifyIdToken/);
   assert.match(google, /email_verified !== true/);
-  assert.match(authCore, /findOrLinkGoogleUser/);
+  assert.match(google, /loginOrCreateExternalUser/);
+  assert.match(google, /linkExternalIdentity/);
+  assert.match(google, /stored\.intent === "link"/);
+  assert.match(google, /current\.accountLocale !== "en"/);
+  assert.match(google, /intent === "login" && locale !== "en"/);
+  assert.match(google, /ExternalIdentityPolicyError/);
+  assert.match(authCore, /loginOrCreateExternalUser/);
   assert.match(authCore, /WHERE lower\(u\.email\) = lower\(\?\)/);
-  assert.doesNotMatch(google, /INSERT INTO users/);
+  assert.match(authCore, /INSERT INTO users/);
   assert.match(schema, /authOauthStates/);
   assert.match(schema, /authOidcIdentities/);
+  assert.match(schema, /accountLocale/);
+  assert.match(schema, /intent:/);
+  assert.match(schema, /linkUserId/);
+  assert.match(migration, /DROP NOT NULL/);
+  assert.match(migration, /account_locale/);
+  assert.match(migration, /link_user_id/);
 });
 
-test("GitHub sign-in uses state, PKCE, verified emails, and no repository scope", async () => {
+test("GitHub sign-in uses state, PKCE, verified emails, account creation, and explicit linking", async () => {
   const [github, start, callback, authCore, schema, config] = await Promise.all([
     source("../app/auth/github.ts"),
     source("../app/api/auth/github/start/route.ts"),
@@ -261,13 +306,43 @@ test("GitHub sign-in uses state, PKCE, verified emails, and no repository scope"
   assert.match(github, /api\.github\.com\/user\/emails/);
   assert.match(github, /item\.verified === true/);
   assert.doesNotMatch(github, /(?:^|[\s"'])repo(?=$|[\s"'])|write:org/);
-  assert.doesNotMatch(github, /INSERT INTO users/);
   assert.match(start, /beginGitHubAuthorization/);
   assert.match(callback, /finishGitHubAuthorization/);
-  assert.match(authCore, /findOrLinkGitHubUser/);
+  assert.match(github, /stored\.intent === "link"/);
+  assert.match(github, /linkExternalIdentity/);
+  assert.match(github, /loginOrCreateExternalUser/);
+  assert.match(authCore, /INSERT INTO users/);
+  assert.match(authCore, /auth\.identity\.link/);
   assert.match(schema, /githubEnabled/);
   assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
   assert.match(config, /GITHUB_OAUTH_CLIENT_SECRET/);
+});
+
+test("personal center exposes locale-specific identities and binds them to one user", async () => {
+  const [dashboard, accountRoute, localRoute, usernameRoute, authCore, css] = await Promise.all([
+    source("../app/ui/Dashboard.tsx"),
+    source("../app/api/auth/account/route.ts"),
+    source("../app/api/auth/account/local/route.ts"),
+    source("../app/api/auth/username/login/route.ts"),
+    source("../app/auth/core.ts"),
+    source("../app/console/style.css"),
+  ]);
+  assert.match(dashboard, /个人中心/);
+  assert.match(dashboard, /One account\. Two verified identities/);
+  assert.match(dashboard, /账号、手机号与密码/);
+  assert.match(dashboard, /intent:\s*"link"/);
+  assert.match(dashboard, /currentUser\.accountLocale === "zh"/);
+  assert.match(dashboard, /providerHref\("google"\)/);
+  assert.match(dashboard, /providerHref\("github"\)/);
+  assert.match(accountRoute, /accountIdentitySnapshot/);
+  assert.match(localRoute, /verifySmsCode\("phone_bind"/);
+  assert.match(localRoute, /bindChineseLocalIdentity/);
+  assert.match(usernameRoute, /authenticateUsername/);
+  assert.match(usernameRoute, /user\.accountLocale !== "zh"/);
+  assert.match(authCore, /auth\.local_identity\.bind/);
+  assert.match(authCore, /DELETE FROM auth_sessions WHERE user_id = \?/);
+  assert.match(css, /\.identity-status-grid/);
+  assert.match(css, /\.identity-form-panel/);
 });
 
 test("admin identity settings store only deployment references and drive all login providers", async () => {
@@ -350,8 +425,8 @@ test("forum is session-protected, tenant-bound, rate-limited, and same-origin wr
     source("../drizzle/0007_curved_echo.sql"),
     source("../app/content/style.css"),
   ]);
-  assert.match(forumPage, /requireEmailSession/);
-  assert.match(topicPage, /requireEmailSession/);
+  assert.match(forumPage, /requireUserSession/);
+  assert.match(topicPage, /requireUserSession/);
   assert.match(contentStore, /t\.tenant_id = \?/);
   assert.match(contentStore, /r\.tenant_id = \?/);
   assert.match(contentStore, /每小时最多发布 5 个主题/);

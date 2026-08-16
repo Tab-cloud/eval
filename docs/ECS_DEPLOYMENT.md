@@ -61,9 +61,9 @@ GITHUB_OAUTH_CLIENT_ID=replace-with-oauth-app-client-id
 GITHUB_OAUTH_CLIENT_SECRET=replace-with-oauth-app-client-secret
 ```
 
-`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `tenant_admin` 或 `platform_admin` 角色的账号；不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
+`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `tenant_admin` 或 `platform_admin` 角色的账号；公开注册和第三方首次登录只创建 `developer`，不会授予管理员角色。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
 
-桌面账号绑定复用 `APP_ORIGIN` 指定的 HTTPS 站点，并通过 `/device` 完成浏览器确认。部署新版本前必须执行数据库迁移，创建 `desktop_auth_requests`、`desktop_sessions` 及 OAuth `return_path` 字段；不得将桌面令牌、设备码或会话明文写入日志。
+桌面账号绑定复用 `APP_ORIGIN` 指定的 HTTPS 站点，并通过 `/device` 完成浏览器确认。部署新版本前必须执行数据库迁移；当前账号体系还要求 `users.account_locale`、可空邮箱、大小写不敏感的唯一用户名，以及 OAuth `intent`/`link_user_id` 字段。不得将桌面令牌、设备码或会话明文写入日志。
 
 保护环境文件：
 
@@ -80,7 +80,7 @@ sudo chmod 0640 /etc/eval-web/eval-web.env
 https://eval.zailink.space/api/auth/google/callback
 ```
 
-如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。管理员需先在用户管理中创建邮箱账号，并为中文登录绑定手机号。
+如仅允许一个 Google Workspace 域，可额外设置 `GOOGLE_ALLOWED_HOSTED_DOMAIN`。英文用户首次使用已验证的 Google 身份登录时，会在 `EVAL_IDENTITY_TENANT_SLUG` 指定的既有租户中创建普通成员；已登录英文用户可在个人中心显式绑定 Google。
 
 在 GitHub 的 Developer settings 中创建 OAuth App，只申请 `user:email`，并把 Authorization callback URL 精确配置为：
 
@@ -88,7 +88,9 @@ https://eval.zailink.space/api/auth/google/callback
 https://eval.zailink.space/api/auth/github/callback
 ```
 
-GitHub 登录同时显示在中文和英文登录页。管理员仍需先创建邮箱用户；只有 GitHub 返回的已验证邮箱与当前身份租户中的活动用户匹配时才会建立会话。
+GitHub 登录同时显示在中文和英文登录页。首次登录会在身份租户中创建普通成员；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
+
+中文注册依赖已审核的阿里云短信模板。发送与校验必须保持 `login`、`register`、`phone_bind`、`password_change` 四种用途隔离；修改密码后服务端撤销该用户其他 Web 会话并为当前浏览器签发新会话。上线前应分别完成四条真实短信流程和 Google/GitHub 绑定冲突测试。
 
 `EVAL_PUBLIC_CONTENT_TENANT_SLUG` 指定公开博客的唯一内容组织。论坛不使用这个变量，始终按登录成员的当前组织隔离。部署包含论坛/博客功能的版本前必须运行迁移，创建 `blog_posts`、`forum_topics` 与 `forum_replies`；上线后由该组织管理员在“内容中心”发布第一篇博客并治理论坛内容。
 

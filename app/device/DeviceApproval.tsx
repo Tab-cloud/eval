@@ -7,7 +7,7 @@ interface Props {
   deviceName: string;
   clientVersion: string;
   displayName: string;
-  email: string;
+  accountIdentity: string;
   tenantName: string;
 }
 
@@ -50,7 +50,7 @@ export function DeviceApproval(props: Props) {
         <dl>
           <div><dt>设备</dt><dd>{props.deviceName}</dd></div>
           <div><dt>客户端</dt><dd>Eval {props.clientVersion}</dd></div>
-          <div><dt>账号</dt><dd>{props.displayName}<small>{props.email}</small></dd></div>
+          <div><dt>账号</dt><dd>{props.displayName}<small>{props.accountIdentity}</small></dd></div>
           <div><dt>组织</dt><dd>{props.tenantName}</dd></div>
           <div><dt>验证码</dt><dd className="device-code">{props.userCode}</dd></div>
         </dl>

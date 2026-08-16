@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireEmailSession } from "../../auth/server";
+import { requireUserSession } from "../../auth/server";
 import { ContentHeader } from "../../content/ContentHeader";
 import { forumTopic, type ForumCategory } from "../../content/store";
 import { ReplyComposer } from "../ForumComposer";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "论坛主题" };
 
 export default async function ForumTopicPage({ params }: { params: Promise<{ slug: string }> }) {
-  const user = await requireEmailSession();
+  const user = await requireUserSession();
   const { slug } = await params;
   const data = await forumTopic(user, slug);
   if (!data) notFound();

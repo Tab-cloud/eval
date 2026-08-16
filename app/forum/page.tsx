@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requireEmailSession } from "../auth/server";
+import { requireUserSession } from "../auth/server";
 import { ContentHeader } from "../content/ContentHeader";
 import { forumCategories, forumOverview, type ForumCategory } from "../content/store";
 import { TopicComposer } from "./ForumComposer";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "工程论坛", description: "Eval Agent 组织成员的硬件、固件与 Agent 实践交流空间。" };
 
 export default async function ForumPage({ searchParams }: { searchParams: Promise<{ category?: string }> }) {
-  const user = await requireEmailSession();
+  const user = await requireUserSession();
   const { category } = await searchParams;
   const data = await forumOverview(user, category);
   const total = Object.values(data.categoryCounts).reduce((sum, count) => sum + count, 0);
