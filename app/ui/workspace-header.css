@@ -27,7 +27,7 @@
   .workspace-header { grid-template-columns: 1fr auto; min-height: 64px; }
   .workspace-header > nav { display: none; }
   .workspace-actions > a { display: none; }
-  .workspace-mobile-nav { position: fixed; z-index: 65; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); min-height: 62px; padding: 6px; border: 1px solid var(--line); border-radius: 20px; background: color-mix(in srgb,var(--surface-solid) 90%,transparent); backdrop-filter: blur(20px); display: grid; grid-template-columns: repeat(5,1fr); box-shadow: 0 18px 55px rgba(0,0,0,.18); }
+  .workspace-mobile-nav { position: fixed; z-index: 65; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); min-height: 62px; padding: 6px; border: 1px solid var(--line); border-radius: 20px; background: color-mix(in srgb,var(--surface-solid) 90%,transparent); backdrop-filter: blur(20px); display: grid; grid-template-columns: repeat(6,1fr); box-shadow: 0 18px 55px rgba(0,0,0,.18); }
   .workspace-mobile-nav :is(button,a) { min-width: 44px; min-height: 44px; border: 0; border-radius: 14px; background: transparent; color: var(--tertiary); display: grid; place-items: center; align-content: center; gap: 3px; font-size: var(--font-micro); text-decoration: none; }
   .workspace-mobile-nav :is(button,a).active { background: var(--surface-muted); color: var(--text); }
   .workspace-mobile-nav svg { width: 17px; }

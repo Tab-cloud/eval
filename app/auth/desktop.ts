@@ -315,11 +315,17 @@ function requestSource(request: Request) {
 
 function publicOrigin(request: Request) {
   const configured = process.env.APP_ORIGIN?.trim();
-  const origin = configured ? new URL(configured).origin : new URL(request.url).origin;
-  if (process.env.NODE_ENV === "production" && !origin.startsWith("https://")) {
+  const fallback = process.env.NODE_ENV === "production"
+    ? "https://eval.zailink.space"
+    : new URL(request.url).origin;
+  const parsed = new URL(configured || fallback);
+  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
     throw new DesktopAuthorizationError("invalid_configuration", "生产环境账号服务必须使用 HTTPS。", 503);
   }
-  return origin;
+  if (parsed.username || parsed.password) {
+    throw new DesktopAuthorizationError("invalid_configuration", "账号服务地址不能包含内嵌凭据。", 503);
+  }
+  return parsed.origin;
 }
 
 async function sha256(value: string) {

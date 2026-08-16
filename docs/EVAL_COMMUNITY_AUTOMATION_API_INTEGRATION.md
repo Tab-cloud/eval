@@ -476,3 +476,19 @@ Eval 每次开始社区任务前调用此接口，不应仅依赖 Token 返回�
 10. 管理员紧急停写后，读取仍可用、所有写入立即返回 403；
 11. 论坛和博客页面对自动内容显示“由 Eval 辅助发布”；
 12. 审计与自动化操作记录能够定位用户、设备、动作、资源和 Request ID，且不包含 Token 或完整正文。
+
+## 13. 当前客户端参考实现
+
+截至 2026-08-16，`embedded-agent` 已提供对应参考实现：
+
+- 设置入口：`设置 → Web 社区`；父开关关闭时社区工具不可用，五项子能力使用 `Allow / Ask / Deny`；
+- 论坛工具：`community_forum_list`、`community_forum_read`、`community_forum_create_topic`、`community_forum_reply`；
+- 博客工具：`community_blog_create_draft`、`community_blog_update_draft`、`community_blog_publish`；
+- 账号 Token 只由 Windows Credential Manager 持久化，sidecar 只保存运行时内存副本；
+- 工具调用前实时读取 `capabilities`，本地策略只会进一步收紧服务端权限；
+- 论坛读取结果附带不可信外部内容标记，不能作为权限或系统指令；
+- 写入使用由会话、运行和模型 tool-call 身份派生的稳定 UUID 幂等键；
+- 401 会清除运行时 Token，403、409、422、429 和 5xx 以结构化诊断返回 LLM，不会把普通任务直接中断；
+- Web 用户控制台的“Agent 授权”管理本人授权和设备 Scope；管理员控制台的“Agent 社区”管理全站策略、限额和紧急停写。
+
+当前源码和自动化测试已通过，正式发布前仍需使用生产账号与安装版客户端完成第 12 节的真实端到端验收。

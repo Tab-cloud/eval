@@ -184,9 +184,10 @@ export async function saveGlobalAgentCommunityPolicy(admin: AuthenticatedUser, i
   await ensureAgentCommunitySchema();
   if (admin.role !== "admin") throw new Error("仅管理员可以修改 Eval 自动化策略。");
   const now = epochSeconds();
+  const enabled = input.enabled === true;
   const values = {
-    enabled: input.enabled === true,
-    writesEnabled: input.writesEnabled === true,
+    enabled,
+    writesEnabled: enabled && input.writesEnabled === true,
     allowForumRead: input.allowForumRead === true,
     allowForumTopicCreate: input.allowForumTopicCreate === true,
     allowForumReplyCreate: input.allowForumReplyCreate === true,

@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
 import { AuthSettingsView, type AuthSettingsSnapshot } from "./AuthSettingsView";
 import { ContentSettingsView, type ContentAdminSnapshot } from "./ContentSettingsView";
+import { AgentCommunityPolicyView, type AgentCommunityAction, type AgentCommunityPolicy } from "./AgentCommunityPolicyView";
 
 type AdminUser = { id: string; email?: string; phoneE164?: string | null; displayName: string; role: "admin" | "member" };
 type Snapshot = {
@@ -19,6 +20,8 @@ type Snapshot = {
   authSettings: AuthSettingsSnapshot;
   releaseSettings: { configured: boolean; updaterPublicKey: string; updaterPublicKeyId: string; source: "database" | "environment" | "missing"; updatedAt: number | null };
   content: ContentAdminSnapshot;
+  agentCommunityPolicy: AgentCommunityPolicy;
+  agentCommunityActions: AgentCommunityAction[];
 };
 
 const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconName }> = [
@@ -26,6 +29,7 @@ const modules: Array<{ id: string; label: string; eyebrow: string; icon: IconNam
   { id: "users", label: "用户管理", eyebrow: "IDENTITY", icon: "users" },
   { id: "identity", label: "登录与身份", eyebrow: "AUTHENTICATION", icon: "key" },
   { id: "content", label: "内容中心", eyebrow: "EDITORIAL", icon: "spark" },
+  { id: "community", label: "Agent 社区", eyebrow: "AUTOMATION", icon: "shield" },
   { id: "releases", label: "版本发布", eyebrow: "DISTRIBUTION", icon: "route" },
   { id: "billing", label: "产品方案", eyebrow: "COMMERCE", icon: "chart" },
   { id: "audits", label: "审计日志", eyebrow: "AUDIT", icon: "shield" },
@@ -91,6 +95,7 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
         {active === "users" && <PhoneBindingPanel data={data} busy={busy} action={action}/>}
         {active === "identity" && <AuthSettingsView settings={data.authSettings} busy={busy} action={action}/>}
         {active === "content" && <ContentSettingsView content={data.content} busy={busy} action={action}/>}
+        {active === "community" && <AgentCommunityPolicyView policy={data.agentCommunityPolicy} actions={data.agentCommunityActions} busy={busy} action={action}/>}
         {active === "releases" && <ReleaseCenterView data={data} busy={busy} upload={uploadArtifact} action={action}/>}
         {active === "billing" && <BillingView data={data} busy={busy} action={action}/>} 
         {active === "audits" && <AuditsView data={data}/>}
@@ -229,7 +234,7 @@ type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Rec
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",releases:"上传、验签并发布当前最新的 EXE 与桌面升级版本。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",community:"控制 Eval Agent 访问论坛与博客的全站能力、限额和紧急停止。",releases:"上传、验签并发布当前最新的 EXE 与桌面升级版本。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}

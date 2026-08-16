@@ -200,8 +200,8 @@ test("browser writes are same-origin protected and login attempts are limited", 
   assert.match(password, /至少 10 位/);
 });
 
-test("console reads real snapshots, links directly to forum and blog, and removes organization UI", async () => {
-  const [dashboard, header, consolePage, contentHeader, snapshot, css, headerCss] = await Promise.all([
+test("console reads real snapshots, exposes community consent, links directly to content, and removes organization UI", async () => {
+  const [dashboard, header, consolePage, contentHeader, snapshot, css, headerCss, community] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
     source("../app/ui/WorkspaceHeader.tsx"),
     source("../app/console/page.tsx"),
@@ -209,6 +209,7 @@ test("console reads real snapshots, links directly to forum and blog, and remove
     source("../app/console/store.ts"),
     source("../app/console/style.css"),
     source("../app/ui/workspace-header.css"),
+    source("../app/ui/CommunitySettings.tsx"),
   ]);
   assert.match(dashboard, /\/api\/console\/snapshot/);
   assert.match(dashboard, /\/forum/);
@@ -220,10 +221,15 @@ test("console reads real snapshots, links directly to forum and blog, and remove
   assert.match(header, /className="workspace-mobile-nav"/);
   assert.match(header, /\/console\?view=\$\{section\}/);
   assert.doesNotMatch(dashboard + snapshot + css, /function BlogList|blogPosts:|workspace-blog-list/);
-  assert.doesNotMatch(header + dashboard + consolePage, /id: "community"|active === "community"|"community", "activity"/);
-  assert.doesNotMatch(dashboard, /function Community/);
+  assert.match(header, /id: "community", label: "Agent 授权", icon: "shield"/);
+  assert.match(header, /value === "community"/);
+  assert.match(dashboard, /active === "community" && <CommunitySettings/);
+  assert.match(consolePage, /"community"/);
+  assert.match(community, /\/api\/console\/agent-community-settings/);
+  assert.match(community, /AUTHORIZED DEVICES/);
+  assert.match(community, /管理员未开放/);
   assert.doesNotMatch(dashboard + snapshot, /tenantId|tenantName|organization|Organization|activeMembers|totalMembers/);
-  assert.match(headerCss, /grid-template-columns: repeat\(5,1fr\)/);
+  assert.match(headerCss, /grid-template-columns: repeat\(6,1fr\)/);
   assert.doesNotMatch(css, /\.workspace-header\s*\{/);
   assert.match(snapshot, /release_versions/);
   assert.match(snapshot, /forum_topics/);
@@ -818,11 +824,13 @@ test("desktop account binding uses browser approval and hashed revocable device 
   assert.match(desktop, /user_code_hash/);
   assert.match(desktop, /token_hash/);
   assert.match(desktop, /MAX_REQUESTS_PER_HOUR/);
+  assert.match(desktop, /process\.env\.NODE_ENV === "production"[\s\S]*https:\/\/eval\.zailink\.space/);
+  assert.match(desktop, /parsed\.protocol !== "https:"/);
   assert.match(desktop, /eval_dt_/);
   assert.match(desktop, /requested_scopes/);
   assert.match(desktop, /approved_scopes/);
   assert.match(desktop, /granted_scopes/);
-  assert.doesNotMatch(desktop, /password/i);
+  assert.doesNotMatch(desktop, /(?:input|payload|user)\.password|password_hash/i);
   assert.match(schema, /desktopAuthRequests/);
   assert.match(schema, /desktopSessions/);
   assert.match(approve, /rejectCrossSiteWrite/);

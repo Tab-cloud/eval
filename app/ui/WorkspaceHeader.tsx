@@ -16,7 +16,7 @@ export type WorkspaceHeaderUser = {
   role: "admin" | "member";
 };
 
-export type WorkspaceSection = "overview" | "downloads" | "forum" | "blog" | "activity" | "profile";
+export type WorkspaceSection = "overview" | "downloads" | "forum" | "blog" | "activity" | "community" | "profile";
 export type DashboardSection = Exclude<WorkspaceSection, "forum" | "blog">;
 type DashboardNavSection = Exclude<DashboardSection, "profile">;
 type WorkspaceNavItem =
@@ -30,10 +30,11 @@ export const workspaceNav: WorkspaceNavItem[] = [
   { id: "forum", label: "论坛", icon: "users", href: "/forum" },
   { id: "blog", label: "博客", icon: "spark", href: "/blog" },
   { id: "activity", label: "活动", icon: "clock" },
+  { id: "community", label: "Agent 授权", icon: "shield" },
 ];
 
 export function isDashboardSection(value: string): value is DashboardSection {
-  return value === "overview" || value === "downloads" || value === "activity" || value === "profile";
+  return value === "overview" || value === "downloads" || value === "activity" || value === "community" || value === "profile";
 }
 
 export function workspaceSectionLabel(section: WorkspaceSection) {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { isDashboardSection, WorkspaceHeader, type DashboardSection, type WorkspaceHeaderUser, workspaceSectionLabel } from "./WorkspaceHeader";
+import { CommunitySettings } from "./CommunitySettings";
 
 type DashboardUser = WorkspaceHeaderUser;
 
@@ -70,6 +71,7 @@ export function Dashboard({ currentUser, initialView = "overview", initialNotice
       {active === "overview" && <Overview snapshot={snapshot}/>}
       {active === "downloads" && <Downloads snapshot={snapshot}/>}
       {active === "activity" && <Activity snapshot={snapshot}/>}
+      {active === "community" && <CommunitySettings notify={setToast}/>}
       {active === "profile" && <Profile currentUser={currentUser} notify={setToast}/>}
     </main>
 
