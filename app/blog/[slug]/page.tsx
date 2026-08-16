@@ -25,7 +25,7 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
     <main className="content-main blog-article-main">
       <nav className="content-breadcrumb" aria-label="面包屑"><Link href="/blog">博客</Link><span>/</span><span>文章</span></nav>
       <article className="blog-article">
-        <div className="blog-article-kicker">FIELD NOTE / {formatMachineDate(post.publishedAt)}</div>
+        <div className="blog-article-kicker">FIELD NOTE / {formatMachineDate(post.publishedAt)}{post.createdVia === "eval_agent" ? " / 由 Eval 辅助发布" : ""}</div>
         <h1>{post.title}</h1>
         <p className="blog-article-excerpt">{post.excerpt}</p>
         <div className="blog-byline"><span><b>{post.authorName.slice(0, 2)}</b><strong>{post.authorName}</strong></span><time>{formatBlogDate(post.publishedAt)}</time></div>

@@ -21,13 +21,13 @@ export default async function BlogPage() {
       </section>
 
       {featured ? <Link className="featured-post" href={`/blog/${encodeURIComponent(featured.slug)}`}>
-        <div><span>LATEST ARTICLE</span><h2>{featured.title}</h2><p>{featured.excerpt}</p><footer><b>{featured.authorName}</b><time>{formatBlogDate(featured.publishedAt)}</time></footer></div>
+        <div><span>LATEST ARTICLE{featured.createdVia === "eval_agent" ? " / 由 Eval 辅助发布" : ""}</span><h2>{featured.title}</h2><p>{featured.excerpt}</p><footer><b>{featured.authorName}</b><time>{formatBlogDate(featured.publishedAt)}</time></footer></div>
         <aside><span>{String(posts.length).padStart(2, "0")}</span><p>已发布文章</p><i>阅读全文</i></aside>
       </Link> : <div className="content-empty blog-empty"><span>EDITORIAL DESK</span><h3>第一篇文章正在准备中</h3><p>管理员发布文章后，这里会直接显示来自 PostgreSQL 的真实内容。</p></div>}
 
       {rest.length > 0 && <section className="blog-index">
         <div className="blog-index-head"><div><p>ARCHIVE</p><h2>更多文章</h2></div><span>{rest.length} 篇</span></div>
-        <div className="blog-grid">{rest.map((post, index) => <Link href={`/blog/${encodeURIComponent(post.slug)}`} key={post.id}><span>{String(index + 2).padStart(2, "0")}</span><time>{formatBlogDate(post.publishedAt)}</time><h3>{post.title}</h3><p>{post.excerpt}</p><footer>{post.authorName}<i>阅读文章</i></footer></Link>)}</div>
+        <div className="blog-grid">{rest.map((post, index) => <Link href={`/blog/${encodeURIComponent(post.slug)}`} key={post.id}><span>{String(index + 2).padStart(2, "0")}{post.createdVia === "eval_agent" ? " · EVAL" : ""}</span><time>{formatBlogDate(post.publishedAt)}</time><h3>{post.title}</h3><p>{post.excerpt}</p><footer>{post.authorName}<i>阅读文章</i></footer></Link>)}</div>
       </section>}
     </main>
     <footer className="content-footer"><span>EVAL AGENT / FIELD NOTES</span><Link href="/forum">进入工程论坛</Link><span>BUILT FOR HARDWARE TEAMS</span></footer>

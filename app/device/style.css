@@ -12,6 +12,13 @@
 .device-card dd { margin: 0; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .device-card dd small { display: block; margin-top: 3px; color: var(--tertiary); font-size: var(--font-caption); }
 .device-card .device-code { color: var(--blue); font: 650 18px var(--font-mono); letter-spacing: .12em; }
+.device-scopes { margin: 0 0 22px; padding: 18px; border: 1px solid var(--line); background: var(--surface-muted); display: grid; gap: 12px; }
+.device-scopes > span { color: var(--secondary); font-size: var(--font-caption); font-weight: 650; }
+.device-scopes label { min-height: 44px; display: grid; grid-template-columns: 20px 1fr; align-items: center; column-gap: 10px; color: var(--text); cursor: pointer; }
+.device-scopes input { width: 17px; height: 17px; accent-color: var(--blue); }
+.device-scopes b { font-size: var(--font-caption); font-weight: 560; }
+.device-scopes small { grid-column: 2; margin-top: 3px; color: var(--tertiary); font-size: var(--font-micro); }
+.device-scopes label.unavailable { opacity: .62; cursor: not-allowed; }
 .device-primary,.device-secondary { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: center; text-decoration: none; font-size: 12px; cursor: pointer; }
 .device-primary { border: 0; background: var(--blue); color: white; font-weight: 620; }
 .device-primary:disabled { cursor: wait; opacity: .62; }

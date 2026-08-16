@@ -4,7 +4,7 @@ import {
 } from "../../../../auth/desktop";
 
 export async function POST(request: Request) {
-  let payload: { deviceName?: unknown; clientVersion?: unknown };
+  let payload: { deviceName?: unknown; clientVersion?: unknown; requestedScopes?: unknown };
   try {
     payload = await request.json();
   } catch {

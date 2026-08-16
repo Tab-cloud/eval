@@ -42,6 +42,7 @@
 .topic-card-top { display: flex; align-items: center; gap: 8px; }
 .topic-card-top span, .topic-detail-meta span { color: var(--content-accent); font: 650 var(--font-micro) var(--font-mono); letter-spacing: .1em; }
 .topic-card-top i, .topic-detail-meta i { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--tertiary); font: normal var(--font-micro) var(--font-mono); }
+.topic-card-top i.eval-agent-badge,.topic-detail-meta i.eval-agent-badge { border-color: color-mix(in srgb,var(--blue) 38%,var(--line)); color: var(--blue); }
 .topic-card h3 { margin: 18px 0 10px; font-size: clamp(21px, 2.4vw, 31px); line-height: 1.16; letter-spacing: -.04em; font-weight: 560; }
 .topic-card > p { max-width: 760px; margin: 0; color: var(--secondary); font-size: 12px; line-height: 1.75; }
 .topic-card footer { margin-top: 24px; display: grid; grid-template-columns: 1fr auto auto; gap: 24px; align-items: center; color: var(--tertiary); font: 500 var(--font-micro) var(--font-mono); }
@@ -85,6 +86,7 @@
 .reply-list aside b { width: 38px; height: 38px; }
 .reply-list article > div > div { display: flex; justify-content: space-between; gap: 15px; }
 .reply-list article strong { font-size: 12px; }.reply-list time { color: var(--tertiary); font: var(--font-micro) var(--font-mono); }
+.eval-agent-inline { margin-left: 9px; color: var(--blue); font: normal var(--font-micro) var(--font-mono); }
 .reply-list article p { margin: 16px 0 0; white-space: pre-wrap; color: var(--secondary); font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
 .content-empty.compact { min-height: 210px; }
 .reply-composer { margin-top: 34px; padding: 27px; border: 1px solid var(--line); background: var(--surface-solid); }

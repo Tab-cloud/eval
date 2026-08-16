@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { communityScopeLabels, type CommunityScope } from "../community/permissions";
 
 interface Props {
   userCode: string;
@@ -8,11 +9,14 @@ interface Props {
   clientVersion: string;
   displayName: string;
   accountIdentity: string;
+  requestedScopes: CommunityScope[];
+  availableScopes: CommunityScope[];
 }
 
 export function DeviceApproval(props: Props) {
   const [state, setState] = useState<"idle" | "saving" | "approved">("idle");
   const [error, setError] = useState("");
+  const [approvedScopes, setApprovedScopes] = useState<CommunityScope[]>(() => props.requestedScopes.filter(scope => props.availableScopes.includes(scope)));
 
   const approve = async () => {
     if (state !== "idle") return;
@@ -22,7 +26,7 @@ export function DeviceApproval(props: Props) {
       const response = await fetch("/api/auth/desktop/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userCode: props.userCode }),
+        body: JSON.stringify({ userCode: props.userCode, approvedScopes }),
       });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "设备授权失败。");
@@ -52,6 +56,17 @@ export function DeviceApproval(props: Props) {
           <div><dt>账号</dt><dd>{props.displayName}<small>{props.accountIdentity}</small></dd></div>
           <div><dt>验证码</dt><dd className="device-code">{props.userCode}</dd></div>
         </dl>
+        {props.requestedScopes.length > 0 && <section className="device-scopes">
+          <span>此设备申请的自动化权限</span>
+          {props.requestedScopes.map(scope => {
+            const available = props.availableScopes.includes(scope);
+            return <label key={scope} className={!available ? "unavailable" : undefined}>
+              <input type="checkbox" checked={approvedScopes.includes(scope)} disabled={!available || state !== "idle"} onChange={event => setApprovedScopes(current => event.target.checked ? [...current, scope] : current.filter(item => item !== scope))}/>
+              <b>{communityScopeLabels[scope]}</b>
+              {!available && <small>当前全站策略、账号设置或角色不允许</small>}
+            </label>;
+          })}
+        </section>}
         {error && <div className="device-error" role="alert">{error}</div>}
         <button className="device-primary" onClick={() => void approve()} disabled={state === "saving"}>
           {state === "saving" ? "正在绑定…" : "确认绑定此设备"}

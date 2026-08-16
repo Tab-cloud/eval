@@ -175,6 +175,8 @@ export const desktopAuthRequests = pgTable("desktop_auth_requests", {
   sourceHash: text("source_hash").notNull(),
   deviceName: text("device_name").notNull(),
   clientVersion: text("client_version").notNull(),
+  requestedScopes: jsonb("requested_scopes").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  approvedScopes: jsonb("approved_scopes").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   status: text("status", { enum: ["pending", "approved", "denied"] }).notNull(),
   userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
   expiresAt: epoch("expires_at").notNull(),
@@ -193,6 +195,8 @@ export const desktopSessions = pgTable("desktop_sessions", {
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   deviceName: text("device_name").notNull(),
   clientVersion: text("client_version").notNull(),
+  grantedScopes: jsonb("granted_scopes").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  permissionsUpdatedAt: epoch("permissions_updated_at").notNull().default(0),
   expiresAt: epoch("expires_at").notNull(),
   revokedAt: epoch("revoked_at"),
   lastUsedAt: epoch("last_used_at"),
@@ -200,6 +204,56 @@ export const desktopSessions = pgTable("desktop_sessions", {
 }, (table) => [
   uniqueIndex("desktop_sessions_token_uq").on(table.tokenHash),
   index("desktop_sessions_user_idx").on(table.userId),
+]);
+
+export const agentCommunityPolicy = pgTable("agent_community_policy", {
+  id: text("id").primaryKey().default("global"),
+  enabled: boolean("enabled").notNull().default(false),
+  writesEnabled: boolean("writes_enabled").notNull().default(false),
+  allowForumRead: boolean("allow_forum_read").notNull().default(false),
+  allowForumTopicCreate: boolean("allow_forum_topic_create").notNull().default(false),
+  allowForumReplyCreate: boolean("allow_forum_reply_create").notNull().default(false),
+  allowBlogDraftCreate: boolean("allow_blog_draft_create").notNull().default(false),
+  allowBlogPublish: boolean("allow_blog_publish").notNull().default(false),
+  forumTopicsPerHour: integer("forum_topics_per_hour").notNull().default(3),
+  forumRepliesPerHour: integer("forum_replies_per_hour").notNull().default(15),
+  blogDraftsPerDay: integer("blog_drafts_per_day").notNull().default(3),
+  blogPublishesPerDay: integer("blog_publishes_per_day").notNull().default(1),
+  policyVersion: integer("policy_version").notNull().default(1),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+  ...timestamps,
+});
+
+export const userAgentCommunitySettings = pgTable("user_agent_community_settings", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").notNull().default(false),
+  allowForumRead: boolean("allow_forum_read").notNull().default(false),
+  allowForumTopicCreate: boolean("allow_forum_topic_create").notNull().default(false),
+  allowForumReplyCreate: boolean("allow_forum_reply_create").notNull().default(false),
+  allowBlogDraftCreate: boolean("allow_blog_draft_create").notNull().default(false),
+  allowBlogPublish: boolean("allow_blog_publish").notNull().default(false),
+  updatedAt: epoch("updated_at").notNull(),
+});
+
+export const agentCommunityActions = pgTable("agent_community_actions", {
+  id: text("id").primaryKey(),
+  requestId: text("request_id").notNull(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  desktopSessionId: text("desktop_session_id").notNull().references(() => desktopSessions.id, { onDelete: "cascade" }),
+  action: text("action").notNull(),
+  idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+  requestDigest: text("request_digest").notNull(),
+  resourceType: text("resource_type"),
+  resourceId: text("resource_id"),
+  status: text("status", { enum: ["accepted", "completed", "rejected", "failed"] }).notNull(),
+  reasonCode: text("reason_code"),
+  response: jsonb("response").$type<Record<string, unknown>>(),
+  createdAt: epoch("created_at").notNull(),
+  completedAt: epoch("completed_at"),
+}, (table) => [
+  uniqueIndex("agent_community_actions_session_key_uq").on(table.desktopSessionId, table.idempotencyKeyHash),
+  index("agent_community_actions_user_time_idx").on(table.userId, table.createdAt),
+  index("agent_community_actions_session_time_idx").on(table.desktopSessionId, table.createdAt),
 ]);
 
 export const authOidcIdentities = pgTable("auth_oidc_identities", {
@@ -244,12 +298,15 @@ export const forumTopics = pgTable("forum_topics", {
   category: text("category", { enum: ["general", "hardware", "firmware", "agents"] }).notNull().default("general"),
   status: text("status", { enum: ["open", "locked", "hidden"] }).notNull().default("open"),
   pinned: boolean("pinned").notNull().default(false),
+  createdVia: text("created_via", { enum: ["web", "eval_agent"] }).notNull().default("web"),
+  desktopSessionId: text("desktop_session_id").references(() => desktopSessions.id, { onDelete: "set null" }),
   lastActivityAt: epoch("last_activity_at").notNull(),
   ...timestamps,
 }, (table) => [
   uniqueIndex("forum_topics_slug_uq").on(table.slug),
   index("forum_topics_activity_idx").on(table.lastActivityAt),
   index("forum_topics_author_time_idx").on(table.authorId, table.createdAt),
+  index("forum_topics_agent_time_idx").on(table.createdVia, table.createdAt),
 ]);
 
 export const forumReplies = pgTable("forum_replies", {
@@ -258,10 +315,13 @@ export const forumReplies = pgTable("forum_replies", {
   authorId: text("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   body: text("body").notNull(),
   status: text("status", { enum: ["visible", "hidden"] }).notNull().default("visible"),
+  createdVia: text("created_via", { enum: ["web", "eval_agent"] }).notNull().default("web"),
+  desktopSessionId: text("desktop_session_id").references(() => desktopSessions.id, { onDelete: "set null" }),
   ...timestamps,
 }, (table) => [
   index("forum_replies_topic_time_idx").on(table.topicId, table.createdAt),
   index("forum_replies_author_time_idx").on(table.authorId, table.createdAt),
+  index("forum_replies_agent_time_idx").on(table.createdVia, table.createdAt),
 ]);
 
 export const blogPosts = pgTable("blog_posts", {
@@ -273,8 +333,11 @@ export const blogPosts = pgTable("blog_posts", {
   body: text("body").notNull(),
   status: text("status", { enum: ["draft", "published", "archived"] }).notNull().default("draft"),
   publishedAt: epoch("published_at"),
+  createdVia: text("created_via", { enum: ["web", "eval_agent"] }).notNull().default("web"),
+  desktopSessionId: text("desktop_session_id").references(() => desktopSessions.id, { onDelete: "set null" }),
   ...timestamps,
 }, (table) => [
   uniqueIndex("blog_posts_slug_uq").on(table.slug),
   index("blog_posts_status_time_idx").on(table.status, table.publishedAt),
+  index("blog_posts_agent_time_idx").on(table.createdVia, table.createdAt),
 ]);

@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   if (rejected) return rejected;
   const user = await getSessionUser(cookieToken(request));
   if (!user) return Response.json({ error: "请先登录 Web 账号。" }, { status: 401 });
-  let payload: { userCode?: unknown };
+  let payload: { userCode?: unknown; approvedScopes?: unknown };
   try {
     payload = await request.json();
   } catch {
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   }
   try {
     const userCode = typeof payload.userCode === "string" ? payload.userCode : "";
-    return Response.json(await approveDesktopAuthorization(userCode, user));
+    return Response.json(await approveDesktopAuthorization(userCode, user, payload.approvedScopes));
   } catch (error) {
     if (error instanceof DesktopAuthorizationError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status });

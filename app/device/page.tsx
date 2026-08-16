@@ -16,7 +16,7 @@ export default async function DevicePage({
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   const user = await getSessionUser(token);
   if (!user) redirect(`/login?returnTo=${encodeURIComponent(returnPath)}`);
-  const request = await desktopAuthorizationSummary(code);
+  const request = await desktopAuthorizationSummary(code, user);
   if (!request) return <DeviceProblem title="绑定请求已失效" detail="请返回 Eval 桌面端重新发起账号绑定。"/>;
   if (request.status !== "pending") return <DeviceProblem title="绑定请求已经处理" detail="请返回 Eval 桌面端查看当前账号状态。"/>;
   return <DeviceApproval
@@ -25,6 +25,8 @@ export default async function DevicePage({
     clientVersion={request.clientVersion}
     displayName={user.displayName}
     accountIdentity={user.email ?? user.phoneE164 ?? user.username ?? user.displayName}
+    requestedScopes={request.requestedScopes}
+    availableScopes={request.availableScopes}
   />;
 }
 

@@ -2,7 +2,8 @@ import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
 import { identityProviderSettings, providerSettingsSnapshot, saveProviderSettings } from "../auth/provider-settings";
-import { cleanText, contentSlug, ensureContentSchema } from "../content/store";
+import { contentSlug, ensureContentSchema, validateBlogDraftInput } from "../content/store";
+import { disableAgentCommunityWrites, globalAgentCommunityPolicy, saveGlobalAgentCommunityPolicy } from "../community/policy-store";
 import { normalizeSemver } from "../releases/public";
 import { releaseSettingsSnapshot, releaseSigningSettings, requireReleaseSigningSettings, saveReleaseSigningSettings } from "../releases/settings";
 import { artifactExists, deleteArtifact } from "../storage/artifacts";
@@ -93,6 +94,12 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const authSettings = providerSettingsSnapshot(await identityProviderSettings());
   const signingSettings = await releaseSigningSettings();
   const releaseSettings = releaseSettingsSnapshot(signingSettings);
+  const [agentCommunityPolicy, agentCommunityActions] = await Promise.all([
+    globalAgentCommunityPolicy(),
+    db.prepare(`SELECT request_id AS "requestId", user_id AS "userId", desktop_session_id AS "desktopSessionId",
+      action, resource_type AS "resourceType", resource_id AS "resourceId", status, reason_code AS "reasonCode",
+      created_at AS "createdAt" FROM agent_community_actions ORDER BY created_at DESC LIMIT 100`).all(),
+  ]);
   const artifactRows = artifacts.results as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
@@ -128,6 +135,8 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     audits: audits.results,
     authSettings,
     releaseSettings,
+    agentCommunityPolicy,
+    agentCommunityActions: agentCommunityActions.results,
     content: {
       blogPosts: blogPosts.results,
       forumTopics: forumTopics.results,
@@ -223,15 +232,16 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     });
     return releaseSettingsSnapshot(settings);
   }
+  if (action === "save_agent_community_policy") {
+    return saveGlobalAgentCommunityPolicy(user, input);
+  }
+  if (action === "disable_agent_community_writes") {
+    return disableAgentCommunityWrites(user);
+  }
   if (action === "save_blog_post") {
     const id = text(input.id);
-    const title = cleanText(input.title);
-    const excerpt = cleanText(input.excerpt);
-    const body = cleanText(input.body);
+    const { title, excerpt, body } = validateBlogDraftInput(input);
     const status = allowed(text(input.status), ["draft", "published", "archived"], "draft");
-    if (title.length < 4 || title.length > 140) throw new Error("博客标题需要 4–140 个字符。");
-    if (excerpt.length < 10 || excerpt.length > 320) throw new Error("博客摘要需要 10–320 个字符。");
-    if (body.length < 40 || body.length > 50_000) throw new Error("博客正文需要 40–50,000 个字符。");
     if (id) {
       const existing = await db.prepare("SELECT status, published_at FROM blog_posts WHERE id = ?")
         .bind(id).first<{ status: string; published_at: number | null }>();

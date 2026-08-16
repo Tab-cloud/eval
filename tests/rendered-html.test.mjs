@@ -819,6 +819,9 @@ test("desktop account binding uses browser approval and hashed revocable device 
   assert.match(desktop, /token_hash/);
   assert.match(desktop, /MAX_REQUESTS_PER_HOUR/);
   assert.match(desktop, /eval_dt_/);
+  assert.match(desktop, /requested_scopes/);
+  assert.match(desktop, /approved_scopes/);
+  assert.match(desktop, /granted_scopes/);
   assert.doesNotMatch(desktop, /password/i);
   assert.match(schema, /desktopAuthRequests/);
   assert.match(schema, /desktopSessions/);
@@ -829,4 +832,107 @@ test("desktop account binding uses browser approval and hashed revocable device 
   assert.match(devicePage, /getSessionUser/);
   assert.match(login, /returnTo/);
   assert.match(google, /return_path/);
+});
+
+test("Eval community automation APIs enforce four-layer consent, idempotency, limits, attribution, and emergency stop", async () => {
+  const [permissions, policy, schemaRuntime, actions, api, writeRequest, content, desktop, schema, migration,
+    capabilities, topics, topic, replies, drafts, draft, publish, userSettings, devices, approve, token,
+    deviceUi, adminStore, forumPage, forumTopicPage, blogPage, blogPostPage] = await Promise.all([
+    source("../app/community/permissions.ts"),
+    source("../app/community/policy-store.ts"),
+    source("../app/community/schema.ts"),
+    source("../app/community/agent-actions.ts"),
+    source("../app/community/agent-api.ts"),
+    source("../app/community/write-request.ts"),
+    source("../app/community/agent-content.ts"),
+    source("../app/auth/desktop.ts"),
+    source("../db/schema.ts"),
+    source("../drizzle/0016_sparkling_scrambler.sql"),
+    source("../app/api/v1/agent/community/capabilities/route.ts"),
+    source("../app/api/v1/agent/community/forum/topics/route.ts"),
+    source("../app/api/v1/agent/community/forum/topics/[id]/route.ts"),
+    source("../app/api/v1/agent/community/forum/topics/[id]/replies/route.ts"),
+    source("../app/api/v1/agent/community/blog/drafts/route.ts"),
+    source("../app/api/v1/agent/community/blog/drafts/[id]/route.ts"),
+    source("../app/api/v1/agent/community/blog/drafts/[id]/publish/route.ts"),
+    source("../app/api/console/agent-community-settings/route.ts"),
+    source("../app/api/console/agent-community-devices/[id]/route.ts"),
+    source("../app/api/auth/desktop/approve/route.ts"),
+    source("../app/api/auth/desktop/token/route.ts"),
+    source("../app/device/DeviceApproval.tsx"),
+    source("../app/admin/store.ts"),
+    source("../app/forum/page.tsx"),
+    source("../app/forum/[slug]/page.tsx"),
+    source("../app/blog/page.tsx"),
+    source("../app/blog/[slug]/page.tsx"),
+  ]);
+
+  for (const scope of ["community.forum.read", "community.forum.topic.create", "community.forum.reply.create", "community.blog.draft.create", "community.blog.publish"]) {
+    assert.match(permissions, new RegExp(scope.replaceAll(".", "\\.")));
+  }
+  assert.match(permissions, /scope !== "community\.blog\.publish" \|\| role === "admin"/);
+  assert.match(policy, /policyAllows\(policy, scope\).*userAllows\(settings, scope\).*roleAllowsCommunityScope/s);
+  assert.match(policy, /context\.session\.grantedScopes\.includes\(scope\)/);
+  assert.match(policy, /site_policy_denied/);
+  assert.match(policy, /user_consent_denied/);
+  assert.match(policy, /role_denied/);
+  assert.match(policy, /scope_denied/);
+  assert.match(policy, /writes_enabled=false/);
+  assert.match(policy, /disableAgentCommunityWrites/);
+  assert.match(schemaRuntime, /DEFAULT false/);
+  assert.match(schemaRuntime, /agent_community_actions_session_key_uq/);
+  assert.match(actions, /Idempotency-Key/);
+  assert.match(actions, /idempotencyIdentity/);
+  assert.match(actions, /idempotency_conflict/);
+  assert.match(actions, /status='completed'/);
+  assert.match(actions, /status IN \('accepted', 'completed'\)/);
+  assert.match(actions, /Retry-After|retryAfter|windowSeconds/);
+  assert.match(api, /Cache-Control": "private, no-store"/);
+  assert.match(api, /X-Request-Id/);
+  assert.match(api, /application\/json/);
+  assert.match(api, /internal_error/);
+  assert.match(api, /ContentValidationError/);
+  assert.match(writeRequest, /requireCommunityScope/);
+  assert.match(writeRequest, /enforceAgentActionLimit/);
+  assert.match(content, /created_via='eval_agent'/);
+  assert.match(content, /desktop_session_id/);
+  assert.match(content, /status='draft'/);
+  assert.match(content, /author_id=\?/);
+  assert.match(content, /replyCursor/);
+  assert.match(desktop, /requested_scopes/);
+  assert.match(desktop, /approved_scopes/);
+  assert.match(desktop, /granted_scopes/);
+  assert.match(desktop, /approvableCommunityScopes/);
+  assert.match(schema, /agentCommunityPolicy/);
+  assert.match(schema, /userAgentCommunitySettings/);
+  assert.match(schema, /agentCommunityActions/);
+  assert.match(schema, /createdVia/);
+  assert.match(migration, /CREATE TABLE "agent_community_policy"/);
+  assert.match(migration, /DEFAULT false NOT NULL/);
+  assert.match(migration, /requested_scopes/);
+  assert.match(migration, /created_via/);
+  assert.match(capabilities, /effectiveCommunityCapabilities/);
+  assert.match(topics, /agentForumTopics/);
+  assert.match(topics, /createAgentForumTopic/);
+  assert.match(topic, /replyLimit/);
+  assert.match(replies, /createAgentForumReply/);
+  assert.match(drafts, /createAgentBlogDraft/);
+  assert.match(draft, /updateAgentBlogDraft/);
+  assert.match(publish, /publishAgentBlogDraft/);
+  assert.match(userSettings, /rejectCrossSiteWrite/);
+  assert.match(devices, /rejectCrossSiteWrite/);
+  assert.match(devices, /revokeAgentCommunityDevice/);
+  assert.match(approve, /approvedScopes/);
+  assert.match(token, /exchangeDesktopAuthorization/);
+  assert.match(deviceUi, /此设备申请的自动化权限/);
+  assert.match(adminStore, /save_agent_community_policy/);
+  assert.match(adminStore, /disable_agent_community_writes/);
+  assert.match(adminStore, /agentCommunityPolicy/);
+  assert.match(forumPage + forumTopicPage + blogPage + blogPostPage, /由 Eval 辅助发布/);
+  assert.doesNotMatch([permissions, policy, actions, api, content, capabilities, topics, replies, drafts, publish].join("\n"), /OPENAI_API_KEY|chat\/completions|llm_configs|gateway_requests/);
+
+  const permissionModule = await import("../app/community/permissions.ts");
+  assert.deepEqual(permissionModule.sanitizeCommunityScopes(["community.forum.read", "unknown", "community.forum.read"]), ["community.forum.read"]);
+  assert.equal(permissionModule.roleAllowsCommunityScope("member", "community.blog.publish"), false);
+  assert.equal(permissionModule.roleAllowsCommunityScope("admin", "community.blog.publish"), true);
 });

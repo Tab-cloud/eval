@@ -3,6 +3,13 @@ import { authDatabase, ensureAuthSchema, type AuthenticatedUser } from "../auth/
 export const forumCategories = ["general", "hardware", "firmware", "agents"] as const;
 export type ForumCategory = typeof forumCategories[number];
 
+export class ContentValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContentValidationError";
+  }
+}
+
 export type ForumTopicSummary = {
   id: string;
   slug: string;
@@ -16,6 +23,7 @@ export type ForumTopicSummary = {
   replyCount: number;
   lastActivityAt: number;
   createdAt: number;
+  createdVia: "web" | "eval_agent";
 };
 
 export type ForumReply = {
@@ -24,6 +32,7 @@ export type ForumReply = {
   authorName: string;
   authorId: string;
   createdAt: number;
+  createdVia: "web" | "eval_agent";
 };
 
 export type BlogPostSummary = {
@@ -35,6 +44,7 @@ export type BlogPostSummary = {
   authorName: string;
   publishedAt: number;
   updatedAt: number;
+  createdVia: "web" | "eval_agent";
 };
 
 let contentSchemaInitialization: Promise<void> | null = null;
@@ -60,6 +70,15 @@ async function initializeContentSchema() {
     "CREATE TABLE IF NOT EXISTS blog_posts (id text PRIMARY KEY NOT NULL, author_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, title text NOT NULL, slug text NOT NULL, excerpt text NOT NULL, body text NOT NULL, status text DEFAULT 'draft' NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS blog_posts_slug_uq ON blog_posts (slug)",
     "CREATE INDEX IF NOT EXISTS blog_posts_status_time_idx ON blog_posts (status, published_at)",
+    "ALTER TABLE forum_topics ADD COLUMN IF NOT EXISTS created_via text NOT NULL DEFAULT 'web'",
+    "ALTER TABLE forum_topics ADD COLUMN IF NOT EXISTS desktop_session_id text",
+    "ALTER TABLE forum_replies ADD COLUMN IF NOT EXISTS created_via text NOT NULL DEFAULT 'web'",
+    "ALTER TABLE forum_replies ADD COLUMN IF NOT EXISTS desktop_session_id text",
+    "ALTER TABLE blog_posts ADD COLUMN IF NOT EXISTS created_via text NOT NULL DEFAULT 'web'",
+    "ALTER TABLE blog_posts ADD COLUMN IF NOT EXISTS desktop_session_id text",
+    "CREATE INDEX IF NOT EXISTS forum_topics_agent_time_idx ON forum_topics (created_via, created_at)",
+    "CREATE INDEX IF NOT EXISTS forum_replies_agent_time_idx ON forum_replies (created_via, created_at)",
+    "CREATE INDEX IF NOT EXISTS blog_posts_agent_time_idx ON blog_posts (created_via, created_at)",
   ];
   await authDatabase().batch(statements.map(sql => authDatabase().prepare(sql)));
 }
@@ -69,7 +88,7 @@ export async function forumOverview(_user: AuthenticatedUser, category?: string)
   const selected = forumCategories.includes(category as ForumCategory) ? category as ForumCategory : null;
   const db = authDatabase();
   const topicsQuery = `
-    SELECT t.id, t.slug, t.title, LEFT(t.body, 600) AS body, t.category, t.status, t.pinned,
+    SELECT t.id, t.slug, t.title, LEFT(t.body, 600) AS body, t.category, t.status, t.pinned, t.created_via AS "createdVia",
            t.author_id AS authorId, u.display_name AS authorName,
            t.last_activity_at AS lastActivityAt, t.created_at AS createdAt,
            COUNT(r.id) AS replyCount
@@ -95,7 +114,7 @@ export async function forumTopic(_user: AuthenticatedUser, slug: string) {
   await ensureContentSchema();
   const db = authDatabase();
   const topic = await db.prepare(`
-    SELECT t.id, t.slug, t.title, t.body, t.category, t.status, t.pinned,
+    SELECT t.id, t.slug, t.title, t.body, t.category, t.status, t.pinned, t.created_via AS "createdVia",
            t.author_id AS authorId, u.display_name AS authorName,
            t.last_activity_at AS lastActivityAt, t.created_at AS createdAt,
            (SELECT COUNT(*) FROM forum_replies r WHERE r.topic_id = t.id AND r.status = 'visible') AS replyCount
@@ -105,7 +124,7 @@ export async function forumTopic(_user: AuthenticatedUser, slug: string) {
   `).bind(slug).first<ForumTopicSummary>();
   if (!topic) return null;
   const replies = await db.prepare(`
-    SELECT r.id, r.body, r.author_id AS authorId, u.display_name AS authorName, r.created_at AS createdAt
+    SELECT r.id, r.body, r.author_id AS authorId, u.display_name AS authorName, r.created_at AS createdAt, r.created_via AS "createdVia"
     FROM forum_replies r JOIN users u ON u.id = r.author_id
     WHERE r.topic_id = ? AND r.status = 'visible'
     ORDER BY r.created_at ASC LIMIT 500
@@ -115,11 +134,7 @@ export async function forumTopic(_user: AuthenticatedUser, slug: string) {
 
 export async function createForumTopic(user: AuthenticatedUser, input: Record<string, unknown>) {
   await ensureContentSchema();
-  const title = cleanText(input.title);
-  const body = cleanText(input.body);
-  const category = forumCategories.includes(input.category as ForumCategory) ? input.category as ForumCategory : "general";
-  if (title.length < 4 || title.length > 120) throw new Error("主题标题需要 4–120 个字符。");
-  if (body.length < 20 || body.length > 10_000) throw new Error("主题正文需要 20–10,000 个字符。");
+  const { title, body, category } = validateForumTopicInput(input);
   const db = authDatabase();
   const now = epochSeconds();
   const recent = await db.prepare("SELECT COUNT(*) AS count FROM forum_topics WHERE author_id = ? AND created_at >= ?")
@@ -137,8 +152,7 @@ export async function createForumTopic(user: AuthenticatedUser, input: Record<st
 
 export async function createForumReply(user: AuthenticatedUser, topicId: string, input: Record<string, unknown>) {
   await ensureContentSchema();
-  const body = cleanText(input.body);
-  if (body.length < 2 || body.length > 5_000) throw new Error("回复需要 2–5,000 个字符。");
+  const body = validateForumReplyInput(input);
   const db = authDatabase();
   const now = epochSeconds();
   const [topic, recent] = await Promise.all([
@@ -164,7 +178,7 @@ export async function publishedBlogPosts(limit = 50) {
   await ensureContentSchema();
   const now = epochSeconds();
   const rows = await authDatabase().prepare(`
-    SELECT p.id, p.slug, p.title, p.excerpt, '' AS body, u.display_name AS authorName,
+    SELECT p.id, p.slug, p.title, p.excerpt, '' AS body, u.display_name AS authorName, p.created_via AS "createdVia",
            p.published_at AS publishedAt, p.updated_at AS updatedAt
     FROM blog_posts p
     JOIN users u ON u.id = p.author_id
@@ -178,7 +192,7 @@ export async function publishedBlogPost(slug: string) {
   await ensureContentSchema();
   const now = epochSeconds();
   const row = await authDatabase().prepare(`
-    SELECT p.id, p.slug, p.title, p.excerpt, p.body, u.display_name AS authorName,
+    SELECT p.id, p.slug, p.title, p.excerpt, p.body, u.display_name AS authorName, p.created_via AS "createdVia",
            p.published_at AS publishedAt, p.updated_at AS updatedAt
     FROM blog_posts p
     JOIN users u ON u.id = p.author_id
@@ -201,21 +215,46 @@ export function cleanText(value: unknown) {
   return typeof value === "string" ? value.replaceAll("\0", "").replace(/\r\n?/g, "\n").trim() : "";
 }
 
+export function validateForumTopicInput(input: Record<string, unknown>) {
+  const title = cleanText(input.title);
+  const body = cleanText(input.body);
+  const category = forumCategories.includes(input.category as ForumCategory) ? input.category as ForumCategory : "general";
+  if (title.length < 4 || title.length > 120) throw new ContentValidationError("主题标题需要 4–120 个字符。");
+  if (body.length < 20 || body.length > 10_000) throw new ContentValidationError("主题正文需要 20–10,000 个字符。");
+  return { title, body, category };
+}
+
+export function validateForumReplyInput(input: Record<string, unknown>) {
+  const body = cleanText(input.body);
+  if (body.length < 2 || body.length > 5_000) throw new ContentValidationError("回复需要 2–5,000 个字符。");
+  return body;
+}
+
+export function validateBlogDraftInput(input: Record<string, unknown>) {
+  const title = cleanText(input.title);
+  const excerpt = cleanText(input.excerpt);
+  const body = cleanText(input.body);
+  if (title.length < 4 || title.length > 140) throw new ContentValidationError("博客标题需要 4–140 个字符。");
+  if (excerpt.length < 10 || excerpt.length > 320) throw new ContentValidationError("博客摘要需要 10–320 个字符。");
+  if (body.length < 40 || body.length > 50_000) throw new ContentValidationError("博客正文需要 40–50,000 个字符。");
+  return { title, excerpt, body };
+}
+
 function auditStatement(user: AuthenticatedUser, action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown>, now: number) {
   return authDatabase().prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .bind(`audit_${crypto.randomUUID()}`, user.id, action, resourceType, resourceId, JSON.stringify(metadata), now);
 }
 
 function mapForumTopic(row: ForumTopicSummary): ForumTopicSummary {
-  return { ...row, pinned: Boolean(row.pinned), replyCount: Number(row.replyCount), lastActivityAt: Number(row.lastActivityAt), createdAt: Number(row.createdAt) };
+  return { ...row, createdVia: row.createdVia === "eval_agent" ? "eval_agent" : "web", pinned: Boolean(row.pinned), replyCount: Number(row.replyCount), lastActivityAt: Number(row.lastActivityAt), createdAt: Number(row.createdAt) };
 }
 
 function mapForumReply(row: ForumReply): ForumReply {
-  return { ...row, createdAt: Number(row.createdAt) };
+  return { ...row, createdVia: row.createdVia === "eval_agent" ? "eval_agent" : "web", createdAt: Number(row.createdAt) };
 }
 
 function mapBlogPost(row: BlogPostSummary): BlogPostSummary {
-  return { ...row, publishedAt: Number(row.publishedAt), updatedAt: Number(row.updatedAt) };
+  return { ...row, createdVia: row.createdVia === "eval_agent" ? "eval_agent" : "web", publishedAt: Number(row.publishedAt), updatedAt: Number(row.updatedAt) };
 }
 
 function epochSeconds() {

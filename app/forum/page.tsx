@@ -32,7 +32,7 @@ export default async function ForumPage({ searchParams }: { searchParams: Promis
           <div className="forum-feed-head"><div><p>RECENT SIGNAL</p><h2>{data.selectedCategory ? categoryLabel(data.selectedCategory) : "最新讨论"}</h2></div><span>按最近互动排序</span></div>
           <div className="topic-list">
             {data.topics.map(topic => <Link className="topic-card" href={`/forum/${encodeURIComponent(topic.slug)}`} key={topic.id}>
-              <div className="topic-card-top"><span>{categoryLabel(topic.category)}</span>{topic.pinned && <i>置顶</i>}{topic.status === "locked" && <i>已锁定</i>}</div>
+              <div className="topic-card-top"><span>{categoryLabel(topic.category)}</span>{topic.createdVia === "eval_agent" && <i className="eval-agent-badge">由 Eval 辅助发布</i>}{topic.pinned && <i>置顶</i>}{topic.status === "locked" && <i>已锁定</i>}</div>
               <h3>{topic.title}</h3>
               <p>{excerpt(topic.body, 150)}</p>
               <footer><span><b>{initials(topic.authorName)}</b>{topic.authorName}</span><time>{formatContentDate(topic.lastActivityAt)}</time><strong>{topic.replyCount} 条回复</strong></footer>

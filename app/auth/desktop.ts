@@ -1,8 +1,10 @@
 import {
   authDatabase,
-  ensureAuthSchema,
   type AuthenticatedUser,
 } from "./core";
+import { sanitizeCommunityScopes } from "../community/permissions";
+import { approvableCommunityScopes, type AgentCommunityContext } from "../community/policy-store";
+import { ensureAgentCommunitySchema } from "../community/schema";
 
 const REQUEST_TTL_SECONDS = 10 * 60;
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -37,15 +39,18 @@ type AuthorizationRow = {
   client_version: string;
   user_id: string | null;
   expires_at: number;
+  requested_scopes: unknown;
+  approved_scopes: unknown;
 };
 
 export async function createDesktopAuthorization(
   request: Request,
-  input: { deviceName?: unknown; clientVersion?: unknown },
+  input: { deviceName?: unknown; clientVersion?: unknown; requestedScopes?: unknown },
 ): Promise<DesktopAuthorization> {
-  await ensureAuthSchema();
+  await ensureAgentCommunitySchema();
   const deviceName = boundedText(input.deviceName, 80, "Windows 设备");
   const clientVersion = boundedText(input.clientVersion, 32, "unknown");
+  const requestedScopes = sanitizeCommunityScopes(input.requestedScopes);
   const sourceHash = await sha256(requestSource(request));
   const now = epochSeconds();
   const db = authDatabase();
@@ -68,8 +73,8 @@ export async function createDesktopAuthorization(
       await db.prepare(`
         INSERT INTO desktop_auth_requests (
           id, device_code_hash, user_code_hash, source_hash, device_name, client_version,
-          status, user_id, expires_at, approved_at, consumed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, NULL, ?, ?)
+          requested_scopes, approved_scopes, status, user_id, expires_at, approved_at, consumed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]'::jsonb, 'pending', NULL, ?, NULL, NULL, ?, ?)
       `).bind(
         id,
         await sha256(deviceCode),
@@ -77,6 +82,7 @@ export async function createDesktopAuthorization(
         sourceHash,
         deviceName,
         clientVersion,
+        JSON.stringify(requestedScopes),
         now + REQUEST_TTL_SECONDS,
         now,
         now,
@@ -97,34 +103,38 @@ export async function createDesktopAuthorization(
   throw new DesktopAuthorizationError("unavailable", "暂时无法创建设备绑定请求。", 503);
 }
 
-export async function desktopAuthorizationSummary(userCode: string) {
-  await ensureAuthSchema();
+export async function desktopAuthorizationSummary(userCode: string, user?: AuthenticatedUser) {
+  await ensureAgentCommunitySchema();
   const normalized = normalizeUserCode(userCode);
   if (!normalized) return null;
   const now = epochSeconds();
   const row = await authDatabase().prepare(`
-    SELECT device_name, client_version, status, expires_at
+    SELECT device_name, client_version, requested_scopes, status, expires_at
     FROM desktop_auth_requests
     WHERE user_code_hash = ? AND expires_at > ?
     LIMIT 1
   `).bind(await sha256(normalized), now).first<Record<string, string | number>>();
   if (!row) return null;
+  const requestedScopes = sanitizeCommunityScopes(row.requested_scopes);
+  const availableScopes = user ? await approvableCommunityScopes(user) : [];
   return {
     deviceName: String(row.device_name),
     clientVersion: String(row.client_version),
     status: String(row.status),
     expiresAt: Number(row.expires_at),
+    requestedScopes,
+    availableScopes,
   };
 }
 
-export async function approveDesktopAuthorization(userCode: string, user: AuthenticatedUser) {
-  await ensureAuthSchema();
+export async function approveDesktopAuthorization(userCode: string, user: AuthenticatedUser, approvedScopesInput?: unknown) {
+  await ensureAgentCommunitySchema();
   const normalized = normalizeUserCode(userCode);
   if (!normalized) throw new DesktopAuthorizationError("invalid_code", "设备验证码无效。", 400);
   const now = epochSeconds();
   const db = authDatabase();
   const row = await db.prepare(`
-    SELECT id, status, user_id, expires_at
+    SELECT id, status, user_id, expires_at, requested_scopes, approved_scopes
     FROM desktop_auth_requests
     WHERE user_code_hash = ?
     LIMIT 1
@@ -133,25 +143,35 @@ export async function approveDesktopAuthorization(userCode: string, user: Authen
     throw new DesktopAuthorizationError("expired_token", "设备绑定请求不存在或已经过期。", 410);
   }
   if (row.status === "approved" && row.user_id === user.id) {
-    return { approved: true };
+    return { approved: true, grantedScopes: sanitizeCommunityScopes(row.approved_scopes) };
   }
   if (row.status !== "pending") {
     throw new DesktopAuthorizationError("invalid_request", "设备绑定请求已经处理。", 409);
   }
+  const requestedScopes = sanitizeCommunityScopes(row.requested_scopes);
+  const approvedInput = sanitizeCommunityScopes(approvedScopesInput);
+  if (Array.isArray(approvedScopesInput) && approvedInput.length !== approvedScopesInput.length) {
+    throw new DesktopAuthorizationError("invalid_scope", "设备请求包含不支持的权限。", 422);
+  }
+  if (approvedInput.some(scope => !requestedScopes.includes(scope))) {
+    throw new DesktopAuthorizationError("invalid_scope", "不能批准设备未申请的权限。", 422);
+  }
+  const available = new Set(await approvableCommunityScopes(user));
+  const approvedScopes = approvedInput.filter(scope => available.has(scope));
   const approved = await db.prepare(`
     UPDATE desktop_auth_requests
-    SET status = 'approved', user_id = ?, approved_at = ?, updated_at = ?
+    SET status = 'approved', user_id = ?, approved_scopes = ?, approved_at = ?, updated_at = ?
     WHERE id = ? AND status = 'pending'
-  `).bind(user.id, now, now, row.id).run();
+  `).bind(user.id, JSON.stringify(approvedScopes), now, now, row.id).run();
   if (!approved.meta.changes) {
     const current = await db.prepare(`
-      SELECT status, user_id
+      SELECT status, user_id, approved_scopes
       FROM desktop_auth_requests
       WHERE id = ?
       LIMIT 1
     `).bind(row.id).first<Pick<AuthorizationRow, "status" | "user_id">>();
     if (current?.status === "approved" && current.user_id === user.id) {
-      return { approved: true };
+      return { approved: true, grantedScopes: sanitizeCommunityScopes((current as { approved_scopes?: unknown }).approved_scopes) };
     }
     throw new DesktopAuthorizationError("invalid_request", "设备绑定请求已经由其他账号处理。", 409);
   }
@@ -159,18 +179,18 @@ export async function approveDesktopAuthorization(userCode: string, user: Authen
     INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at)
     VALUES (?, ?, 'auth.desktop.approve', 'desktop_device', ?, '{}', ?)
   `).bind(`audit_${crypto.randomUUID()}`, user.id, row.id, now).run();
-  return { approved: true };
+  return { approved: true, grantedScopes: approvedScopes };
 }
 
 export async function exchangeDesktopAuthorization(deviceCode: string) {
-  await ensureAuthSchema();
+  await ensureAgentCommunitySchema();
   if (!/^[A-Za-z0-9_-]{40,80}$/.test(deviceCode)) {
     throw new DesktopAuthorizationError("invalid_request", "设备授权凭据无效。", 400);
   }
   const now = epochSeconds();
   const db = authDatabase();
   const row = await db.prepare(`
-    SELECT id, status, device_name, client_version, user_id, expires_at
+    SELECT id, status, device_name, client_version, user_id, expires_at, requested_scopes, approved_scopes
     FROM desktop_auth_requests
     WHERE device_code_hash = ?
     LIMIT 1
@@ -188,30 +208,37 @@ export async function exchangeDesktopAuthorization(deviceCode: string) {
   const accessToken = `eval_dt_${deviceCode}`;
   const tokenHash = await sha256(accessToken);
   const expiresAt = now + SESSION_TTL_SECONDS;
+  const grantedScopes = sanitizeCommunityScopes(row.approved_scopes);
   await db.batch([
     db.prepare(`
       INSERT INTO desktop_sessions (
         id, token_hash, user_id, device_name, client_version,
-        expires_at, revoked_at, last_used_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-      ON CONFLICT (token_hash) DO UPDATE SET expires_at = excluded.expires_at, revoked_at = NULL, last_used_at = excluded.last_used_at, updated_at = excluded.updated_at
-    `).bind(`dts_${row.id}`, tokenHash, row.user_id, row.device_name, row.client_version, expiresAt, now, now, now),
+        granted_scopes, permissions_updated_at, expires_at, revoked_at, last_used_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+      ON CONFLICT (token_hash) DO UPDATE SET granted_scopes = excluded.granted_scopes, permissions_updated_at = excluded.permissions_updated_at,
+        expires_at = excluded.expires_at, revoked_at = NULL, last_used_at = excluded.last_used_at, updated_at = excluded.updated_at
+    `).bind(`dts_${row.id}`, tokenHash, row.user_id, row.device_name, row.client_version, JSON.stringify(grantedScopes), now, expiresAt, now, now, now),
     db.prepare("UPDATE desktop_auth_requests SET consumed_at = COALESCE(consumed_at, ?), updated_at = ? WHERE id = ?")
       .bind(now, now, row.id),
   ]);
   const user = await getDesktopSessionUser(accessToken);
   if (!user) throw new DesktopAuthorizationError("account_unavailable", "账号已停用或不可用。", 403);
-  return { accessToken, tokenType: "Bearer", expiresAt, user };
+  return { accessToken, tokenType: "Bearer", expiresAt, grantedScopes, user };
 }
 
 export async function getDesktopSessionUser(token: string | undefined): Promise<AuthenticatedUser | null> {
+  return (await getDesktopSession(token))?.user ?? null;
+}
+
+export async function getDesktopSession(token: string | undefined): Promise<AgentCommunityContext | null> {
   if (!token?.startsWith("eval_dt_")) return null;
-  await ensureAuthSchema();
+  await ensureAgentCommunitySchema();
   const now = epochSeconds();
   const db = authDatabase();
   const tokenHash = await sha256(token);
   const row = await db.prepare(`
-    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role
+    SELECT u.id, u.username, u.email, u.phone_e164, u.account_locale, u.display_name, u.status, u.role,
+      s.id AS session_id, s.device_name, s.client_version, s.granted_scopes
     FROM desktop_sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
@@ -220,12 +247,20 @@ export async function getDesktopSessionUser(token: string | undefined): Promise<
   if (!row || row.status !== "active") return null;
   await db.prepare("UPDATE desktop_sessions SET last_used_at = ?, updated_at = ? WHERE token_hash = ?")
     .bind(now, now, tokenHash).run();
-  return mapUser(row);
+  return {
+    user: mapUser(row),
+    session: {
+      id: String(row.session_id),
+      deviceName: String(row.device_name),
+      clientVersion: String(row.client_version),
+      grantedScopes: sanitizeCommunityScopes(row.granted_scopes),
+    },
+  };
 }
 
 export async function revokeDesktopSession(token: string | undefined) {
   if (!token?.startsWith("eval_dt_")) return;
-  await ensureAuthSchema();
+  await ensureAgentCommunitySchema();
   const now = epochSeconds();
   await authDatabase().prepare(
     "UPDATE desktop_sessions SET revoked_at = ?, updated_at = ? WHERE token_hash = ? AND revoked_at IS NULL",

@@ -22,7 +22,7 @@ export default async function ForumTopicPage({ params }: { params: Promise<{ slu
     <main className="content-main topic-detail-main">
       <nav className="content-breadcrumb" aria-label="面包屑"><Link href="/forum">论坛</Link><span>/</span><Link href={`/forum?category=${data.topic.category}`}>{categoryLabel(data.topic.category)}</Link></nav>
       <article className="topic-detail">
-        <div className="topic-detail-meta"><span>{categoryLabel(data.topic.category)}</span>{data.topic.pinned && <i>置顶主题</i>}{data.topic.status === "locked" && <i>讨论已锁定</i>}</div>
+        <div className="topic-detail-meta"><span>{categoryLabel(data.topic.category)}</span>{data.topic.createdVia === "eval_agent" && <i className="eval-agent-badge">由 Eval 辅助发布</i>}{data.topic.pinned && <i>置顶主题</i>}{data.topic.status === "locked" && <i>讨论已锁定</i>}</div>
         <h1>{data.topic.title}</h1>
         <div className="topic-author"><b>{initials(data.topic.authorName)}</b><span><strong>{data.topic.authorName}</strong><small>{formatDate(data.topic.createdAt)} 发布 · {data.topic.replyCount} 条回复</small></span></div>
         <div className="plain-content">{data.topic.body}</div>
@@ -31,7 +31,7 @@ export default async function ForumTopicPage({ params }: { params: Promise<{ slu
       <section className="reply-section">
         <div className="reply-section-head"><div><p>DISCUSSION / {String(data.replies.length).padStart(2, "0")}</p><h2>讨论回复</h2></div><Link href="/forum">返回全部主题</Link></div>
         <div className="reply-list">
-          {data.replies.map((reply, index) => <article key={reply.id}><aside><b>{initials(reply.authorName)}</b><span>{String(index + 1).padStart(2, "0")}</span></aside><div><div><strong>{reply.authorName}</strong><time>{formatDate(reply.createdAt)}</time></div><p>{reply.body}</p></div></article>)}
+          {data.replies.map((reply, index) => <article key={reply.id}><aside><b>{initials(reply.authorName)}</b><span>{String(index + 1).padStart(2, "0")}</span></aside><div><div><strong>{reply.authorName}{reply.createdVia === "eval_agent" && <i className="eval-agent-inline">由 Eval 辅助发布</i>}</strong><time>{formatDate(reply.createdAt)}</time></div><p>{reply.body}</p></div></article>)}
           {!data.replies.length && <div className="content-empty compact"><span>FIRST RESPONSE</span><h3>还没有回复</h3><p>如果你有相关经验，可以成为第一个参与讨论的人。</p></div>}
         </div>
         {data.topic.status === "open" ? <ReplyComposer topicId={data.topic.id}/> : <div className="topic-locked-note">管理员已锁定该主题，现有内容仍可阅读，但不再接受新回复。</div>}
