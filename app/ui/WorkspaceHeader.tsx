@@ -16,21 +16,24 @@ export type WorkspaceHeaderUser = {
   role: "admin" | "member";
 };
 
-export type WorkspaceSection = "overview" | "downloads" | "community" | "blog" | "activity" | "profile";
-export type DashboardSection = Exclude<WorkspaceSection, "blog">;
+export type WorkspaceSection = "overview" | "downloads" | "forum" | "blog" | "activity" | "profile";
+export type DashboardSection = Exclude<WorkspaceSection, "forum" | "blog">;
 type DashboardNavSection = Exclude<DashboardSection, "profile">;
-type WorkspaceNavItem = { id: "blog"; label: string; icon: IconName; href: "/blog" } | { id: DashboardNavSection; label: string; icon: IconName };
+type WorkspaceNavItem =
+  | { id: "forum"; label: string; icon: IconName; href: "/forum" }
+  | { id: "blog"; label: string; icon: IconName; href: "/blog" }
+  | { id: DashboardNavSection; label: string; icon: IconName };
 
 export const workspaceNav: WorkspaceNavItem[] = [
   { id: "overview", label: "总览", icon: "grid" },
   { id: "downloads", label: "下载", icon: "download" },
-  { id: "community", label: "社区", icon: "users" },
+  { id: "forum", label: "论坛", icon: "users", href: "/forum" },
   { id: "blog", label: "博客", icon: "spark", href: "/blog" },
   { id: "activity", label: "活动", icon: "clock" },
 ];
 
 export function isDashboardSection(value: string): value is DashboardSection {
-  return value === "overview" || value === "downloads" || value === "community" || value === "activity" || value === "profile";
+  return value === "overview" || value === "downloads" || value === "activity" || value === "profile";
 }
 
 export function workspaceSectionLabel(section: WorkspaceSection) {

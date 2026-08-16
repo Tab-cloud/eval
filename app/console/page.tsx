@@ -7,13 +7,13 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "用户控制台",
-  description: "Eval Agent 下载、博客、社区与账号控制台。",
+  description: "Eval Agent 下载、论坛、博客与账号控制台。",
 };
 
 export default async function ConsolePage({ searchParams }: { searchParams: Promise<{ view?: string; linked?: string; error?: string }> }) {
   const currentUser = await requireUserSession();
   const query = await searchParams;
-  const initialView = query.view && ["overview", "downloads", "community", "activity", "profile"].includes(query.view) ? query.view : "overview";
+  const initialView = query.view && ["overview", "downloads", "activity", "profile"].includes(query.view) ? query.view : "overview";
   const linked = query.linked === "google" || query.linked === "github" ? query.linked : null;
   const initialNotice = linked
     ? currentUser.accountLocale === "zh" ? `${linked === "github" ? "GitHub" : "Google"} 账号已绑定` : `${linked === "github" ? "GitHub" : "Google"} account linked`

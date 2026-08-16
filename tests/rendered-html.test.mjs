@@ -200,10 +200,12 @@ test("browser writes are same-origin protected and login attempts are limited", 
   assert.match(password, /至少 10 位/);
 });
 
-test("console reads real snapshots, keeps five useful destinations, and removes organization UI", async () => {
-  const [dashboard, header, snapshot, css, headerCss] = await Promise.all([
+test("console reads real snapshots, links directly to forum and blog, and removes organization UI", async () => {
+  const [dashboard, header, consolePage, contentHeader, snapshot, css, headerCss] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
     source("../app/ui/WorkspaceHeader.tsx"),
+    source("../app/console/page.tsx"),
+    source("../app/content/ContentHeader.tsx"),
     source("../app/console/store.ts"),
     source("../app/console/style.css"),
     source("../app/ui/workspace-header.css"),
@@ -212,9 +214,14 @@ test("console reads real snapshots, keeps five useful destinations, and removes 
   assert.match(dashboard, /\/forum/);
   assert.match(dashboard, /\/blog/);
   assert.match(dashboard, /<WorkspaceHeader active=\{active\}/);
+  assert.match(header, /id: "forum", label: "论坛", icon: "users", href: "\/forum"/);
   assert.match(header, /id: "blog", label: "博客", icon: "spark", href: "\/blog"/);
+  assert.match(contentHeader, /<WorkspaceHeader active=\{active\}/);
   assert.match(header, /className="workspace-mobile-nav"/);
   assert.match(header, /\/console\?view=\$\{section\}/);
+  assert.doesNotMatch(dashboard + snapshot + css, /function BlogList|blogPosts:|workspace-blog-list/);
+  assert.doesNotMatch(header + dashboard + consolePage, /id: "community"|active === "community"|"community", "activity"/);
+  assert.doesNotMatch(dashboard, /function Community/);
   assert.doesNotMatch(dashboard + snapshot, /tenantId|tenantName|organization|Organization|activeMembers|totalMembers/);
   assert.match(headerCss, /grid-template-columns: repeat\(5,1fr\)/);
   assert.doesNotMatch(css, /\.workspace-header\s*\{/);

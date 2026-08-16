@@ -22,7 +22,7 @@ export function ContentHeader({ active, user }: Props) {
     document.documentElement.lang = next === "en" ? "en" : "zh-CN";
   };
 
-  if (user) return <WorkspaceHeader active={active === "forum" ? "community" : "blog"} currentUser={user}/>;
+  if (user) return <WorkspaceHeader active={active} currentUser={user}/>;
 
   return <>
     <header className="content-header">

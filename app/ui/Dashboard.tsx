@@ -24,7 +24,6 @@ type ConsoleSnapshot = {
   };
   releases: Array<{ id: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string; sizeBytes: number }>;
   forumTopics: Array<{ id: string; title: string; slug: string; category: string; status: string; pinned: boolean; lastActivityAt: number; authorName: string; replyCount: number }>;
-  blogPosts: Array<{ id: string; title: string; slug: string; excerpt: string; publishedAt: number | null; authorName: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
 };
 
@@ -70,7 +69,6 @@ export function Dashboard({ currentUser, initialView = "overview", initialNotice
       <div className="workspace-title"><div><small>EVAL / PRODUCT WORKSPACE</small><h1>{active === "overview" ? `欢迎回来，${currentUser.displayName}` : active === "profile" && currentUser.accountLocale === "en" ? "Profile" : workspaceSectionLabel(active)}</h1></div><span><i/>{loading ? "正在同步" : snapshot ? `更新于 ${formatTime(snapshot.generatedAt)}` : "等待数据"}</span></div>
       {active === "overview" && <Overview snapshot={snapshot}/>}
       {active === "downloads" && <Downloads snapshot={snapshot}/>}
-      {active === "community" && <Community snapshot={snapshot}/>}
       {active === "activity" && <Activity snapshot={snapshot}/>}
       {active === "profile" && <Profile currentUser={currentUser} notify={setToast}/>}
     </main>
@@ -84,28 +82,24 @@ function Overview({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   const latest = snapshot?.releases.find(item => item.status === "published");
   return <>
     <section className="workspace-hero">
-      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程社区，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与其他用户沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
+      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程论坛，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与其他用户沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
       <aside><span>PRODUCT STATUS</span><strong>{latest ? `v${latest.version}` : "—"}</strong><small>{latest ? `${latest.channel.toUpperCase()} · 已发布` : "等待首个公开版本"}</small><i/></aside>
     </section>
     <section className="workspace-metrics">
       <Metric icon="download" value={metrics?.publishedReleases ?? 0} label="已发布版本"/>
-      <Metric icon="users" value={(metrics?.forumTopics ?? 0) + (metrics?.forumReplies ?? 0)} label="社区讨论"/>
+      <Metric icon="users" value={(metrics?.forumTopics ?? 0) + (metrics?.forumReplies ?? 0)} label="论坛讨论"/>
       <Metric icon="spark" value={metrics?.publishedPosts ?? 0} label="博客文章"/>
       <Metric icon="terminal" value={metrics?.activeDesktopSessions ?? 0} label="我的活动设备"/>
     </section>
     <section className="workspace-columns">
       <article className="workspace-panel"><PanelHead eyebrow="LATEST RELEASES" title="最新版本" href="/docs" link="安装指南"/><ReleaseList releases={snapshot?.releases.slice(0, 4) ?? []}/></article>
-      <article className="workspace-panel"><PanelHead eyebrow="COMMUNITY" title="最近讨论" href="/forum" link="查看论坛"/><TopicList topics={snapshot?.forumTopics.slice(0, 5) ?? []}/></article>
+      <article className="workspace-panel"><PanelHead eyebrow="FORUM" title="最近讨论" href="/forum" link="查看论坛"/><TopicList topics={snapshot?.forumTopics.slice(0, 5) ?? []}/></article>
     </section>
   </>;
 }
 
 function Downloads({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   return <section className="workspace-page"><div className="workspace-page-hero"><small>RELEASE CENTER</small><h2>获取已验证的桌面端版本。</h2><p>这里只展示管理员上传并正式发布的 Eval Agent 安装包。安装前可以核对版本、渠道和文件格式。</p></div><div className="workspace-panel"><PanelHead eyebrow="AVAILABLE BUILDS" title="版本目录" href="/docs" link="查看安装说明"/><ReleaseList releases={snapshot?.releases ?? []} detailed/></div></section>;
-}
-
-function Community({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
-  return <section className="workspace-page"><div className="workspace-page-hero"><small>KNOWLEDGE & DISCUSSION</small><h2>讨论工程问题，沉淀团队经验。</h2><p>论坛用于交流与协作，博客用于发布经过整理的产品和技术内容。</p><div className="workspace-page-actions"><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div><div className="workspace-columns"><article className="workspace-panel"><PanelHead eyebrow="FORUM" title="活跃主题" href="/forum" link="全部主题"/><TopicList topics={snapshot?.forumTopics ?? []}/></article><article className="workspace-panel"><PanelHead eyebrow="BLOG" title="最新文章" href="/blog" link="全部文章"/><BlogList posts={snapshot?.blogPosts ?? []}/></article></div></section>;
 }
 
 function Activity({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
@@ -209,7 +203,6 @@ function Metric({ icon, value, label }: { icon: IconName; value: number; label: 
 function PanelHead({ eyebrow, title, href, link }: { eyebrow: string; title: string; href: string; link: string }) { return <header><div><small>{eyebrow}</small><h3>{title}</h3></div><Link href={href}>{link}<Icon name="arrow"/></Link></header>; }
 function ReleaseList({ releases, detailed = false }: { releases: ConsoleSnapshot["releases"]; detailed?: boolean }) { return <div className="workspace-release-list">{releases.length ? releases.map(item => <article key={item.id}><span><Icon name="download"/></span><div><b>Eval Agent v{item.version}</b><small>{item.channel.toUpperCase()} · {item.format} · {item.fileName}{detailed ? ` · ${formatBytes(item.sizeBytes)}` : ""}</small></div><em className={item.status}>{item.status === "published" ? "已发布" : "草稿"}</em>{item.status === "published" ? <a href={`/api/v1/downloads/${item.id}`} aria-label={`下载 v${item.version}`}><Icon name="download"/></a> : <i/>}</article>) : <Empty text="还没有可用版本。"/>}</div>; }
 function TopicList({ topics }: { topics: ConsoleSnapshot["forumTopics"] }) { return <div className="workspace-topic-list">{topics.length ? topics.map(item => <Link href={`/forum/${item.slug}`} key={item.id}><span>{item.pinned ? "置顶" : item.category}</span><div><b>{item.title}</b><small>{item.authorName} · {item.replyCount} 条回复 · {formatRelative(item.lastActivityAt)}</small></div><Icon name="chevron"/></Link>) : <Empty text="还没有论坛主题。"/>}</div>; }
-function BlogList({ posts }: { posts: ConsoleSnapshot["blogPosts"] }) { return <div className="workspace-blog-list">{posts.length ? posts.map(item => <Link href={`/blog/${item.slug}`} key={item.id}><small>{item.publishedAt ? new Date(item.publishedAt * 1000).toLocaleDateString("zh-CN") : "草稿"}</small><b>{item.title}</b><p>{item.excerpt}</p><span>{item.authorName}<Icon name="arrow"/></span></Link>) : <Empty text="还没有已发布文章。"/>}</div>; }
 function Empty({ text }: { text: string }) { return <div className="workspace-empty"><i/><p>{text}</p></div>; }
 function formatTime(value: number) { return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }
 function formatRelative(value: number) { const seconds = Math.max(0, Math.floor(Date.now() / 1000 - value)); if (seconds < 60) return "刚刚"; if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`; if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`; return new Date(value * 1000).toLocaleDateString("zh-CN"); }

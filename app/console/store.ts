@@ -6,7 +6,7 @@ export async function consoleSnapshot(user: AuthenticatedUser) {
   const db = authDatabase();
   const now = Math.floor(Date.now() / 1000);
   const admin = user.role === "admin";
-  const [releases, forumTopics, forumTopicCount, forumReplies, blogPosts, blogPostCount, desktopSessions, audits] = await Promise.all([
+  const [releases, forumTopics, forumTopicCount, forumReplies, blogPostCount, desktopSessions, audits] = await Promise.all([
     db.prepare(`SELECT r.id, r.version, r.channel, r.status, r.published_at AS "publishedAt",
       a.file_name AS "fileName", a.format, a.size_bytes AS "sizeBytes"
       FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
@@ -22,10 +22,6 @@ export async function consoleSnapshot(user: AuthenticatedUser) {
       .all(),
     db.prepare("SELECT COUNT(*) AS count FROM forum_topics WHERE status <> 'hidden'").first<Record<string, number | string>>(),
     db.prepare("SELECT COUNT(*) AS count FROM forum_replies WHERE status = 'visible'").first<Record<string, number | string>>(),
-    db.prepare(`SELECT p.id, p.title, p.slug, p.excerpt, p.published_at AS "publishedAt",
-      u.display_name AS "authorName" FROM blog_posts p JOIN users u ON u.id = p.author_id
-      WHERE p.status = 'published'
-      ORDER BY p.published_at DESC NULLS LAST LIMIT 6`).all(),
     db.prepare("SELECT COUNT(*) AS count FROM blog_posts WHERE status = 'published' AND published_at IS NOT NULL AND published_at <= ?")
       .bind(now).first<Record<string, number | string>>(),
     db.prepare(`SELECT COUNT(*) AS count FROM desktop_sessions
@@ -48,7 +44,6 @@ export async function consoleSnapshot(user: AuthenticatedUser) {
     },
     releases: releaseRows,
     forumTopics: forumTopics.results,
-    blogPosts: blogPosts.results,
     audits: audits.results,
   };
 }
