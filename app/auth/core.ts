@@ -194,6 +194,18 @@ export async function findActiveUserByPhone(phoneE164: string): Promise<Authenti
   return mapUser(row);
 }
 
+export async function hasCompleteChineseLocalIdentity(userId: string) {
+  await ensureAuthSchema();
+  const row = await database().prepare(`
+    SELECT u.username, c.user_id AS credential_user_id
+    FROM users u
+    LEFT JOIN password_credentials c ON c.user_id = u.id
+    WHERE u.id = ? AND u.account_locale = 'zh'
+    LIMIT 1
+  `).bind(userId).first<{ username: string | null; credential_user_id: string | null }>();
+  return Boolean(row?.username && row.credential_user_id);
+}
+
 export type ExternalProvider = "google" | "github";
 
 export class ExternalIdentityConflictError extends Error {}
@@ -407,11 +419,47 @@ export class AccountConflictError extends Error {}
 export async function registerChineseAccount(input: { username: string; phoneE164: string; password: string; tenantId: string }) {
   await ensureAuthSchema();
   const db = database();
-  const conflict = await db.prepare("SELECT id FROM users WHERE lower(username) = lower(?) OR phone_e164 = ? LIMIT 1")
-    .bind(input.username, input.phoneE164).first<{ id: string }>();
-  if (conflict) throw new AccountConflictError("用户名或手机号已被使用。");
+  const phoneOwner = await db.prepare(`
+    SELECT u.id, u.username, u.account_locale, c.user_id AS credential_user_id
+    FROM users u
+    JOIN memberships m ON m.user_id = u.id AND m.tenant_id = ?
+    LEFT JOIN password_credentials c ON c.user_id = u.id
+    WHERE u.phone_e164 = ?
+    LIMIT 1
+  `).bind(input.tenantId, input.phoneE164).first<{
+    id: string;
+    username: string | null;
+    account_locale: string;
+    credential_user_id: string | null;
+  }>();
+  if (phoneOwner && phoneOwner.account_locale !== "zh") {
+    throw new AccountConflictError("该手机号无法用于中文账号注册。");
+  }
+  if (phoneOwner && phoneOwner.username && phoneOwner.credential_user_id) {
+    throw new AccountConflictError("该手机号已完成注册，请直接登录。");
+  }
+  const usernameOwner = await db.prepare("SELECT id FROM users WHERE lower(username) = lower(?) AND id <> ? LIMIT 1")
+    .bind(input.username, phoneOwner?.id ?? "").first<{ id: string }>();
+  if (usernameOwner) throw new AccountConflictError("该用户名已被使用。");
   const credential = await createPasswordHash(input.password);
   const now = Math.floor(Date.now() / 1000);
+  if (phoneOwner) {
+    try {
+      await db.batch([
+        db.prepare("UPDATE users SET username = ?, display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END, updated_at = ? WHERE id = ?")
+          .bind(input.username, input.username, now, phoneOwner.id),
+        db.prepare(`INSERT INTO password_credentials (user_id, password_hash, password_salt, iterations, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash, password_salt=excluded.password_salt, iterations=excluded.iterations, updated_at=excluded.updated_at`)
+          .bind(phoneOwner.id, credential.passwordHash, credential.salt, credential.iterations, now),
+        auditStatement(input.tenantId, phoneOwner.id, "auth.account.complete", "user", phoneOwner.id, { locale: "zh", provider: "phone" }, now),
+      ]);
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new AccountConflictError("用户名或手机号已被使用。");
+      throw error;
+    }
+    return userById(phoneOwner.id, input.tenantId);
+  }
   const userId = `usr_${crypto.randomUUID()}`;
   try {
     await db.batch([

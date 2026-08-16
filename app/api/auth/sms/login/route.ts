@@ -8,6 +8,7 @@ import {
 } from "../../../../auth/core";
 import { normalizeChinesePhone } from "../../../../auth/phone";
 import { authenticateSmsCode, SmsConfigurationError } from "../../../../auth/sms";
+import { identityProviderSettings } from "../../../../auth/provider-settings";
 import { rejectCrossSiteWrite } from "../../../../security/request";
 
 export async function POST(request: Request) {
@@ -32,12 +33,20 @@ export async function POST(request: Request) {
     );
   }
   try {
-    const user = await authenticateSmsCode(phone, code);
-    if (!user || user.accountLocale !== "zh") {
+    const settings = await identityProviderSettings();
+    const result = await authenticateSmsCode(phone, code, settings.tenantId);
+    if (result.status === "invalid") {
       await recordFailedLogin(attemptKey);
       return Response.json({ error: "手机号或验证码错误。" }, { status: 401 });
     }
     await clearFailedLogins(attemptKey);
+    if (result.status === "registration_required") {
+      return Response.json({
+        code: "ACCOUNT_SETUP_REQUIRED",
+        error: "手机号验证成功，请先设置账号和密码完成注册。",
+      }, { status: 409, headers: { "Cache-Control": "no-store" } });
+    }
+    const user = result.user;
     const token = await createSession(user);
     return Response.json(
       { user: { email: user.email, displayName: user.displayName, role: user.role } },

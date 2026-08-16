@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Icon } from "../ui/icons";
 import { useTheme } from "../ui/useTheme";
 import { safeReturnPath } from "../auth/return-path";
+import { normalizeChinesePhone } from "../auth/phone";
 import "./style.css";
 
 type Locale = "zh" | "en";
@@ -65,6 +66,7 @@ export default function LoginPage() {
   const [chineseMethod, setChineseMethod] = useState<ChineseMethod>("sms");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [checkingPhone, setCheckingPhone] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -90,9 +92,49 @@ export default function LoginPage() {
     return () => window.clearInterval(timer);
   }, [countdown]);
 
+  useEffect(() => {
+    const completePhone = Boolean(normalizeChinesePhone(phone));
+    if (locale !== "zh" || chineseMethod !== "sms" || !completePhone) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setCheckingPhone(true);
+      fetch("/api/auth/phone/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+        signal: controller.signal,
+      }).then(async response => {
+        const payload = await response.json() as { status?: "registered" | "registration_required" | "unavailable"; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "暂时无法检查手机号状态。");
+        if (payload.status === "registration_required") {
+          setChineseMethod("register");
+          setCode("");
+          setError("");
+          setNotice("该手机号尚未完成账号绑定，请设置账号和密码完成注册。");
+        } else if (payload.status === "unavailable") {
+          setError("该手机号无法用于中文账号登录。");
+          setNotice("");
+        } else {
+          setError("");
+          setNotice("该手机号已绑定账号，可以获取验证码登录。");
+        }
+      }).catch(error => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setError(error instanceof Error ? error.message : "暂时无法检查手机号状态。");
+      }).finally(() => {
+        if (!controller.signal.aborted) setCheckingPhone(false);
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [chineseMethod, locale, phone]);
+
   const switchLocale = () => {
     const next: Locale = locale === "zh" ? "en" : "zh";
     setLocale(next);
+    setCheckingPhone(false);
     setError("");
     setNotice("");
     localStorage.setItem("eval-locale", next);
@@ -179,8 +221,14 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, code }),
       });
-      const payload = await response.json() as { error?: string };
+      const payload = await response.json() as { code?: string; error?: string };
       if (!response.ok) {
+        if (payload.code === "ACCOUNT_SETUP_REQUIRED") {
+          setChineseMethod("register");
+          setNotice(payload.error ?? "手机号验证成功，请设置账号和密码完成账户创建。");
+          setError("");
+          return;
+        }
         setError(payload.error ?? "登录失败，请稍后再试。");
         return;
       }
@@ -240,13 +288,13 @@ export default function LoginPage() {
             <h2>{chineseMethod === "register" ? "注册 Eval Agent" : "登录 Eval Agent"}</h2>
             <p>{chineseMethod === "register" ? "验证手机号并设置账号密码，完成后可继续绑定 GitHub。" : "手机号验证码、账号密码或 GitHub 均可进入同一账号。"}</p>
             <div className="login-method-tabs" role="tablist" aria-label="登录方式">
-              {(["sms", "password", "register"] as const).map(method => <button key={method} type="button" className={chineseMethod === method ? "active" : ""} onClick={() => { setChineseMethod(method); setError(""); setNotice(""); setCode(""); }}>
+              {(["sms", "password", "register"] as const).map(method => <button key={method} type="button" className={chineseMethod === method ? "active" : ""} onClick={() => { setChineseMethod(method); setCheckingPhone(false); setError(""); setNotice(""); setCode(""); }}>
                 {method === "sms" ? "手机验证码" : method === "password" ? "账号密码" : "注册账号"}
               </button>)}
             </div>
             {chineseMethod === "sms" && <form onSubmit={completeSmsLogin}>
-              <label>手机号<input required value={phone} onChange={event => setPhone(event.target.value)} name="phone" type="tel" placeholder="请输入手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
-              <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("login")} disabled={sending || countdown > 0 || phone.trim().length < 11}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
+              <label>手机号<input required value={phone} onChange={event => { setPhone(event.target.value); setCheckingPhone(false); setCode(""); setNotice(""); }} name="phone" type="tel" placeholder="请输入手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
+              <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("login")} disabled={checkingPhone || sending || countdown > 0 || phone.trim().length < 11}>{checkingPhone ? "检查账号" : sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
               {notice && <div className="login-notice" role="status">{notice}</div>}{error && <div className="login-error" role="alert">{error}</div>}
               <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在验证…" : <>安全登录 <Icon name="arrow"/></>}</button>
             </form>}
@@ -259,7 +307,7 @@ export default function LoginPage() {
             {chineseMethod === "register" && <form onSubmit={completeRegistration}>
               <label>账号<input required value={username} onChange={event => setUsername(event.target.value)} name="username" type="text" placeholder="3–32 位账号" autoComplete="username" minLength={3} maxLength={32}/></label>
               <label>设置密码<input required value={password} onChange={event => setPassword(event.target.value)} name="password" type="password" placeholder="至少 10 位，包含字母与数字" autoComplete="new-password" minLength={10} maxLength={128}/></label>
-              <label>手机号<input required value={phone} onChange={event => setPhone(event.target.value)} name="phone" type="tel" placeholder="中国大陆手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
+              <label>手机号<input required value={phone} onChange={event => { setPhone(event.target.value); setCode(""); setNotice(""); }} name="phone" type="tel" placeholder="中国大陆手机号" inputMode="tel" autoComplete="tel" maxLength={17}/></label>
               <label>短信验证码<div className="sms-code-row"><input required value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} name="code" type="text" placeholder="6 位验证码" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}"/><button type="button" className="sms-send" onClick={() => void sendCode("register")} disabled={sending || countdown > 0 || phone.trim().length < 11}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "获取验证码"}</button></div></label>
               {notice && <div className="login-notice" role="status">{notice}</div>}{error && <div className="login-error" role="alert">{error}</div>}
               <button type="submit" className="login-submit" disabled={loading || code.length !== 6}>{loading ? "正在创建…" : <>注册并登录 <Icon name="arrow"/></>}</button>

@@ -245,6 +245,11 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /注册账号/);
   assert.match(login, /账号密码/);
   assert.match(login, /Only Google and GitHub are available for English accounts/);
+  assert.match(login, /fetch\("\/api\/auth\/phone\/status"/);
+  assert.match(login, /payload\.status === "registration_required"/);
+  assert.match(login, /setChineseMethod\("register"\)/);
+  assert.match(login, /该手机号尚未完成账号绑定，请设置账号和密码完成注册/);
+  assert.match(login, /payload\.code === "ACCOUNT_SETUP_REQUIRED"/);
   assert.match(login, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>浙ICP备2024097468号-10<\/a>/);
   assert.doesNotMatch(login, /正在连接（杭州）科技有限公司|CONNECTING \(HANGZHOU\) TECHNOLOGY|© 2026/);
   assert.match(loginCss, /\.trust span \{[^}]*font: 560 11px\/1\.4/);
@@ -253,13 +258,16 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.doesNotMatch(login, /\/api\/auth\/login/);
 });
 
-test("SMS verification uses Alibaba Cloud, purpose-bound hashed codes, and database rate limits", async () => {
-  const [provider, settings, sms, schema, sendRoute, passwordRoute, registrationRoute] = await Promise.all([
+test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accounts, and database rate limits", async () => {
+  const [provider, settings, sms, authCore, schema, phoneStatusRoute, sendRoute, loginRoute, passwordRoute, registrationRoute] = await Promise.all([
     source("../app/auth/aliyun-sms.ts"),
     source("../app/auth/provider-settings.ts"),
     source("../app/auth/sms.ts"),
+    source("../app/auth/core.ts"),
     source("../db/schema.ts"),
+    source("../app/api/auth/phone/status/route.ts"),
     source("../app/api/auth/sms/send/route.ts"),
+    source("../app/api/auth/sms/login/route.ts"),
     source("../app/api/auth/password/route.ts"),
     source("../app/api/auth/register/route.ts"),
   ]);
@@ -274,13 +282,28 @@ test("SMS verification uses Alibaba Cloud, purpose-bound hashed codes, and datab
   assert.match(sms, /sms:cooldown/);
   assert.match(sms, /sms:phone/);
   assert.match(sms, /sms:ip/);
+  assert.match(sms, /sms:account-status/);
   assert.match(sms, /"login" \| "register" \| "phone_bind" \| "password_change"/);
+  assert.match(sms, /hasCompleteChineseLocalIdentity/);
+  assert.match(sms, /status: "registration_required"/);
+  assert.match(sms, /promoteVerifiedLoginCodeToRegistration/);
+  assert.doesNotMatch(sms, /purpose === "login" && \(!user/);
   assert.match(sms, /user\.accountLocale !== "zh"/);
   assert.match(sms, /`\$\{purpose\}:\$\{userId \?\? "public"\}:\$\{phoneE164\}`/);
   assert.match(schema, /authSmsChallenges/);
   assert.match(schema, /authSmsRateLimits/);
+  assert.match(phoneStatusRoute, /rejectCrossSiteWrite/);
+  assert.match(phoneStatusRoute, /phoneAccountStatus/);
+  assert.match(phoneStatusRoute, /Cache-Control": "no-store/);
+  assert.match(phoneStatusRoute, /status: 429/);
   assert.match(sendRoute, /purpose === "password_change"/);
   assert.match(sendRoute, /sessionUser\.accountLocale !== "zh"/);
+  assert.match(loginRoute, /ACCOUNT_SETUP_REQUIRED/);
+  assert.match(loginRoute, /status: 409/);
+  assert.match(loginRoute, /authenticateSmsCode\(phone, code, settings\.tenantId\)/);
+  assert.match(authCore, /hasCompleteChineseLocalIdentity/);
+  assert.match(authCore, /auth\.account\.complete/);
+  assert.match(authCore, /phoneOwner\.username && phoneOwner\.credential_user_id/);
   assert.match(passwordRoute, /verifySmsCode\("password_change"/);
   assert.match(passwordRoute, /replacePassword/);
   assert.doesNotMatch(passwordRoute, /currentPassword|authenticateUsername/);

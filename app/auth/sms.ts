@@ -1,5 +1,5 @@
 import { SmsConfigurationError, SmsDeliveryError, sendLoginVerificationCode } from "./aliyun-sms";
-import { authDatabase, ensureAuthSchema, findActiveUserByPhone, type AuthenticatedUser } from "./core";
+import { authDatabase, ensureAuthSchema, findActiveUserByPhone, hasCompleteChineseLocalIdentity, type AuthenticatedUser } from "./core";
 import { tenantProviderSettings } from "./provider-settings";
 
 const CODE_TTL_SECONDS = 5 * 60;
@@ -19,6 +19,19 @@ export class SmsRateLimitError extends Error {
   }
 }
 
+export type PhoneAccountStatus = "registered" | "registration_required" | "unavailable";
+
+export async function phoneAccountStatus(phoneE164: string, request: Request): Promise<PhoneAccountStatus> {
+  await ensureAuthSchema();
+  const now = epochSeconds();
+  const ipHash = await sha256(clientAddress(request));
+  await consumeRateLimit(`sms:account-status:${ipHash}`, 30, 60, now);
+  const user = await findActiveUserByPhone(phoneE164);
+  if (!user) return "registration_required";
+  if (user.accountLocale !== "zh") return "unavailable";
+  return await hasCompleteChineseLocalIdentity(user.id) ? "registered" : "registration_required";
+}
+
 export async function requestSmsCode(purpose: SmsPurpose, phoneE164: string, request: Request, context?: SmsContext) {
   await ensureAuthSchema();
   const now = epochSeconds();
@@ -30,8 +43,9 @@ export async function requestSmsCode(purpose: SmsPurpose, phoneE164: string, req
   await consumeRateLimit(`sms:ip:${ipHash}`, 20, 60 * 60, now);
 
   const user = await findActiveUserByPhone(phoneE164);
-  if (purpose === "login" && (!user || user.accountLocale !== "zh")) return { accepted: true, retryAfter: 60 };
-  if (purpose === "register" && user) return { accepted: true, retryAfter: 60 };
+  const completeLocalIdentity = user ? await hasCompleteChineseLocalIdentity(user.id) : false;
+  if (purpose === "login" && user && user.accountLocale !== "zh") return { accepted: true, retryAfter: 60 };
+  if (purpose === "register" && user && (user.accountLocale !== "zh" || completeLocalIdentity)) return { accepted: true, retryAfter: 60 };
   if ((purpose === "phone_bind" || purpose === "password_change") && (!context?.userId || !context.tenantId)) {
     return { accepted: true, retryAfter: 60 };
   }
@@ -66,11 +80,22 @@ export async function requestSmsCode(purpose: SmsPurpose, phoneE164: string, req
   return { accepted: true, retryAfter: 60 };
 }
 
-export async function authenticateSmsCode(phoneE164: string, code: string): Promise<AuthenticatedUser | null> {
+export type SmsAuthenticationResult =
+  | { status: "authenticated"; user: AuthenticatedUser }
+  | { status: "registration_required" }
+  | { status: "invalid" };
+
+export async function authenticateSmsCode(phoneE164: string, code: string, registrationTenantId: string): Promise<SmsAuthenticationResult> {
   await ensureAuthSchema();
   const user = await findActiveUserByPhone(phoneE164);
-  if (!user) return null;
-  return await verifySmsCode("login", phoneE164, code, user.tenantId) ? user : null;
+  if (user && user.accountLocale !== "zh") return { status: "invalid" };
+  const tenantId = user?.tenantId ?? registrationTenantId;
+  if (!await verifySmsCode("login", phoneE164, code, tenantId)) return { status: "invalid" };
+  if (!user || !await hasCompleteChineseLocalIdentity(user.id)) {
+    await promoteVerifiedLoginCodeToRegistration(phoneE164, code, tenantId);
+    return { status: "registration_required" };
+  }
+  return { status: "authenticated", user };
 }
 
 export async function verifySmsCode(purpose: SmsPurpose, phoneE164: string, code: string, tenantId: string, userId?: string) {
@@ -100,6 +125,24 @@ export async function verifySmsCode(purpose: SmsPurpose, phoneE164: string, code
     return false;
   }
   return true;
+}
+
+async function promoteVerifiedLoginCodeToRegistration(phoneE164: string, code: string, tenantId: string) {
+  const now = epochSeconds();
+  const keyHash = await challengeKey("register", phoneE164);
+  const codeHash = await challengeCodeHash(keyHash, code, tenantId);
+  await authDatabase().prepare(`
+    INSERT INTO auth_sms_challenges (key_hash, code_hash, attempts, expires_at, consumed_at, aliyun_biz_id, created_at, updated_at)
+    VALUES (?, ?, 0, ?, NULL, NULL, ?, ?)
+    ON CONFLICT(key_hash) DO UPDATE SET
+      code_hash=excluded.code_hash,
+      attempts=0,
+      expires_at=excluded.expires_at,
+      consumed_at=NULL,
+      aliyun_biz_id=NULL,
+      created_at=excluded.created_at,
+      updated_at=excluded.updated_at
+  `).bind(keyHash, codeHash, now + CODE_TTL_SECONDS, now, now).run();
 }
 
 async function consumeRateLimit(keyHash: string, maximum: number, windowSeconds: number, now: number) {
