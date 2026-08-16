@@ -89,7 +89,7 @@ test("published downloads require a real stored artifact", async () => {
   assert.match(catalog, /r\.status = 'published'/);
   assert.match(catalog, /r\.channel = 'stable'/);
   assert.match(download, /getArtifact/);
-  assert.match(upload, /putArtifact/);
+  assert.match(upload, /stageArtifactReplacement/);
   assert.match(upload, /\.exe/);
   assert.doesNotMatch(upload, /\.msi/i);
   assert.match(upload, /SHA-256/);
@@ -392,7 +392,7 @@ test("admin content center publishes blogs and moderates tenant forum content wi
 });
 
 test("desktop updater exposes only the verified, version-matched EXE from the public release tenant", async () => {
-  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, metadata, signature, signingSettings, schema, releaseMigration, settingsMigration, config, packageJson] = await Promise.all([
+  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, artifactStorage, metadata, signature, signingSettings, schema, releaseMigration, settingsMigration, replacementMigration, config, packageJson] = await Promise.all([
     source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
     source("../app/api/v1/downloads/route.ts"),
     source("../app/api/v1/downloads/[id]/route.ts"),
@@ -401,12 +401,14 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
     source("../app/admin/AdminConsole.tsx"),
     source("../app/agent/AgentLanding.tsx"),
     source("../app/api/admin/artifacts/route.ts"),
+    source("../app/storage/artifacts.ts"),
     source("../app/releases/installer-metadata.ts"),
     source("../app/releases/signature.ts"),
     source("../app/releases/settings.ts"),
     source("../db/schema.ts"),
     source("../drizzle/0009_faulty_lady_deathstrike.sql"),
     source("../drizzle/0010_empty_diamondback.sql"),
+    source("../drizzle/0011_peaceful_sebastian_shaw.sql"),
     source("../.env.example"),
     source("../package.json"),
   ]);
@@ -444,6 +446,13 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(upload, /verifyUpdaterSignature/);
   assert.match(upload, /requireTenantReleaseSigningSettings/);
   assert.match(upload, /inspectWindowsInstaller/);
+  assert.match(upload, /WHERE tenant_id = \? AND embedded_version = \?/);
+  assert.match(upload, /stageArtifactReplacement/);
+  assert.match(upload, /UPDATE agent_artifacts SET file_name/);
+  assert.match(upload, /replaced: Boolean\(existing\)/);
+  assert.match(artifactStorage, /stageArtifactReplacement/);
+  assert.match(artifactStorage, /commit:/);
+  assert.match(artifactStorage, /rollback:/);
   assert.doesNotMatch(upload, /MSI|\.msi/i);
   assert.match(upload, /signatureFile\.name\.toLowerCase\(\) !== `\$\{file\.name\}\.sig`/);
   assert.match(upload, /updater_signature/);
@@ -463,15 +472,24 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(schema, /signatureVerifiedAt/);
   assert.match(schema, /embeddedVersion/);
   assert.match(schema, /releaseSettings/);
+  assert.match(schema, /agent_artifacts_tenant_embedded_version_uq/);
+  assert.match(schema, /artifactCleanupQueue/);
   assert.doesNotMatch(schema, /releaseArtifacts|MSI/);
   assert.match(releaseMigration, /ADD COLUMN "embedded_version" text/);
   assert.match(releaseMigration, /ROW_NUMBER\(\) OVER/);
   assert.match(releaseMigration, /release_versions_one_published_channel_uq/);
   assert.match(settingsMigration, /CREATE TABLE "release_settings"/);
   assert.match(settingsMigration, /updater_public_key_id/);
+  assert.match(replacementMigration, /CREATE TABLE "artifact_cleanup_queue"/);
+  assert.match(replacementMigration, /ROW_NUMBER\(\) OVER/);
+  assert.match(replacementMigration, /UPDATE "release_versions"/);
+  assert.match(replacementMigration, /DELETE FROM "agent_artifacts"/);
+  assert.match(replacementMigration, /agent_artifacts_tenant_embedded_version_uq/);
   assert.match(releaseStore, /ensureArtifactVersionMatchesRelease/);
   assert.match(releaseStore, /save_release_settings/);
   assert.match(releaseStore, /release\.settings\.save/);
+  assert.match(releaseStore, /reusedDraft/);
+  assert.doesNotMatch(releaseStore, /当前渠道已存在相同版本号/);
   assert.match(releaseStore, /内部版本.*与发布版本.*不一致/);
   assert.match(releaseStore, /SET status = 'draft'.*channel = \?.*status = 'published'/);
   assert.match(schema, /release_versions_one_published_channel_uq/);
@@ -486,6 +504,8 @@ test("desktop updater exposes only the verified, version-matched EXE from the pu
   assert.match(adminUi, /官网直接下载/);
   assert.match(adminUi, /客户端直接升级/);
   assert.match(adminUi, /历史版本转为私有/);
+  assert.match(adminUi, /已有同版本草稿会直接更新并转为正式发布/);
+  assert.match(adminUi, /保存并应用发布设置/);
   assert.doesNotMatch(adminUi, /MSI|\.msi/i);
   assert.doesNotMatch(landing, /MSI|\.msi/i);
   assert.doesNotMatch(adminUi, /function ArtifactsView|function ReleasesView/);

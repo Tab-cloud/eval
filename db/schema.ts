@@ -108,7 +108,13 @@ export const agentArtifacts = pgTable("agent_artifacts", {
 }, (table) => [
   index("agent_artifacts_tenant_idx").on(table.tenantId),
   uniqueIndex("agent_artifacts_object_key_uq").on(table.objectKey),
+  uniqueIndex("agent_artifacts_tenant_embedded_version_uq").on(table.tenantId, table.embeddedVersion),
 ]);
+
+export const artifactCleanupQueue = pgTable("artifact_cleanup_queue", {
+  objectKey: text("object_key").primaryKey(),
+  createdAt: epoch("created_at").notNull(),
+});
 
 export const releaseVersions = pgTable("release_versions", {
   id: text("id").primaryKey(),

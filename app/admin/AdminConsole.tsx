@@ -68,9 +68,11 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
     setBusy(true); setError(""); setNotice("");
     try {
       const response = await fetch("/api/admin/artifacts", { method: "POST", body: new FormData(form) });
-      const payload = await response.json() as { error?: string; artifacts?: unknown[] };
+      const payload = await response.json() as { error?: string; artifacts?: unknown[]; replaced?: boolean; contentChanged?: boolean };
       if (!response.ok) throw new Error(payload.error ?? "上传失败。");
-      form.reset(); await load(); setNotice(`${payload.artifacts?.length ?? 0} 个安装包已完成验签并安全上传。`);
+      form.reset(); await load(); setNotice(payload.replaced
+        ? payload.contentChanged ? "同版本安装包已完成验签并替换原文件。" : "安装包内容未变化，已复用现有文件并刷新验签信息。"
+        : `${payload.artifacts?.length ?? 0} 个安装包已完成验签并安全上传。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "上传失败。"); }
     finally { setBusy(false); }
   };
@@ -163,6 +165,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
   const publishedArtifact = publishedStableRelease ? data.artifacts.find(artifact => artifact.id === publishedStableRelease.artifactId) : undefined;
   const currentArtifact = publishedArtifact?.signatureKeyId === data.releaseSettings.updaterPublicKeyId ? publishedArtifact : undefined;
   const currentRelease = currentArtifact ? publishedStableRelease : undefined;
+  const candidateDrafts = latestArtifact ? data.releases.filter(release => release.artifactId === latestArtifact.id && release.status === "draft") : [];
 
   return <div className="admin-module release-center">
     <section className={`release-key-config ${data.releaseSettings.configured ? "is-ready" : "is-missing"}`}>
@@ -199,16 +202,16 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
       </form>
     </AdminForm>
 
-    {latestArtifact && <section className="release-candidate"><header><div><span>LATEST VERIFIED BUILD</span><h3>v{latestArtifact.embeddedVersion}</h3></div><small>仅最新上传的 EXE 进入发布候选</small></header><div><article><span>EXE</span><div><b>{latestArtifact.fileName}</b><small>{formatBytes(latestArtifact.sizeBytes)} · {latestArtifact.productName || "Eval Agent"}</small></div><a href={`/api/admin/artifacts/${latestArtifact.id}`}>内部下载</a></article></div></section>}
+    {latestArtifact && <section className="release-candidate"><header><div><span>LATEST VERIFIED BUILD</span><h3>v{latestArtifact.embeddedVersion}</h3></div><small>{candidateDrafts.length ? `已有 ${candidateDrafts.map(release => release.channel.toUpperCase()).join(" / ")} 草稿，可在下方直接发布` : "仅最新上传的 EXE 进入发布候选"}</small></header><div><article><span>EXE</span><div><b>{latestArtifact.fileName}</b><small>{formatBytes(latestArtifact.sizeBytes)} · {latestArtifact.productName || "Eval Agent"}</small></div><a href={`/api/admin/artifacts/${latestArtifact.id}`}>内部下载</a></article></div></section>}
 
-    <AdminForm title="发布到用户" note="选择最新验签版本并发布。每个渠道只保留一个公开版本，发布新版会自动把该渠道旧版转为私有。">
+    <AdminForm title="发布到用户" note="选择最新验签版本并发布。已有同版本草稿会直接更新并转为正式发布，不会重复创建版本记录。">
       <form onSubmit={event=>{event.preventDefault();if(!latestArtifact?.embeddedVersion)return;const form=new FormData(event.currentTarget);void action("create_release",{version:latestArtifact.embeddedVersion,artifactId:latestArtifact.id,channel:form.get("channel"),status:form.get("status"),notes:form.get("notes"),mandatory:form.get("mandatory")==="on"},form.get("status")==="published"?"最新版本已发布。":"版本草稿已保存。");event.currentTarget.reset();}}>
         <label>待发布版本<select name="artifactVersion" value={latestArtifact?.embeddedVersion ?? ""} disabled><option value={latestArtifact?.embeddedVersion ?? ""}>{latestArtifact?.embeddedVersion ? `v${latestArtifact.embeddedVersion} · EXE` : "请先上传安装包"}</option></select></label>
         <label>发布渠道<select name="channel" defaultValue="stable"><option value="stable">Stable / 正式版</option><option value="beta">Beta / 测试版</option><option value="internal">Internal / 内部版</option></select></label>
         <label>发布方式<select name="status" defaultValue="draft"><option value="draft">先保存草稿</option><option value="published">立即公开发布</option></select></label>
         <label className="release-notes">更新说明<textarea name="notes" placeholder="说明新增能力、修复内容与升级注意事项"/></label>
         <label className="admin-check"><input name="mandatory" type="checkbox"/>将此版本标记为强制升级</label>
-        <button disabled={busy || !latestArtifact || !data.releaseSettings.configured}>创建发布版本 <Icon name="arrow"/></button>
+        <button disabled={busy || !latestArtifact || !data.releaseSettings.configured}>保存并应用发布设置 <Icon name="arrow"/></button>
       </form>
     </AdminForm>
   </div>;
@@ -231,4 +234,4 @@ function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).t
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}
-function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","user.phone.update":"更新手机号","auth.providers.save":"保存登录配置","blog.post.create":"创建博客","blog.post.update":"更新博客","blog.post.status":"博客状态","forum.topic.create":"发布论坛主题","forum.reply.create":"发布论坛回复","forum.topic.moderate":"治理论坛主题","forum.reply.moderate":"治理论坛回复","artifact.upload":"上传安装包","release.settings.save":"更新发布公钥","release.create":"创建版本","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}
+function auditLabel(value:string){return ({"user.create":"创建用户","user.update":"更新用户","user.phone.update":"更新手机号","auth.providers.save":"保存登录配置","blog.post.create":"创建博客","blog.post.update":"更新博客","blog.post.status":"博客状态","forum.topic.create":"发布论坛主题","forum.reply.create":"发布论坛回复","forum.topic.moderate":"治理论坛主题","forum.reply.moderate":"治理论坛回复","artifact.upload":"上传安装包","release.settings.save":"更新发布公钥","release.create":"创建版本","release.update":"更新版本草稿","release.publish":"发布版本","release.rollback":"回滚版本","billing_plan.save":"保存套餐","billing_plan.status":"套餐状态","auth.password.change":"修改密码"} as Record<string,string>)[value] || "系统操作"}

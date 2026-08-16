@@ -9,6 +9,11 @@ export type StoredArtifact = {
   contentType: string;
 };
 
+export type StagedArtifactReplacement = {
+  commit: () => Promise<void>;
+  rollback: () => Promise<void>;
+};
+
 function storageRoot() {
   const configured = process.env.ARTIFACT_STORAGE_PATH?.trim();
   if (configured) {
@@ -29,16 +34,45 @@ function resolveObjectKey(objectKey: string) {
 }
 
 export async function putArtifact(objectKey: string, content: ArrayBuffer) {
+  const replacement = await stageArtifactReplacement(objectKey, content);
+  await replacement.commit();
+}
+
+export async function stageArtifactReplacement(objectKey: string, content: ArrayBuffer): Promise<StagedArtifactReplacement> {
   const target = resolveObjectKey(objectKey);
   await mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.${crypto.randomUUID()}.uploading`;
+  const backup = `${target}.${crypto.randomUUID()}.replaced`;
+  let backedUp = false;
+  let settled = false;
   try {
     await writeFile(temporary, Buffer.from(content));
+    try {
+      await rename(target, backup);
+      backedUp = true;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
     await rename(temporary, target);
   } catch (error) {
     await rm(temporary, { force: true });
+    if (backedUp) await rename(backup, target).catch(() => undefined);
     throw error;
   }
+
+  return {
+    async commit() {
+      if (settled) return;
+      settled = true;
+      if (backedUp) await rm(backup, { force: true }).catch(() => undefined);
+    },
+    async rollback() {
+      if (settled) return;
+      settled = true;
+      await rm(target, { force: true });
+      if (backedUp) await rename(backup, target);
+    },
+  };
 }
 
 export async function deleteArtifact(objectKey: string) {

@@ -5,7 +5,7 @@ import { providerSettingsSnapshot, saveTenantProviderSettings, tenantProviderSet
 import { cleanText, contentSlug, ensureContentSchema, publicContentTenantSlug } from "../content/store";
 import { normalizeSemver } from "../releases/public";
 import { releaseSettingsSnapshot, requireTenantReleaseSigningSettings, saveTenantReleaseSigningSettings, tenantReleaseSigningSettings } from "../releases/settings";
-import { artifactExists } from "../storage/artifacts";
+import { artifactExists, deleteArtifact } from "../storage/artifacts";
 
 let adminSchemaInitialization: Promise<void> | null = null;
 
@@ -37,12 +37,30 @@ async function initializeAdminSchema() {
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_tenant_version_uq ON release_versions (tenant_id, version, channel)",
     "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (tenant_id, channel) WHERE status = 'published'",
+    "CREATE TABLE IF NOT EXISTS artifact_cleanup_queue (object_key text PRIMARY KEY NOT NULL, created_at bigint NOT NULL)",
+    "WITH ranked_artifacts AS (SELECT id, object_key, FIRST_VALUE(id) OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) INSERT INTO artifact_cleanup_queue (object_key, created_at) SELECT object_key, FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint FROM ranked_artifacts WHERE artifact_rank > 1 ON CONFLICT (object_key) DO NOTHING",
+    "WITH ranked_artifacts AS (SELECT id, FIRST_VALUE(id) OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) UPDATE release_versions SET artifact_id = ranked_artifacts.keeper_id FROM ranked_artifacts WHERE ranked_artifacts.artifact_rank > 1 AND release_versions.artifact_id = ranked_artifacts.id",
+    "WITH ranked_artifacts AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY tenant_id, embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) DELETE FROM agent_artifacts WHERE id IN (SELECT id FROM ranked_artifacts WHERE artifact_rank > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_tenant_embedded_version_uq ON agent_artifacts (tenant_id, embedded_version)",
     "CREATE TABLE IF NOT EXISTS release_settings (tenant_id text PRIMARY KEY NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, seat_limit integer NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS billing_plans_tenant_idx ON billing_plans (tenant_id)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_tenant_time_idx ON audit_logs (tenant_id, created_at)",
   ].map(sql => db.prepare(sql)));
+  await drainArtifactCleanupQueue(db);
+}
+
+async function drainArtifactCleanupQueue(db: PostgresDatabase) {
+  const queued = await db.prepare("SELECT object_key FROM artifact_cleanup_queue ORDER BY created_at ASC LIMIT 100").all<{ object_key: string }>();
+  for (const item of queued.results) {
+    try {
+      await deleteArtifact(item.object_key);
+      await db.prepare("DELETE FROM artifact_cleanup_queue WHERE object_key = ?").bind(item.object_key).run();
+    } catch {
+      // Keep the row so the next schema initialization can retry storage cleanup.
+    }
+  }
 }
 
 export async function adminSnapshot(user: AuthenticatedUser) {
@@ -286,8 +304,25 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const signingSettings = await requireTenantReleaseSigningSettings(user.tenantId);
     await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
     ensureArtifactVersionMatchesRelease(artifact, normalizedVersion.version);
-    const duplicate = await db.prepare("SELECT id FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?").bind(user.tenantId, normalizedVersion.version, channel).first();
-    if (duplicate) throw new Error("当前渠道已存在相同版本号。");
+    const duplicate = await db.prepare("SELECT id, status FROM release_versions WHERE tenant_id = ? AND version = ? AND channel = ?")
+      .bind(user.tenantId, normalizedVersion.version, channel)
+      .first<{ id: string; status: string }>();
+    if (duplicate) {
+      if (duplicate.status === "published" && status === "draft") {
+        throw new Error("当前版本已经公开发布；如需停止分发，请使用顶部的停止公开分发按钮。");
+      }
+      await db.batch([
+        ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published' AND id <> ?").bind(now, user.tenantId, channel, duplicate.id)] : []),
+        status === "published"
+          ? db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ? AND tenant_id = ?")
+            .bind(artifactId, notes, Boolean(input.mandatory), now, now, duplicate.id, user.tenantId)
+          : db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND status = 'draft'")
+            .bind(artifactId, notes, Boolean(input.mandatory), now, duplicate.id, user.tenantId),
+        db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, ?, 'release_version', ?, ?, ?)")
+          .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, status === "published" ? "release.publish" : "release.update", duplicate.id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory), reusedDraft: duplicate.status === "draft" }), now),
+      ]);
+      return { id: duplicate.id, status, reused: true };
+    }
     const id = `rel_${crypto.randomUUID()}`;
     await db.batch([
       ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE tenant_id = ? AND channel = ? AND status = 'published'").bind(now, user.tenantId, channel)] : []),

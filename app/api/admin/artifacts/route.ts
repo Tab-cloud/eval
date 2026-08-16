@@ -5,7 +5,7 @@ import { inspectWindowsInstaller } from "../../../releases/installer-metadata";
 import { requireTenantReleaseSigningSettings } from "../../../releases/settings";
 import { verifyUpdaterSignature } from "../../../releases/signature";
 import { rejectCrossSiteWrite } from "../../../security/request";
-import { deleteArtifact, putArtifact } from "../../../storage/artifacts";
+import { artifactExists, stageArtifactReplacement, type StagedArtifactReplacement } from "../../../storage/artifacts";
 
 const MAX_ARTIFACT_SIZE = 120 * 1024 * 1024;
 const MAX_SIGNATURE_SIZE = 8 * 1024;
@@ -23,6 +23,12 @@ type ValidatedArtifact = {
   productName: string | null;
   versionSource: string;
   objectKey: string;
+};
+
+type ExistingArtifact = {
+  id: string;
+  object_key: string;
+  sha256: string;
 };
 
 export async function POST(request: Request) {
@@ -49,25 +55,46 @@ export async function POST(request: Request) {
     return Response.json({ error: error instanceof Error ? error.message : "安装包校验失败。" }, { status: 400 });
   }
 
+  const now = Math.floor(Date.now() / 1000);
+  const db = authDatabase();
+  const existing = await db.prepare(`SELECT id, object_key, sha256
+    FROM agent_artifacts
+    WHERE tenant_id = ? AND embedded_version = ? AND format = 'NSIS' AND platform = 'windows' AND architecture = 'x86_64'
+    ORDER BY created_at DESC LIMIT 1`)
+    .bind(user.tenantId, artifact.embeddedVersion)
+    .first<ExistingArtifact>();
+  const storedArtifact = existing
+    ? { ...artifact, id: existing.id, objectKey: existing.object_key }
+    : artifact;
+  const contentChanged = !existing || existing.sha256 !== artifact.sha256;
+  const sourceMissing = existing ? !await artifactExists(existing.object_key) : true;
+  let replacement: StagedArtifactReplacement | null = null;
+
   try {
-    await putArtifact(artifact.objectKey, artifact.bytes);
-    const now = Math.floor(Date.now() / 1000);
-    const db = authDatabase();
+    if (contentChanged || sourceMissing) {
+      replacement = await stageArtifactReplacement(storedArtifact.objectKey, artifact.bytes);
+    }
     await db.batch([
-      db.prepare("INSERT INTO agent_artifacts (id, tenant_id, file_name, label, format, object_key, size_bytes, sha256, updater_signature, signature_verified_at, signature_key_id, embedded_version, product_name, version_source, platform, architecture, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'windows', 'x86_64', 'ready', ?)")
-        .bind(artifact.id, user.tenantId, artifact.file.name, label, artifact.format, artifact.objectKey, artifact.file.size, artifact.sha256, artifact.updaterSignature, artifact.signatureVerifiedAt, artifact.signatureKeyId, artifact.embeddedVersion, artifact.productName, artifact.versionSource, now),
+      existing
+        ? db.prepare("UPDATE agent_artifacts SET file_name = ?, label = ?, size_bytes = ?, sha256 = ?, updater_signature = ?, signature_verified_at = ?, signature_key_id = ?, product_name = ?, version_source = ?, status = 'ready', created_at = ? WHERE id = ? AND tenant_id = ? AND embedded_version = ? AND format = 'NSIS'")
+          .bind(artifact.file.name, label, artifact.file.size, artifact.sha256, artifact.updaterSignature, artifact.signatureVerifiedAt, artifact.signatureKeyId, artifact.productName, artifact.versionSource, now, existing.id, user.tenantId, artifact.embeddedVersion)
+        : db.prepare("INSERT INTO agent_artifacts (id, tenant_id, file_name, label, format, object_key, size_bytes, sha256, updater_signature, signature_verified_at, signature_key_id, embedded_version, product_name, version_source, platform, architecture, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'windows', 'x86_64', 'ready', ?)")
+          .bind(storedArtifact.id, user.tenantId, artifact.file.name, label, artifact.format, storedArtifact.objectKey, artifact.file.size, artifact.sha256, artifact.updaterSignature, artifact.signatureVerifiedAt, artifact.signatureKeyId, artifact.embeddedVersion, artifact.productName, artifact.versionSource, now),
       db.prepare("INSERT INTO audit_logs (id, tenant_id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'artifact.upload', 'agent_artifact', ?, ?, ?)")
-        .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, artifact.id, JSON.stringify({ fileName: artifact.file.name, format: artifact.format, sizeBytes: artifact.file.size, sha256: artifact.sha256, signatureKeyId: artifact.signatureKeyId, embeddedVersion: artifact.embeddedVersion, productName: artifact.productName, versionSource: artifact.versionSource }), now),
+        .bind(`audit_${crypto.randomUUID()}`, user.tenantId, user.id, storedArtifact.id, JSON.stringify({ fileName: artifact.file.name, format: artifact.format, sizeBytes: artifact.file.size, sha256: artifact.sha256, signatureKeyId: artifact.signatureKeyId, embeddedVersion: artifact.embeddedVersion, productName: artifact.productName, versionSource: artifact.versionSource, replaced: Boolean(existing), contentChanged, sourceRestored: sourceMissing }), now),
     ]);
+    await replacement?.commit();
   } catch (error) {
-    await deleteArtifact(artifact.objectKey);
+    await replacement?.rollback().catch(() => undefined);
     throw error;
   }
 
   return Response.json({
     ok: true,
+    replaced: Boolean(existing),
+    contentChanged,
     artifacts: [{
-      id: artifact.id,
+      id: storedArtifact.id,
       fileName: artifact.file.name,
       label,
       format: artifact.format,
