@@ -12,9 +12,8 @@ export type AuthSettingsSnapshot = {
   aliyunTemplateCode: string;
   aliyunTemplateCodeKey: string;
   aliyunAccessKeyIdConfigured: boolean;
-  aliyunAccessKeyIdMasked: string;
-  aliyunAccessKeySecretRef: string;
-  smsCodePepperRef: string;
+  aliyunAccessKeySecretConfigured: boolean;
+  smsCodePepperConfigured: boolean;
   googleEnabled: boolean;
   googleClientIdRef: string;
   googleClientSecretRef: string;
@@ -23,7 +22,7 @@ export type AuthSettingsSnapshot = {
   githubClientIdRef: string;
   githubClientSecretRef: string;
   githubCallbackUrl: string;
-  smsEnvironment: { accessKeyId: boolean; accessKeySecret: boolean; pepper: boolean };
+  smsCredentials: { accessKeyId: boolean; accessKeySecret: boolean; pepper: boolean };
   googleEnvironment: { clientId: boolean; clientSecret: boolean };
   githubEnvironment: { clientId: boolean; clientSecret: boolean };
   smsConfigured: boolean;
@@ -46,7 +45,9 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       smsEnabled: data.get("smsEnabled") === "on",
       googleEnabled: data.get("googleEnabled") === "on",
       githubEnabled: data.get("githubEnabled") === "on",
-    }, "登录与身份配置已保存。");
+    }, "登录与身份配置已保存。").finally(() => {
+      form.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input => { input.value = ""; });
+    });
   };
 
   return <div className="admin-module auth-settings-view">
@@ -56,7 +57,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
         title="中文手机号登录"
         enabled={settings.smsEnabled}
         configured={settings.smsConfigured}
-        detail={settings.smsConfigured ? "部署凭据、签名和模板均已就绪" : "仍有部署变量或短信元数据缺失"}
+        detail={settings.smsConfigured ? "短信凭据、签名和模板均已就绪" : "仍有短信凭据或元数据缺失"}
       />
       <ProviderStatus
         label="GOOGLE / OPENID CONNECT"
@@ -89,9 +90,9 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
           <Field label="短信签名名称"><input name="aliyunSignName" defaultValue={settings.aliyunSignName} placeholder="已通过阿里云审核的签名"/></Field>
           <Field label="短信模板代码"><input name="aliyunTemplateCode" defaultValue={settings.aliyunTemplateCode} placeholder="SMS_123456789"/></Field>
           <Field label="模板验证码变量"><input name="aliyunTemplateCodeKey" defaultValue={settings.aliyunTemplateCodeKey} pattern="[A-Za-z][A-Za-z0-9_]{0,31}" required/></Field>
-          <ProtectedValueField label="AccessKey ID" name="aliyunAccessKeyId" configured={settings.aliyunAccessKeyIdConfigured} masked={settings.aliyunAccessKeyIdMasked}/>
-          <EnvironmentField label="AccessKey Secret 变量" name="aliyunAccessKeySecretRef" value={settings.aliyunAccessKeySecretRef} configured={settings.smsEnvironment.accessKeySecret}/>
-          <EnvironmentField label="验证码 Pepper 变量" name="smsCodePepperRef" value={settings.smsCodePepperRef} configured={settings.smsEnvironment.pepper}/>
+          <ProtectedValueField label="AccessKey ID" name="aliyunAccessKeyId" configured={settings.aliyunAccessKeyIdConfigured} placeholder="只填写 LTAI... 的真实 ID" pattern="[A-Za-z0-9]{16,128}"/>
+          <ProtectedValueField label="AccessKey Secret" name="aliyunAccessKeySecret" configured={settings.aliyunAccessKeySecretConfigured} placeholder="填写真实 AccessKey Secret"/>
+          <ProtectedValueField label="验证码 Pepper" name="smsCodePepper" configured={settings.smsCodePepperConfigured} placeholder="填写至少 32 位随机值" minLength={32}/>
         </div>
       </ProviderForm>
 
@@ -128,7 +129,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       </ProviderForm>
 
       <section className="auth-secret-policy">
-        <div><Icon name="shield"/><span><b>凭据隔离</b><small>AccessKey ID 直接保存但不会明文回显或写入审计日志；AccessKey Secret、OAuth Client Secret 和 Pepper 仍只保存环境变量名称。</small></span></div>
+        <div><Icon name="shield"/><span><b>凭据隔离</b><small>三项短信凭据保存后均不回显、不写入审计日志；AccessKey Secret 与 Pepper 使用 AES-256-GCM 加密存储。</small></span></div>
         <button disabled={busy} type="submit">{busy ? "正在保存…" : "保存登录配置"}<Icon name="arrow"/></button>
       </section>
     </form>
@@ -163,10 +164,10 @@ function EnvironmentField({ label, name, value, configured }: { label: string; n
   </label>;
 }
 
-function ProtectedValueField({ label, name, configured, masked }: { label: string; name: string; configured: boolean; masked: string }) {
+function ProtectedValueField({ label, name, configured, placeholder, minLength, pattern }: { label: string; name: string; configured: boolean; placeholder: string; minLength?: number; pattern?: string }) {
   return <label className="auth-field auth-env-field auth-protected-field">
     <span>{label}<i className={configured ? "configured" : "missing"}>{configured ? "已保存" : "未配置"}</i></span>
-    <input name={name} type="password" defaultValue="" placeholder={configured ? masked || "••••••••" : "只填写 LTAI... 的真实 ID"} pattern="[A-Za-z0-9]{16,128}" autoComplete="off"/>
+    <input name={name} type="password" defaultValue="" placeholder={configured ? "••••••••••••" : placeholder} minLength={minLength} maxLength={512} pattern={pattern} autoComplete="new-password"/>
     <small>{configured ? "真实值不会回显；留空将保留当前配置" : "保存后只显示掩码，不会再次返回真实值"}</small>
   </label>;
 }

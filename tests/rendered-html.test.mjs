@@ -4,6 +4,27 @@ import test from "node:test";
 
 const source = path => readFile(new URL(path, import.meta.url), "utf8");
 
+test("encrypted admin secrets round-trip only with the matching context and reject tampering", async () => {
+  const previousKey = process.env.AUTH_SETTINGS_ENCRYPTION_KEY;
+  process.env.AUTH_SETTINGS_ENCRYPTION_KEY = "test-only-master-key-with-more-than-32-characters";
+  try {
+    const { openSecret, sealSecret } = await import("../app/auth/secret-crypto.ts");
+    const context = "auth-provider-settings:tenant-a:sms-code-pepper";
+    const plaintext = "test-only-pepper-value-with-32-characters";
+    const encrypted = sealSecret(plaintext, context);
+    assert.equal(typeof encrypted, "string");
+    assert.doesNotMatch(encrypted, new RegExp(plaintext));
+    assert.equal(openSecret(encrypted, context), plaintext);
+    assert.throws(() => openSecret(encrypted, "auth-provider-settings:tenant-b:sms-code-pepper"), /无法解密/);
+    const parts = encrypted.split(".");
+    parts[3] = `${parts[3][0] === "A" ? "B" : "A"}${parts[3].slice(1)}`;
+    assert.throws(() => openSecret(parts.join("."), context), /无法解密/);
+  } finally {
+    if (previousKey === undefined) delete process.env.AUTH_SETTINGS_ENCRYPTION_KEY;
+    else process.env.AUTH_SETTINGS_ENCRYPTION_KEY = previousKey;
+  }
+});
+
 test("keeps the public landing page and protected consoles separated", async () => {
   const [home, consolePage, adminPage, authServer, adminLoginPage] = await Promise.all([
     source("../app/page.tsx"),
@@ -236,12 +257,11 @@ test("SMS verification uses Alibaba Cloud, purpose-bound hashed codes, and datab
   ]);
   assert.match(provider, /@alicloud\/dysmsapi20170525/);
   assert.match(provider, /dysmsapi\.aliyuncs\.com/);
-  assert.match(provider, /environmentValue/);
   assert.match(provider, /tenantProviderSettings/);
   assert.match(settings, /aliyunAccessKeyId/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
-  assert.match(settings, /AUTH_SMS_CODE_PEPPER/);
-  assert.match(sms, /smsCodePepperRef/);
+  assert.doesNotMatch(settings, /AUTH_SMS_CODE_PEPPER/);
+  assert.match(sms, /settings\.smsCodePepper/);
   assert.match(sms, /challengeCodeHash/);
   assert.match(sms, /sms:cooldown/);
   assert.match(sms, /sms:phone/);
@@ -346,11 +366,13 @@ test("personal center exposes locale-specific identities and binds them to one u
   assert.match(css, /\.identity-form-panel/);
 });
 
-test("admin identity settings accept a direct AccessKey ID while keeping secrets in deployment references", async () => {
-  const [consoleUi, identityUi, settings, store, google, github, sms, schema, config, migration] = await Promise.all([
+test("admin identity settings accept protected SMS credentials and encrypt secret values at rest", async () => {
+  const [consoleUi, identityUi, settings, secretBoundary, secretCrypto, store, google, github, sms, schema, config, idMigration, secretMigration, css] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
     source("../app/admin/AuthSettingsView.tsx"),
     source("../app/auth/provider-settings.ts"),
+    source("../app/auth/secret-store.ts"),
+    source("../app/auth/secret-crypto.ts"),
     source("../app/admin/store.ts"),
     source("../app/auth/google.ts"),
     source("../app/auth/github.ts"),
@@ -358,28 +380,47 @@ test("admin identity settings accept a direct AccessKey ID while keeping secrets
     source("../db/schema.ts"),
     source("../.env.example"),
     source("../drizzle/0013_fluffy_punisher.sql"),
+    source("../drizzle/0014_brief_mandrill.sql"),
+    source("../app/admin/style.css"),
   ]);
   assert.match(consoleUi, /登录与身份/);
   assert.match(consoleUi, /AuthSettingsView/);
   assert.match(identityUi, /name="aliyunAccessKeyId"/);
   assert.match(identityUi, /type="password"/);
   assert.match(identityUi, /defaultValue=""/);
+  assert.match(identityUi, /name="aliyunAccessKeySecret"/);
+  assert.match(identityUi, /name="smsCodePepper"/);
   assert.match(identityUi, /只填写 LTAI\.\.\. 的真实 ID/);
+  assert.match(identityUi, /填写真实 AccessKey Secret/);
+  assert.match(identityUi, /填写至少 32 位随机值/);
   assert.match(identityUi, /真实值不会回显；留空将保留当前配置/);
+  assert.match(identityUi, /querySelectorAll<HTMLInputElement>\('input\[type="password"\]'\)/);
   assert.doesNotMatch(identityUi, /AccessKey ID 变量/);
-  assert.match(identityUi, /aliyunAccessKeySecretRef/);
+  assert.doesNotMatch(identityUi, /AccessKey Secret 变量|验证码 Pepper 变量/);
   assert.match(identityUi, /googleClientSecretRef/);
   assert.match(identityUi, /githubClientSecretRef/);
   assert.match(identityUi, /githubCallbackUrl/);
-  assert.doesNotMatch(identityUi, /name="(?:accessKeySecret|clientSecret)"/);
+  assert.doesNotMatch(identityUi, /name="clientSecret"/);
   assert.match(settings, /process\.env\[reference\]/);
-  assert.match(settings, /const \{ aliyunAccessKeyId, \.\.\.safeSettings \} = settings/);
-  assert.match(settings, /aliyunAccessKeyIdMasked/);
+  assert.match(settings, /const \{ aliyunAccessKeyId, aliyunAccessKeySecret, smsCodePepper, \.\.\.safeSettings \} = settings/);
+  assert.match(settings, /sealSecret/);
+  assert.match(settings, /openSecret/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
+  assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
   assert.match(settings, /saveTenantProviderSettings/);
+  assert.match(secretBoundary, /import "server-only"/);
+  assert.match(secretCrypto, /aes-256-gcm/);
+  assert.match(secretCrypto, /randomBytes\(12\)/);
+  assert.match(secretCrypto, /setAAD/);
+  assert.match(secretCrypto, /getAuthTag/);
+  assert.match(secretCrypto, /AUTH_SETTINGS_ENCRYPTION_KEY/);
   assert.match(store, /auth\.providers\.save/);
   assert.match(store, /aliyunAccessKeyIdConfigured/);
+  assert.match(store, /aliyunAccessKeySecretConfigured/);
+  assert.match(store, /smsCodePepperConfigured/);
   assert.doesNotMatch(store, /aliyunAccessKeyId:\s*settings\.aliyunAccessKeyId/);
+  assert.doesNotMatch(store, /aliyunAccessKeySecret:\s*settings\.aliyunAccessKeySecret/);
+  assert.doesNotMatch(store, /smsCodePepper:\s*settings\.smsCodePepper/);
   assert.match(google, /identityProviderSettings/);
   assert.match(github, /identityProviderSettings/);
   assert.match(sms, /tenantProviderSettings/);
@@ -387,11 +428,22 @@ test("admin identity settings accept a direct AccessKey ID while keeping secrets
   assert.match(schema, /authProviderSettings/);
   assert.match(schema, /aliyunAccessKeyId/);
   assert.doesNotMatch(schema, /aliyunAccessKeyIdRef/);
-  assert.match(migration, /ADD COLUMN "aliyun_access_key_id" text/);
-  assert.match(migration, /DROP COLUMN "aliyun_access_key_id_ref"/);
+  assert.match(schema, /aliyunAccessKeySecretEncrypted/);
+  assert.match(schema, /smsCodePepperEncrypted/);
+  assert.doesNotMatch(schema, /aliyunAccessKeySecretRef|smsCodePepperRef/);
+  assert.match(idMigration, /ADD COLUMN "aliyun_access_key_id" text/);
+  assert.match(idMigration, /DROP COLUMN "aliyun_access_key_id_ref"/);
+  assert.match(secretMigration, /ADD COLUMN "aliyun_access_key_secret_encrypted" text/);
+  assert.match(secretMigration, /ADD COLUMN "sms_code_pepper_encrypted" text/);
+  assert.match(secretMigration, /DROP COLUMN "aliyun_access_key_secret_ref"/);
+  assert.match(secretMigration, /DROP COLUMN "sms_code_pepper_ref"/);
+  assert.match(css, /grid-template-rows: minmax\(14px, auto\) 45px minmax\(12px, auto\)/);
+  assert.match(css, /height: 45px; min-height: 45px/);
   assert.match(config, /EVAL_IDENTITY_TENANT_SLUG/);
   assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
+  assert.match(config, /AUTH_SETTINGS_ENCRYPTION_KEY/);
   assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
+  assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
 });
 
 test("public blog exposes only published posts from the configured content tenant", async () => {

@@ -1,6 +1,6 @@
 import { SmsConfigurationError, SmsDeliveryError, sendLoginVerificationCode } from "./aliyun-sms";
 import { authDatabase, ensureAuthSchema, findActiveUserByPhone, type AuthenticatedUser } from "./core";
-import { environmentValue, tenantProviderSettings } from "./provider-settings";
+import { tenantProviderSettings } from "./provider-settings";
 
 const CODE_TTL_SECONDS = 5 * 60;
 const MAX_VERIFY_ATTEMPTS = 5;
@@ -156,13 +156,8 @@ async function challengeKey(purpose: SmsPurpose, phoneE164: string, userId?: str
 
 async function challengeCodeHash(keyHash: string, code: string, tenantId: string) {
   const settings = await tenantProviderSettings(tenantId);
-  let pepper: string;
-  try {
-    pepper = environmentValue(settings.smsCodePepperRef);
-  } catch (error) {
-    throw new SmsConfigurationError(error instanceof Error ? error.message : "短信验证码 Pepper 尚未配置。");
-  }
-  if (pepper.length < 32) throw new SmsConfigurationError(`${settings.smsCodePepperRef} 必须至少包含 32 个字符。`);
+  const pepper = settings.smsCodePepper;
+  if (pepper.length < 32) throw new SmsConfigurationError("管理员平台尚未保存至少 32 位的验证码 Pepper。");
   return sha256(`${keyHash}:${code}:${pepper}`);
 }
 

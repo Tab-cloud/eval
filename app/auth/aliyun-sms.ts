@@ -1,7 +1,7 @@
 import Dysmsapi20170525, { SendSmsRequest } from "@alicloud/dysmsapi20170525";
 import { $OpenApiUtil } from "@alicloud/openapi-core";
 import { aliyunPhoneNumber } from "./phone";
-import { environmentValue, tenantProviderSettings } from "./provider-settings";
+import { tenantProviderSettings } from "./provider-settings";
 
 type SmsClient = InstanceType<typeof Dysmsapi20170525>;
 
@@ -53,7 +53,8 @@ export async function sendLoginVerificationCode(tenantId: string, phoneE164: str
   try {
     accessKeyId = settings.aliyunAccessKeyId;
     if (!accessKeyId) throw new Error("管理员平台尚未保存阿里云 AccessKey ID。");
-    accessKeySecret = environmentValue(settings.aliyunAccessKeySecretRef);
+    accessKeySecret = settings.aliyunAccessKeySecret;
+    if (!accessKeySecret) throw new Error("管理员平台尚未保存阿里云 AccessKey Secret。");
   } catch (error) {
     throw new SmsConfigurationError(error instanceof Error ? error.message : "阿里云短信凭据尚未配置。");
   }
