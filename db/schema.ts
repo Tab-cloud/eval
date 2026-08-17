@@ -290,12 +290,12 @@ export const authProviderSettings = pgTable("auth_provider_settings", {
   aliyunAccessKeySecretEncrypted: text("aliyun_access_key_secret_encrypted"),
   smsCodePepperEncrypted: text("sms_code_pepper_encrypted"),
   googleEnabled: boolean("google_enabled").notNull().default(false),
-  googleClientIdRef: text("google_client_id_ref").notNull().default("GOOGLE_OAUTH_CLIENT_ID"),
-  googleClientSecretRef: text("google_client_secret_ref").notNull().default("GOOGLE_OAUTH_CLIENT_SECRET"),
+  googleClientId: text("google_client_id"),
+  googleClientSecretEncrypted: text("google_client_secret_encrypted"),
   googleAllowedHostedDomain: text("google_allowed_hosted_domain"),
   githubEnabled: boolean("github_enabled").notNull().default(false),
-  githubClientIdRef: text("github_client_id_ref").notNull().default("GITHUB_OAUTH_CLIENT_ID"),
-  githubClientSecretRef: text("github_client_secret_ref").notNull().default("GITHUB_OAUTH_CLIENT_SECRET"),
+  githubClientId: text("github_client_id"),
+  githubClientSecretEncrypted: text("github_client_secret_encrypted"),
   ...timestamps,
 });
 

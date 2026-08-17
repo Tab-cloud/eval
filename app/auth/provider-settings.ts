@@ -1,7 +1,6 @@
 import { authDatabase, ensureAuthSchema } from "./core";
 import { openSecret, sealSecret } from "./secret-store";
 
-const ENV_REF = /^[A-Z][A-Z0-9_]{2,63}$/;
 const SETTINGS_ID = "global";
 const GLOBAL_ENCRYPTION_CONTEXT = "global";
 
@@ -14,12 +13,12 @@ export type IdentityProviderSettings = {
   aliyunAccessKeySecret: string;
   smsCodePepper: string;
   googleEnabled: boolean;
-  googleClientIdRef: string;
-  googleClientSecretRef: string;
+  googleClientId: string;
+  googleClientSecret: string;
   googleAllowedHostedDomain: string;
   githubEnabled: boolean;
-  githubClientIdRef: string;
-  githubClientSecretRef: string;
+  githubClientId: string;
+  githubClientSecret: string;
   updatedAt: number | null;
 };
 
@@ -34,12 +33,12 @@ type SettingsRow = {
   aliyun_access_key_secret_encrypted: string | null;
   sms_code_pepper_encrypted: string | null;
   google_enabled: boolean;
-  google_client_id_ref: string;
-  google_client_secret_ref: string;
+  google_client_id: string | null;
+  google_client_secret_encrypted: string | null;
   google_allowed_hosted_domain: string | null;
   github_enabled: boolean;
-  github_client_id_ref: string;
-  github_client_secret_ref: string;
+  github_client_id: string | null;
+  github_client_secret_encrypted: string | null;
   updated_at: number;
 };
 
@@ -49,8 +48,8 @@ export async function identityProviderSettings(): Promise<IdentityProviderSettin
     SELECT id, encryption_context, sms_enabled, aliyun_sign_name,
            aliyun_template_code, aliyun_template_code_key, aliyun_access_key_id,
            aliyun_access_key_secret_encrypted, sms_code_pepper_encrypted, google_enabled,
-           google_client_id_ref, google_client_secret_ref, google_allowed_hosted_domain,
-           github_enabled, github_client_id_ref, github_client_secret_ref, updated_at
+           google_client_id, google_client_secret_encrypted, google_allowed_hosted_domain,
+           github_enabled, github_client_id, github_client_secret_encrypted, updated_at
     FROM auth_provider_settings
     WHERE id = ?
   `).bind(SETTINGS_ID).first<SettingsRow>();
@@ -63,13 +62,15 @@ export async function saveProviderSettings(input: Record<string, unknown>) {
   const now = Math.floor(Date.now() / 1000);
   const accessKeySecretEncrypted = sealSecret(settings.aliyunAccessKeySecret, secretContext("aliyun-access-key-secret"));
   const smsCodePepperEncrypted = sealSecret(settings.smsCodePepper, secretContext("sms-code-pepper"));
+  const googleClientSecretEncrypted = sealSecret(settings.googleClientSecret, secretContext("google-client-secret"));
+  const githubClientSecretEncrypted = sealSecret(settings.githubClientSecret, secretContext("github-client-secret"));
   await authDatabase().prepare(`
     INSERT INTO auth_provider_settings (
       id, encryption_context, sms_enabled, aliyun_sign_name, aliyun_template_code,
       aliyun_template_code_key, aliyun_access_key_id, aliyun_access_key_secret_encrypted,
-      sms_code_pepper_encrypted, google_enabled, google_client_id_ref,
-      google_client_secret_ref, google_allowed_hosted_domain, github_enabled,
-      github_client_id_ref, github_client_secret_ref, created_at, updated_at
+      sms_code_pepper_encrypted, google_enabled, google_client_id,
+      google_client_secret_encrypted, google_allowed_hosted_domain, github_enabled,
+      github_client_id, github_client_secret_encrypted, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       encryption_context=excluded.encryption_context,
@@ -81,12 +82,12 @@ export async function saveProviderSettings(input: Record<string, unknown>) {
       aliyun_access_key_secret_encrypted=excluded.aliyun_access_key_secret_encrypted,
       sms_code_pepper_encrypted=excluded.sms_code_pepper_encrypted,
       google_enabled=excluded.google_enabled,
-      google_client_id_ref=excluded.google_client_id_ref,
-      google_client_secret_ref=excluded.google_client_secret_ref,
+      google_client_id=excluded.google_client_id,
+      google_client_secret_encrypted=excluded.google_client_secret_encrypted,
       google_allowed_hosted_domain=excluded.google_allowed_hosted_domain,
       github_enabled=excluded.github_enabled,
-      github_client_id_ref=excluded.github_client_id_ref,
-      github_client_secret_ref=excluded.github_client_secret_ref,
+      github_client_id=excluded.github_client_id,
+      github_client_secret_encrypted=excluded.github_client_secret_encrypted,
       updated_at=excluded.updated_at
   `).bind(
     SETTINGS_ID,
@@ -99,12 +100,12 @@ export async function saveProviderSettings(input: Record<string, unknown>) {
     accessKeySecretEncrypted,
     smsCodePepperEncrypted,
     settings.googleEnabled,
-    settings.googleClientIdRef,
-    settings.googleClientSecretRef,
+    settings.googleClientId,
+    googleClientSecretEncrypted,
     settings.googleAllowedHostedDomain || null,
     settings.githubEnabled,
-    settings.githubClientIdRef,
-    settings.githubClientSecretRef,
+    settings.githubClientId,
+    githubClientSecretEncrypted,
     now,
     now,
   ).run();
@@ -112,19 +113,19 @@ export async function saveProviderSettings(input: Record<string, unknown>) {
 }
 
 export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
-  const { aliyunAccessKeyId, aliyunAccessKeySecret, smsCodePepper, ...safeSettings } = settings;
+  const { aliyunAccessKeyId, aliyunAccessKeySecret, smsCodePepper, googleClientId, googleClientSecret, githubClientId, githubClientSecret, ...safeSettings } = settings;
   const smsCredentials = {
     accessKeyId: Boolean(aliyunAccessKeyId),
     accessKeySecret: Boolean(aliyunAccessKeySecret),
     pepper: Boolean(smsCodePepper),
   };
-  const googleEnvironment = {
-    clientId: environmentConfigured(settings.googleClientIdRef),
-    clientSecret: environmentConfigured(settings.googleClientSecretRef),
+  const googleCredentials = {
+    clientId: Boolean(googleClientId),
+    clientSecret: Boolean(googleClientSecret),
   };
-  const githubEnvironment = {
-    clientId: environmentConfigured(settings.githubClientIdRef),
-    clientSecret: environmentConfigured(settings.githubClientSecretRef),
+  const githubCredentials = {
+    clientId: Boolean(githubClientId),
+    clientSecret: Boolean(githubClientSecret),
   };
   const origin = process.env.APP_ORIGIN?.trim() || "https://eval.zailink.space";
   return {
@@ -132,28 +133,19 @@ export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
     aliyunAccessKeyIdConfigured: smsCredentials.accessKeyId,
     aliyunAccessKeySecretConfigured: smsCredentials.accessKeySecret,
     smsCodePepperConfigured: smsCredentials.pepper,
+    googleClientIdConfigured: googleCredentials.clientId,
+    googleClientSecretConfigured: googleCredentials.clientSecret,
+    githubClientIdConfigured: githubCredentials.clientId,
+    githubClientSecretConfigured: githubCredentials.clientSecret,
     callbackUrl: `${new URL(origin).origin}/api/auth/google/callback`,
     githubCallbackUrl: `${new URL(origin).origin}/api/auth/github/callback`,
     smsCredentials,
-    googleEnvironment,
-    githubEnvironment,
     smsConfigured: settings.smsEnabled
       && Boolean(settings.aliyunSignName && settings.aliyunTemplateCode)
       && Object.values(smsCredentials).every(Boolean),
-    googleConfigured: settings.googleEnabled && Object.values(googleEnvironment).every(Boolean),
-    githubConfigured: settings.githubEnabled && Object.values(githubEnvironment).every(Boolean),
+    googleConfigured: settings.googleEnabled && Object.values(googleCredentials).every(Boolean),
+    githubConfigured: settings.githubEnabled && Object.values(githubCredentials).every(Boolean),
   };
-}
-
-export function environmentValue(reference: string) {
-  if (!ENV_REF.test(reference)) throw new Error("部署变量引用格式无效。");
-  const value = process.env[reference]?.trim();
-  if (!value) throw new Error(`部署环境尚未配置 ${reference}。`);
-  return value;
-}
-
-function environmentConfigured(reference: string) {
-  return ENV_REF.test(reference) && Boolean(process.env[reference]?.trim());
 }
 
 function defaultSettings(): IdentityProviderSettings {
@@ -166,23 +158,18 @@ function defaultSettings(): IdentityProviderSettings {
     aliyunAccessKeySecret: "",
     smsCodePepper: "",
     googleEnabled: true,
-    googleClientIdRef: "GOOGLE_OAUTH_CLIENT_ID",
-    googleClientSecretRef: "GOOGLE_OAUTH_CLIENT_SECRET",
+    googleClientId: "",
+    googleClientSecret: "",
     googleAllowedHostedDomain: process.env.GOOGLE_ALLOWED_HOSTED_DOMAIN?.trim().toLowerCase() || "",
     githubEnabled: false,
-    githubClientIdRef: "GITHUB_OAUTH_CLIENT_ID",
-    githubClientSecretRef: "GITHUB_OAUTH_CLIENT_SECRET",
+    githubClientId: "",
+    githubClientSecret: "",
     updatedAt: null,
   };
 }
 
 function validateSettings(input: Record<string, unknown>, existing: IdentityProviderSettings): IdentityProviderSettings {
   const value = (key: string) => typeof input[key] === "string" ? input[key].trim() : "";
-  const reference = (key: string, fallback = "") => {
-    const result = value(key) || fallback;
-    if (!ENV_REF.test(result)) throw new Error(`${key} 必须是有效的部署环境变量名。`);
-    return result;
-  };
   const templateKey = value("aliyunTemplateCodeKey") || "code";
   if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(templateKey)) throw new Error("短信模板变量名格式无效。");
   const templateCode = value("aliyunTemplateCode");
@@ -196,9 +183,31 @@ function validateSettings(input: Record<string, unknown>, existing: IdentityProv
   if (input.smsEnabled === true && (!accessKeyId || !accessKeySecret || !smsCodePepper)) {
     throw new Error("启用短信登录前，请填写 AccessKey ID、AccessKey Secret 和验证码 Pepper。");
   }
+  const googleClientId = value("googleClientId") || existing.googleClientId;
+  if (googleClientId && (googleClientId.length > 512 || /[\s=]/.test(googleClientId))) {
+    throw new Error("Google Client ID 只需填写真实值，不要包含变量名、等号或空格。");
+  }
+  const googleClientSecret = value("googleClientSecret") || existing.googleClientSecret;
+  if (googleClientSecret && (googleClientSecret.length > 512 || /[\s=]/.test(googleClientSecret))) {
+    throw new Error("Google Client Secret 只需填写真实值，不要包含变量名、等号或空格。");
+  }
+  if (input.googleEnabled === true && (!googleClientId || !googleClientSecret)) {
+    throw new Error("启用 Google 登录前，请填写 Client ID 和 Client Secret。");
+  }
   const hostedDomain = value("googleAllowedHostedDomain").toLowerCase();
   if (hostedDomain && !/^(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostedDomain)) {
     throw new Error("Google Workspace 域格式无效。");
+  }
+  const githubClientId = value("githubClientId") || existing.githubClientId;
+  if (githubClientId && (githubClientId.length > 256 || /[\s=]/.test(githubClientId))) {
+    throw new Error("GitHub Client ID 只需填写真实值，不要包含变量名、等号或空格。");
+  }
+  const githubClientSecret = value("githubClientSecret") || existing.githubClientSecret;
+  if (githubClientSecret && (githubClientSecret.length > 512 || /[\s=]/.test(githubClientSecret))) {
+    throw new Error("GitHub Client Secret 只需填写真实值，不要包含变量名、等号或空格。");
+  }
+  if (input.githubEnabled === true && (!githubClientId || !githubClientSecret)) {
+    throw new Error("启用 GitHub 登录前，请填写 Client ID 和 Client Secret。");
   }
   return {
     smsEnabled: input.smsEnabled === true,
@@ -209,12 +218,12 @@ function validateSettings(input: Record<string, unknown>, existing: IdentityProv
     aliyunAccessKeySecret: accessKeySecret,
     smsCodePepper,
     googleEnabled: input.googleEnabled === true,
-    googleClientIdRef: reference("googleClientIdRef"),
-    googleClientSecretRef: reference("googleClientSecretRef"),
+    googleClientId,
+    googleClientSecret,
     googleAllowedHostedDomain: hostedDomain,
     githubEnabled: input.githubEnabled === true,
-    githubClientIdRef: reference("githubClientIdRef"),
-    githubClientSecretRef: reference("githubClientSecretRef"),
+    githubClientId,
+    githubClientSecret,
     updatedAt: null,
   };
 }
@@ -230,12 +239,12 @@ function mapSettings(row: SettingsRow): IdentityProviderSettings {
     aliyunAccessKeySecret: openSecret(row.aliyun_access_key_secret_encrypted, secretContext("aliyun-access-key-secret", context)),
     smsCodePepper: openSecret(row.sms_code_pepper_encrypted, secretContext("sms-code-pepper", context)),
     googleEnabled: Boolean(row.google_enabled),
-    googleClientIdRef: row.google_client_id_ref,
-    googleClientSecretRef: row.google_client_secret_ref,
+    googleClientId: row.google_client_id || "",
+    googleClientSecret: openSecret(row.google_client_secret_encrypted, secretContext("google-client-secret", context)),
     googleAllowedHostedDomain: row.google_allowed_hosted_domain || "",
     githubEnabled: Boolean(row.github_enabled),
-    githubClientIdRef: row.github_client_id_ref,
-    githubClientSecretRef: row.github_client_secret_ref,
+    githubClientId: row.github_client_id || "",
+    githubClientSecret: openSecret(row.github_client_secret_encrypted, secretContext("github-client-secret", context)),
     updatedAt: Number(row.updated_at),
   };
 }

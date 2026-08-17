@@ -50,10 +50,6 @@ ALIYUN_SMS_SIGN_NAME=已审核短信签名
 ALIYUN_SMS_TEMPLATE_CODE=已审核验证码模板代码
 ALIYUN_SMS_TEMPLATE_CODE_KEY=code
 AUTH_SETTINGS_ENCRYPTION_KEY=至少32位高强度随机字符串
-GOOGLE_OAUTH_CLIENT_ID=replace-with-web-client-id
-GOOGLE_OAUTH_CLIENT_SECRET=replace-with-web-client-secret
-GITHUB_OAUTH_CLIENT_ID=replace-with-oauth-app-client-id
-GITHUB_OAUTH_CLIENT_SECRET=replace-with-oauth-app-client-secret
 ```
 
 `EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。新建用户名必须为 3–32 位 ASCII 英文字母或数字，服务端按大小写不敏感方式检查唯一性；历史用户名仍可继续登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `admin` 角色的账号；公开注册和第三方首次登录只创建 `member`，不会授予管理员权限。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
@@ -69,7 +65,7 @@ sudo chmod 0640 /etc/eval-web/eval-web.env
 
 不要把数据库密码、证书、短信凭据或 OAuth Secret 提交到 Git。
 
-阿里云短信签名和验证码模板必须先审核通过。管理员平台的 AccessKey ID、AccessKey Secret 和验证码 Pepper 均填写真实值，不填写变量名或 `KEY=value` 前缀；三项保存后都不会回显，留空不会覆盖已有值。Secret 与 Pepper 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL，该主密钥必须至少 32 位、只存在于服务器环境且长期保持不变。RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，并把授权回调 URI 精确配置为：
+阿里云短信签名和验证码模板必须先审核通过。管理员平台的 AccessKey ID、AccessKey Secret 和验证码 Pepper 均填写真实值，不填写变量名或 `KEY=value` 前缀；三项保存后都不会回显，留空不会覆盖已有值。Secret 与 Pepper 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL，该主密钥必须至少 32 位、只存在于服务器环境且长期保持不变。RAM 身份只授予发送短信所需权限。Google Cloud 中将应用类型设为 Web application，在管理员平台“登录与身份”中直接填写 OAuth Client ID 和 Client Secret，不填写环境变量名或 `KEY=value` 前缀。两项保存后都不会回显，留空不会覆盖已有值；Client Secret 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL。把授权回调 URI 精确配置为：
 
 ```text
 https://eval.zailink.space/api/auth/google/callback
@@ -83,7 +79,7 @@ https://eval.zailink.space/api/auth/google/callback
 https://eval.zailink.space/api/auth/github/callback
 ```
 
-GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
+在管理员平台“登录与身份”中直接填写 OAuth App 的 Client ID 和 Client Secret，不填写环境变量名或 `KEY=value` 前缀。两项保存后都不会回显，留空不会覆盖已有值；Client Secret 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL。GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
 
 中文注册依赖已审核的阿里云短信模板。发送与校验必须保持 `login`、`register`、`phone_bind`、`password_change` 四种用途隔离；修改密码后服务端撤销该用户其他 Web 会话并为当前浏览器签发新会话。上线前应分别完成四条真实短信流程和 Google/GitHub 绑定冲突测试。
 

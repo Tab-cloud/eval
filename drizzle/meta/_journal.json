@@ -127,6 +127,20 @@
       "when": 1786943734216,
       "tag": "0017_graceful_cardiac",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786955498892,
+      "tag": "0018_handy_micromacro",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786955510654,
+      "tag": "0019_illegal_yellowjacket",
+      "breakpoints": true
     }
   ]
 }

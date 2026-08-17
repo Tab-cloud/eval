@@ -433,12 +433,13 @@ test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accoun
   assert.match(registrationRoute, /registerChineseAccount/);
 });
 
-test("Google sign-in uses OIDC protections, creates English accounts, and supports explicit linking", async () => {
-  const [google, authCore, schema, migration] = await Promise.all([
+test("Google sign-in uses stored credentials, OIDC protections, creates English accounts, and supports explicit linking", async () => {
+  const [google, authCore, schema, migration, config] = await Promise.all([
     source("../app/auth/google.ts"),
     source("../app/auth/core.ts"),
     source("../db/schema.ts"),
     source("../drizzle/0012_illegal_machine_man.sql"),
+    source("../.env.example"),
   ]);
   assert.match(google, /code_challenge_method:\s*"S256"/);
   assert.match(google, /state/);
@@ -462,9 +463,13 @@ test("Google sign-in uses OIDC protections, creates English accounts, and suppor
   assert.match(migration, /DROP NOT NULL/);
   assert.match(migration, /account_locale/);
   assert.match(migration, /link_user_id/);
+  assert.match(google, /settings\.googleClientId/);
+  assert.match(google, /settings\.googleClientSecret/);
+  assert.doesNotMatch(google, /environmentValue\(settings\.google/);
+  assert.doesNotMatch(config, /GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET/);
 });
 
-test("GitHub sign-in uses state, PKCE, verified emails, account creation, and explicit linking", async () => {
+test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, account creation, and explicit linking", async () => {
   const [github, start, callback, authCore, schema, config] = await Promise.all([
     source("../app/auth/github.ts"),
     source("../app/api/auth/github/start/route.ts"),
@@ -488,8 +493,10 @@ test("GitHub sign-in uses state, PKCE, verified emails, account creation, and ex
   assert.match(authCore, /INSERT INTO users/);
   assert.match(authCore, /auth\.identity\.link/);
   assert.match(schema, /githubEnabled/);
-  assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
-  assert.match(config, /GITHUB_OAUTH_CLIENT_SECRET/);
+  assert.match(github, /settings\.githubClientId/);
+  assert.match(github, /settings\.githubClientSecret/);
+  assert.doesNotMatch(github, /environmentValue\(settings\.github/);
+  assert.doesNotMatch(config, /GITHUB_OAUTH_CLIENT_ID|GITHUB_OAUTH_CLIENT_SECRET/);
 });
 
 test("personal center exposes locale-specific identities and binds them to one user", async () => {
@@ -521,8 +528,8 @@ test("personal center exposes locale-specific identities and binds them to one u
   assert.match(css, /\.identity-form-panel/);
 });
 
-test("admin identity settings accept protected SMS credentials and encrypt secret values at rest", async () => {
-  const [consoleUi, identityUi, settings, secretBoundary, secretCrypto, store, google, github, sms, schema, config, idMigration, secretMigration, css] = await Promise.all([
+test("admin identity settings accept protected SMS, Google, and GitHub credentials and encrypt secret values at rest", async () => {
+  const [consoleUi, identityUi, settings, secretBoundary, secretCrypto, store, google, github, sms, schema, config, idMigration, secretMigration, oauthValueMigration, oauthRefMigration, css] = await Promise.all([
     source("../app/admin/AdminConsole.tsx"),
     source("../app/admin/AuthSettingsView.tsx"),
     source("../app/auth/provider-settings.ts"),
@@ -536,6 +543,8 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
     source("../.env.example"),
     source("../drizzle/0013_fluffy_punisher.sql"),
     source("../drizzle/0014_brief_mandrill.sql"),
+    source("../drizzle/0018_handy_micromacro.sql"),
+    source("../drizzle/0019_illegal_yellowjacket.sql"),
     source("../app/admin/style.css"),
   ]);
   assert.match(consoleUi, /登录与身份/);
@@ -552,14 +561,27 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.match(identityUi, /querySelectorAll<HTMLInputElement>\('input\[type="password"\]'\)/);
   assert.doesNotMatch(identityUi, /AccessKey ID 变量/);
   assert.doesNotMatch(identityUi, /AccessKey Secret 变量|验证码 Pepper 变量/);
-  assert.match(identityUi, /googleClientSecretRef/);
-  assert.match(identityUi, /githubClientSecretRef/);
+  assert.match(identityUi, /name="googleClientId"/);
+  assert.match(identityUi, /name="googleClientSecret"/);
+  assert.match(identityUi, /直接填写 Google OAuth Web Client ID/);
+  assert.match(identityUi, /直接填写 Google OAuth Client Secret/);
+  assert.doesNotMatch(identityUi, /name="googleClientIdRef"|name="googleClientSecretRef"/);
+  assert.match(identityUi, /name="githubClientId"/);
+  assert.match(identityUi, /name="githubClientSecret"/);
+  assert.match(identityUi, /直接填写 GitHub OAuth App 的 Client ID/);
+  assert.match(identityUi, /直接填写 GitHub OAuth App 的 Client Secret/);
+  assert.doesNotMatch(identityUi, /name="githubClientIdRef"|name="githubClientSecretRef"/);
   assert.match(identityUi, /githubCallbackUrl/);
   assert.doesNotMatch(identityUi, /name="clientSecret"/);
-  assert.match(settings, /process\.env\[reference\]/);
-  assert.match(settings, /const \{ aliyunAccessKeyId, aliyunAccessKeySecret, smsCodePepper, \.\.\.safeSettings \} = settings/);
+  assert.doesNotMatch(settings, /process\.env\[reference\]/);
+  assert.match(settings, /const \{ aliyunAccessKeyId, aliyunAccessKeySecret, smsCodePepper, googleClientId, googleClientSecret, githubClientId, githubClientSecret, \.\.\.safeSettings \} = settings/);
   assert.match(settings, /sealSecret/);
   assert.match(settings, /openSecret/);
+  assert.match(settings, /googleClientSecretEncrypted = sealSecret/);
+  assert.match(settings, /googleClientSecret: openSecret/);
+  assert.match(settings, /githubClientSecretEncrypted = sealSecret/);
+  assert.match(settings, /githubClientSecret: openSecret/);
+  assert.doesNotMatch(settings, /googleClientIdRef|googleClientSecretRef|githubClientIdRef|githubClientSecretRef/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
   assert.match(settings, /saveProviderSettings/);
@@ -573,9 +595,17 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.match(store, /aliyunAccessKeyIdConfigured/);
   assert.match(store, /aliyunAccessKeySecretConfigured/);
   assert.match(store, /smsCodePepperConfigured/);
+  assert.match(store, /googleClientIdConfigured/);
+  assert.match(store, /googleClientSecretConfigured/);
+  assert.match(store, /githubClientIdConfigured/);
+  assert.match(store, /githubClientSecretConfigured/);
   assert.doesNotMatch(store, /aliyunAccessKeyId:\s*settings\.aliyunAccessKeyId/);
   assert.doesNotMatch(store, /aliyunAccessKeySecret:\s*settings\.aliyunAccessKeySecret/);
   assert.doesNotMatch(store, /smsCodePepper:\s*settings\.smsCodePepper/);
+  assert.doesNotMatch(store, /googleClientId:\s*settings\.googleClientId/);
+  assert.doesNotMatch(store, /googleClientSecret:\s*settings\.googleClientSecret/);
+  assert.doesNotMatch(store, /githubClientId:\s*settings\.githubClientId/);
+  assert.doesNotMatch(store, /githubClientSecret:\s*settings\.githubClientSecret/);
   assert.match(google, /identityProviderSettings/);
   assert.match(github, /identityProviderSettings/);
   assert.match(sms, /identityProviderSettings/);
@@ -585,6 +615,11 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.doesNotMatch(schema, /aliyunAccessKeyIdRef/);
   assert.match(schema, /aliyunAccessKeySecretEncrypted/);
   assert.match(schema, /smsCodePepperEncrypted/);
+  assert.match(schema, /googleClientId/);
+  assert.match(schema, /googleClientSecretEncrypted/);
+  assert.match(schema, /githubClientId/);
+  assert.match(schema, /githubClientSecretEncrypted/);
+  assert.doesNotMatch(schema, /googleClientIdRef|googleClientSecretRef|githubClientIdRef|githubClientSecretRef/);
   assert.doesNotMatch(schema, /aliyunAccessKeySecretRef|smsCodePepperRef/);
   assert.match(idMigration, /ADD COLUMN "aliyun_access_key_id" text/);
   assert.match(idMigration, /DROP COLUMN "aliyun_access_key_id_ref"/);
@@ -592,10 +627,18 @@ test("admin identity settings accept protected SMS credentials and encrypt secre
   assert.match(secretMigration, /ADD COLUMN "sms_code_pepper_encrypted" text/);
   assert.match(secretMigration, /DROP COLUMN "aliyun_access_key_secret_ref"/);
   assert.match(secretMigration, /DROP COLUMN "sms_code_pepper_ref"/);
+  assert.match(oauthValueMigration, /ADD COLUMN "google_client_id" text/);
+  assert.match(oauthValueMigration, /ADD COLUMN "google_client_secret_encrypted" text/);
+  assert.match(oauthValueMigration, /ADD COLUMN "github_client_id" text/);
+  assert.match(oauthValueMigration, /ADD COLUMN "github_client_secret_encrypted" text/);
+  assert.match(oauthRefMigration, /DROP COLUMN "google_client_id_ref"/);
+  assert.match(oauthRefMigration, /DROP COLUMN "google_client_secret_ref"/);
+  assert.match(oauthRefMigration, /DROP COLUMN "github_client_id_ref"/);
+  assert.match(oauthRefMigration, /DROP COLUMN "github_client_secret_ref"/);
   assert.match(css, /grid-template-rows: minmax\(14px, auto\) 45px minmax\(12px, auto\)/);
   assert.match(css, /height: 45px; min-height: 45px/);
   assert.doesNotMatch(config, /EVAL_IDENTITY_TENANT_SLUG|EVAL_PUBLIC_CONTENT_TENANT_SLUG|EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
-  assert.match(config, /GITHUB_OAUTH_CLIENT_ID/);
+  assert.doesNotMatch(config, /GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET|GITHUB_OAUTH_CLIENT_ID|GITHUB_OAUTH_CLIENT_SECRET/);
   assert.match(config, /AUTH_SETTINGS_ENCRYPTION_KEY/);
   assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(config, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);

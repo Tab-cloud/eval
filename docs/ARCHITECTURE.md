@@ -63,7 +63,7 @@ PostgreSQL 保存用户、手机号、短信挑战、OAuth 状态、外部身份
 - 权限仅分为 `admin` 与 `member`，所有鉴权均从服务端会话反查，不信任客户端提交的角色。
 - 账号注册、身份绑定、管理员写操作、密码修改和桌面端授权操作进入全站审计日志；审计元数据中的手机号只保留掩码。
 
-管理员平台的“登录与身份”模块直接保存短信签名、模板代码和三项阿里云短信凭据。AccessKey ID 不在管理员响应中回显；AccessKey Secret 与验证码 Pepper 使用由 `AUTH_SETTINGS_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，并绑定配置字段作为认证上下文。Google/GitHub OAuth Secret 仍只通过 ECS 环境变量注入。管理员接口和审计日志只返回敏感配置是否存在。
+管理员平台的“登录与身份”模块直接保存短信签名、模板代码、三项阿里云短信凭据以及 Google/GitHub OAuth 的 Client ID 和 Client Secret。AccessKey ID 与 OAuth Client ID 不在管理员响应中回显；AccessKey Secret、验证码 Pepper 与 OAuth Client Secret 使用由 `AUTH_SETTINGS_ENCRYPTION_KEY` 派生的 AES-256-GCM 密钥加密，并绑定配置字段作为认证上下文。管理员接口和审计日志只返回敏感配置是否存在。
 
 ## 论坛与博客
 

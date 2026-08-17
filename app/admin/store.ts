@@ -244,12 +244,12 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
       aliyunAccessKeyIdConfigured: Boolean(settings.aliyunAccessKeyId),
       aliyunAccessKeySecretConfigured: Boolean(settings.aliyunAccessKeySecret),
       smsCodePepperConfigured: Boolean(settings.smsCodePepper),
-      googleClientIdRef: settings.googleClientIdRef,
-      googleClientSecretRef: settings.googleClientSecretRef,
+      googleClientIdConfigured: Boolean(settings.googleClientId),
+      googleClientSecretConfigured: Boolean(settings.googleClientSecret),
       hostedDomainRestricted: Boolean(settings.googleAllowedHostedDomain),
       githubEnabled: settings.githubEnabled,
-      githubClientIdRef: settings.githubClientIdRef,
-      githubClientSecretRef: settings.githubClientSecretRef,
+      githubClientIdConfigured: Boolean(settings.githubClientId),
+      githubClientSecretConfigured: Boolean(settings.githubClientSecret),
     });
     return providerSettingsSnapshot(settings);
   }

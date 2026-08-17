@@ -12,16 +12,14 @@ export type AuthSettingsSnapshot = {
   aliyunAccessKeySecretConfigured: boolean;
   smsCodePepperConfigured: boolean;
   googleEnabled: boolean;
-  googleClientIdRef: string;
-  googleClientSecretRef: string;
+  googleClientIdConfigured: boolean;
+  googleClientSecretConfigured: boolean;
   googleAllowedHostedDomain: string;
   githubEnabled: boolean;
-  githubClientIdRef: string;
-  githubClientSecretRef: string;
+  githubClientIdConfigured: boolean;
+  githubClientSecretConfigured: boolean;
   githubCallbackUrl: string;
   smsCredentials: { accessKeyId: boolean; accessKeySecret: boolean; pepper: boolean };
-  googleEnvironment: { clientId: boolean; clientSecret: boolean };
-  githubEnvironment: { clientId: boolean; clientSecret: boolean };
   smsConfigured: boolean;
   googleConfigured: boolean;
   githubConfigured: boolean;
@@ -61,14 +59,14 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
         title="英文 Google 登录"
         enabled={settings.googleEnabled}
         configured={settings.googleConfigured}
-        detail={settings.googleConfigured ? "OAuth 客户端部署变量已就绪" : "Client ID 或 Client Secret 尚未注入"}
+        detail={settings.googleConfigured ? "OAuth 客户端凭据已保存" : "Client ID 或 Client Secret 尚未配置"}
       />
       <ProviderStatus
         label="GITHUB / OAUTH 2.0"
         title="中英文 GitHub 登录"
         enabled={settings.githubEnabled}
         configured={settings.githubConfigured}
-        detail={settings.githubConfigured ? "OAuth App 部署凭据已就绪" : "GitHub Client ID 或 Client Secret 尚未注入"}
+        detail={settings.githubConfigured ? "OAuth App 凭据已保存" : "GitHub Client ID 或 Client Secret 尚未配置"}
       />
       <article className="auth-provider-scope">
         <span>ACCOUNT SYSTEM</span>
@@ -96,8 +94,8 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       <ProviderForm title="Google 登录" eyebrow="02 / OIDC" icon="shield">
         <label className="auth-provider-toggle"><input name="googleEnabled" type="checkbox" defaultChecked={settings.googleEnabled}/><span>启用英文界面的 Google 邮箱登录</span></label>
         <div className="auth-field-grid">
-          <EnvironmentField label="OAuth Client ID 变量" name="googleClientIdRef" value={settings.googleClientIdRef} configured={settings.googleEnvironment.clientId}/>
-          <EnvironmentField label="OAuth Client Secret 变量" name="googleClientSecretRef" value={settings.googleClientSecretRef} configured={settings.googleEnvironment.clientSecret}/>
+          <ProtectedValueField label="OAuth Client ID" name="googleClientId" configured={settings.googleClientIdConfigured} placeholder="直接填写 Google OAuth Web Client ID"/>
+          <ProtectedValueField label="OAuth Client Secret" name="googleClientSecret" configured={settings.googleClientSecretConfigured} placeholder="直接填写 Google OAuth Client Secret"/>
           <Field label="允许的 Workspace 域（可选）"><input name="googleAllowedHostedDomain" defaultValue={settings.googleAllowedHostedDomain} placeholder="company.com"/></Field>
           <div className="auth-callback-field">
             <span>授权回调地址</span>
@@ -110,8 +108,8 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       <ProviderForm title="GitHub 登录" eyebrow="03 / OAUTH 2.0" icon="terminal">
         <label className="auth-provider-toggle"><input name="githubEnabled" type="checkbox" defaultChecked={settings.githubEnabled}/><span>启用中英文界面的 GitHub 账号登录</span></label>
         <div className="auth-field-grid">
-          <EnvironmentField label="OAuth Client ID 变量" name="githubClientIdRef" value={settings.githubClientIdRef} configured={settings.githubEnvironment.clientId}/>
-          <EnvironmentField label="OAuth Client Secret 变量" name="githubClientSecretRef" value={settings.githubClientSecretRef} configured={settings.githubEnvironment.clientSecret}/>
+          <ProtectedValueField label="OAuth Client ID" name="githubClientId" configured={settings.githubClientIdConfigured} placeholder="直接填写 GitHub OAuth App 的 Client ID"/>
+          <ProtectedValueField label="OAuth Client Secret" name="githubClientSecret" configured={settings.githubClientSecretConfigured} placeholder="直接填写 GitHub OAuth App 的 Client Secret"/>
           <div className="auth-callback-field">
             <span>授权回调地址</span>
             <code>{settings.githubCallbackUrl}</code>
@@ -126,7 +124,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       </ProviderForm>
 
       <section className="auth-secret-policy">
-        <div><Icon name="shield"/><span><b>凭据隔离</b><small>三项短信凭据保存后均不回显、不写入审计日志；AccessKey Secret 与 Pepper 使用 AES-256-GCM 加密存储。</small></span></div>
+        <div><Icon name="shield"/><span><b>凭据隔离</b><small>短信、Google 与 GitHub 凭据保存后均不回显、不写入审计日志；AccessKey Secret、Pepper 和两项 OAuth Client Secret 使用 AES-256-GCM 加密存储。</small></span></div>
         <button disabled={busy} type="submit">{busy ? "正在保存…" : "保存登录配置"}<Icon name="arrow"/></button>
       </section>
     </form>
@@ -152,13 +150,6 @@ function ProviderForm({ title, eyebrow, icon, children }: { title: string; eyebr
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="auth-field"><span>{label}</span>{children}</label>;
-}
-
-function EnvironmentField({ label, name, value, configured }: { label: string; name: string; value: string; configured: boolean }) {
-  return <label className="auth-field auth-env-field">
-    <span>{label}<i className={configured ? "configured" : "missing"}>{configured ? "已注入" : "未注入"}</i></span>
-    <input name={name} defaultValue={value} pattern="[A-Z][A-Z0-9_]{2,63}" required/>
-  </label>;
 }
 
 function ProtectedValueField({ label, name, configured, placeholder, minLength, pattern }: { label: string; name: string; configured: boolean; placeholder: string; minLength?: number; pattern?: string }) {

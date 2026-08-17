@@ -10,7 +10,7 @@ import {
   sessionCookie,
   type AuthenticatedUser,
 } from "./core";
-import { environmentValue, identityProviderSettings } from "./provider-settings";
+import { identityProviderSettings } from "./provider-settings";
 import { safeReturnPath } from "./return-path";
 
 const GITHUB_STATE_COOKIE = "eval_github_state";
@@ -223,14 +223,13 @@ export function clearGitHubStateCookie(request: Request) {
 async function githubConfiguration() {
   const settings = await identityProviderSettings();
   if (!settings.githubEnabled) throw new GitHubConfigurationError("GitHub 登录已停用。");
-  try {
-    return {
-      clientId: environmentValue(settings.githubClientIdRef),
-      clientSecret: environmentValue(settings.githubClientSecretRef),
-    };
-  } catch (error) {
-    throw new GitHubConfigurationError(error instanceof Error ? error.message : "GitHub OAuth 尚未配置。");
+  if (!settings.githubClientId || !settings.githubClientSecret) {
+    throw new GitHubConfigurationError("GitHub OAuth 尚未配置。");
   }
+  return {
+    clientId: settings.githubClientId,
+    clientSecret: settings.githubClientSecret,
+  };
 }
 
 async function githubApi<T>(url: string, accessToken: string): Promise<T> {

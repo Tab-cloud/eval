@@ -12,7 +12,7 @@ import {
   sessionCookie,
   type AuthenticatedUser,
 } from "./core";
-import { environmentValue, identityProviderSettings } from "./provider-settings";
+import { identityProviderSettings } from "./provider-settings";
 import { safeReturnPath } from "./return-path";
 
 const GOOGLE_STATE_COOKIE = "eval_google_state";
@@ -180,15 +180,14 @@ export function clearGoogleStateCookie(request: Request) {
 async function googleConfiguration() {
   const settings = await identityProviderSettings();
   if (!settings.googleEnabled) throw new GoogleConfigurationError("Google 登录已停用。");
-  try {
-    return {
-      clientId: environmentValue(settings.googleClientIdRef),
-      clientSecret: environmentValue(settings.googleClientSecretRef),
-      allowedHostedDomain: settings.googleAllowedHostedDomain || null,
-    };
-  } catch (error) {
-    throw new GoogleConfigurationError(error instanceof Error ? error.message : "Google OAuth 尚未配置。");
+  if (!settings.googleClientId || !settings.googleClientSecret) {
+    throw new GoogleConfigurationError("Google OAuth 尚未配置。");
   }
+  return {
+    clientId: settings.googleClientId,
+    clientSecret: settings.googleClientSecret,
+    allowedHostedDomain: settings.googleAllowedHostedDomain || null,
+  };
 }
 
 function applicationOrigin(request: Request) {
