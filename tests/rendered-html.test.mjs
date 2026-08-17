@@ -500,8 +500,8 @@ test("Google sign-in uses stored credentials, OIDC protections, creates English 
   assert.match(publicOrigin, /const PRODUCTION_ORIGIN = "https:\/\/eval\.zailink\.space"/);
 });
 
-test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, account creation, and explicit linking", async () => {
-  const [github, start, callback, publicOrigin, login, deployment, authCore, schema, config] = await Promise.all([
+test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, account creation, and authenticated account merging", async () => {
+  const [github, start, callback, publicOrigin, login, deployment, authCore, schema, config, postgres, mergeMigration] = await Promise.all([
     source("../app/auth/github.ts"),
     source("../app/api/auth/github/start/route.ts"),
     source("../app/api/auth/github/callback/route.ts"),
@@ -511,6 +511,8 @@ test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, acco
     source("../app/auth/core.ts"),
     source("../db/schema.ts"),
     source("../.env.example"),
+    source("../db/postgres.ts"),
+    source("../drizzle/0020_account_merge_tombstones.sql"),
   ]);
   assert.match(github, /https:\/\/github\.com\/login\/oauth\/authorize/);
   assert.match(github, /https:\/\/github\.com\/login\/oauth\/access_token/);
@@ -522,7 +524,11 @@ test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, acco
   assert.match(start, /beginGitHubAuthorization/);
   assert.match(callback, /finishGitHubAuthorization/);
   assert.match(github, /stored\.intent === "link"/);
-  assert.match(github, /linkExternalIdentity/);
+  assert.match(github, /linkOrMergeExternalIdentity/);
+  assert.match(github, /verifiedEmails\[0\], true/);
+  assert.match(github, /current\.id !== stored\.link_user_id/);
+  assert.match(github, /verifiedEmails\[0\]/);
+  assert.match(github, /account_merge_conflict/);
   assert.match(github, /loginOrCreateExternalUser/);
   assert.match(authCore, /INSERT INTO users/);
   assert.match(authCore, /auth\.identity\.link/);
@@ -542,16 +548,37 @@ test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, acco
   assert.match(login, /GitHub 凭据或回调地址校验失败/);
   assert.match(deployment, /不能填写 `localhost:41738`/);
   assert.match(deployment, /github\.com` 和 `api\.github\.com/);
+  assert.match(callback, /searchParams\.set\("merged", result\.merged\)/);
+  assert.match(authCore, /db\.transaction/);
+  assert.match(postgres, /client\.query\("BEGIN"\)/);
+  assert.match(postgres, /client\.query\("COMMIT"\)/);
+  assert.match(postgres, /client\.query\("ROLLBACK"\)/);
+  assert.match(authCore, /auth\.account\.merge/);
+  assert.match(authCore, /source\.role === "admin"/);
+  assert.match(authCore, /两个账号都已设置用户名/);
+  assert.match(authCore, /两个账号都已绑定手机号/);
+  assert.match(authCore, /两个账号都已设置密码/);
+  assert.match(authCore, /DELETE FROM auth_sessions WHERE user_id = \?/);
+  assert.match(authCore, /revoked_at = COALESCE\(revoked_at, \?\)/);
+  assert.match(authCore, /DELETE FROM user_agent_community_settings WHERE user_id = \?/);
+  assert.match(authCore, /UPDATE forum_topics SET author_id = \?/);
+  assert.match(authCore, /UPDATE forum_replies SET author_id = \?/);
+  assert.match(authCore, /UPDATE blog_posts SET author_id = \?/);
+  assert.match(authCore, /merged_into_user_id = \?/);
+  assert.match(schema, /mergedIntoUserId/);
+  assert.match(mergeMigration, /ADD COLUMN "merged_into_user_id" text/);
+  assert.match(mergeMigration, /users_merged_into_idx/);
 });
 
-test("personal center exposes locale-specific identities and binds them to one user", async () => {
-  const [dashboard, accountRoute, localRoute, usernameRoute, authCore, css] = await Promise.all([
+test("personal center exposes locale-specific identities and binds or merges authenticated GitHub accounts", async () => {
+  const [dashboard, accountRoute, localRoute, usernameRoute, authCore, css, consolePage] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
     source("../app/api/auth/account/route.ts"),
     source("../app/api/auth/account/local/route.ts"),
     source("../app/api/auth/username/login/route.ts"),
     source("../app/auth/core.ts"),
     source("../app/console/style.css"),
+    source("../app/console/page.tsx"),
   ]);
   assert.match(dashboard, /个人中心/);
   assert.match(dashboard, /One account\. Two verified identities/);
@@ -560,6 +587,10 @@ test("personal center exposes locale-specific identities and binds them to one u
   assert.match(dashboard, /currentUser\.accountLocale === "zh"/);
   assert.match(dashboard, /providerHref\("google"\)/);
   assert.match(dashboard, /providerHref\("github"\)/);
+  assert.match(dashboard, /登录 GitHub 并绑定\/合并/);
+  assert.match(dashboard, /必须通过 GitHub 官方登录认证/);
+  assert.match(consolePage, /GitHub 原账号已安全合并到当前账号/);
+  assert.match(consolePage, /两个账号存在登录身份冲突/);
   assert.match(accountRoute, /accountIdentitySnapshot/);
   assert.match(localRoute, /verifySmsCode\("phone_bind"/);
   assert.match(localRoute, /bindChineseLocalIdentity/);

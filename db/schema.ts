@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, bigint, boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 const epoch = (name: string) => bigint(name, { mode: "number" });
 const timestamps = {
@@ -17,6 +17,8 @@ export const users = pgTable("users", {
   avatarUrl: text("avatar_url"),
   status: text("status", { enum: ["invited", "active", "disabled"] }).notNull(),
   role: text("role", { enum: ["admin", "member"] }).notNull().default("member"),
+  mergedIntoUserId: text("merged_into_user_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+  mergedAt: epoch("merged_at"),
   lastLoginAt: epoch("last_login_at"),
   ...timestamps,
 }, (table) => [
@@ -24,6 +26,7 @@ export const users = pgTable("users", {
   uniqueIndex("users_username_ci_uq").on(sql`lower(${table.username})`).where(sql`${table.username} IS NOT NULL`),
   uniqueIndex("users_email_uq").on(table.email),
   uniqueIndex("users_phone_uq").on(table.phoneE164),
+  index("users_merged_into_idx").on(table.mergedIntoUserId),
 ]);
 
 export const passwordCredentials = pgTable("password_credentials", {

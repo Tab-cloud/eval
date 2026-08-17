@@ -5,7 +5,7 @@ import {
   ensureAuthSchema,
   ExternalIdentityConflictError,
   getSessionUser,
-  linkExternalIdentity,
+  linkOrMergeExternalIdentity,
   loginOrCreateExternalUser,
   sessionCookie,
   type AuthenticatedUser,
@@ -113,6 +113,7 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
   session?: string;
   returnPath: string;
   linked?: "github";
+  merged?: "github";
 }> {
   await ensureAuthSchema();
   const url = new URL(request.url);
@@ -198,12 +199,19 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
   if (stored.intent === "link") {
     const current = await getSessionUser(cookieToken(request));
     if (!current || current.id !== stored.link_user_id) throw new GitHubAuthenticationError("link_session_required", context);
-    try { await linkExternalIdentity(current, "github", String(profile.id), verifiedEmails[0]); }
+    let merged = false;
+    try {
+      ({ merged } = await linkOrMergeExternalIdentity(current, "github", String(profile.id), verifiedEmails[0], true));
+    }
     catch (error) {
-      if (error instanceof ExternalIdentityConflictError) throw new GitHubAuthenticationError("identity_already_linked", context);
+      if (error instanceof ExternalIdentityConflictError) throw new GitHubAuthenticationError("account_merge_conflict", context);
       throw error;
     }
-    return { user: current, returnPath: safeReturnPath(stored.return_path), linked: "github" };
+    return {
+      user: current,
+      returnPath: safeReturnPath(stored.return_path),
+      ...(merged ? { merged: "github" as const } : { linked: "github" as const }),
+    };
   }
   const user = await loginOrCreateExternalUser("github", String(profile.id), verifiedEmails, stored.locale === "zh" ? "zh" : "en");
   if (!user) throw new GitHubAuthenticationError("invalid_identity", context);

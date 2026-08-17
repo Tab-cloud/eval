@@ -1,5 +1,7 @@
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
+type QueryExecutor = Pick<PoolClient, "query"> | Pool;
+
 type RunMeta = { changes: number };
 export type DatabaseResult<T = Record<string, unknown>> = {
   success: true;
@@ -46,28 +48,30 @@ export function postgresPool() {
 export class PreparedStatement {
   readonly sql: string;
   readonly parameters: unknown[];
+  private readonly executor?: QueryExecutor;
 
-  constructor(sql: string, parameters: unknown[] = []) {
+  constructor(sql: string, parameters: unknown[] = [], executor?: QueryExecutor) {
     this.sql = sql;
     this.parameters = parameters;
+    this.executor = executor;
   }
 
   bind(...parameters: unknown[]) {
-    return new PreparedStatement(this.sql, parameters);
+    return new PreparedStatement(this.sql, parameters, this.executor);
   }
 
   async all<T = Record<string, unknown>>(): Promise<DatabaseResult<T>> {
-    const result = await this.execute(postgresPool());
+    const result = await this.execute(this.executor ?? postgresPool());
     return { success: true, results: result.rows as T[], meta: { changes: result.rowCount ?? 0 } };
   }
 
   async first<T = Record<string, unknown>>(): Promise<T | null> {
-    const result = await this.execute(postgresPool());
+    const result = await this.execute(this.executor ?? postgresPool());
     return (result.rows[0] as T | undefined) ?? null;
   }
 
   async run(): Promise<DatabaseResult> {
-    const result = await this.execute(postgresPool());
+    const result = await this.execute(this.executor ?? postgresPool());
     return { success: true, results: result.rows, meta: { changes: result.rowCount ?? 0 } };
   }
 
@@ -94,6 +98,26 @@ export class PostgresDatabase {
       }
       await client.query("COMMIT");
       return results;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async transaction<T>(work: (transaction: Pick<PostgresDatabase, "prepare">) => Promise<T>): Promise<T> {
+    const client = await postgresPool().connect();
+    try {
+      await client.query("BEGIN");
+      const transaction = {
+        prepare(sql: string) {
+          return new PreparedStatement(sql, [], client);
+        },
+      };
+      const result = await work(transaction);
+      await client.query("COMMIT");
+      return result;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

@@ -79,7 +79,7 @@ https://eval.zailink.space/api/auth/google/callback
 https://eval.zailink.space/api/auth/github/callback
 ```
 
-在管理员平台“登录与身份”中直接填写 OAuth App 的 Client ID 和 Client Secret，不填写环境变量名或 `KEY=value` 前缀。两项保存后都不会回显，留空不会覆盖已有值；Client Secret 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL。GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
+在管理员平台“登录与身份”中直接填写 OAuth App 的 Client ID 和 Client Secret，不填写环境变量名或 `KEY=value` 前缀。两项保存后都不会回显，留空不会覆盖已有值；Client Secret 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL。GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，必须通过 GitHub 官方 OAuth 登录认证，回调会校验当前会话与 OAuth state 中的用户一致性。若 GitHub 身份已创建过另一个普通 Eval 账号，系统会把内容和登录身份事务合并到当前账号、撤销旧会话并保留禁用的账号墓碑；存在管理员或登录身份冲突时拒绝自动合并。
 
 GitHub OAuth App 中的 `Authorization callback URL` 必须精确填写上面的公网 HTTPS 地址，不能填写 `localhost:41738`。ECS 还必须允许 Node 进程通过 TCP 443 出站访问 `github.com` 和 `api.github.com`；`github_unavailable` 表示 Token 端点连接或超时失败，可在服务端日志中查看不包含凭据的错误类型与网络错误码。
 

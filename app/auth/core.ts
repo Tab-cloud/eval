@@ -64,11 +64,14 @@ async function initializeSchema() {
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_e164 text",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS account_locale text DEFAULT 'zh' NOT NULL",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role text DEFAULT 'member' NOT NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS merged_into_user_id text REFERENCES users(id) ON DELETE SET NULL",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS merged_at bigint",
     "ALTER TABLE users ALTER COLUMN email DROP NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_username_uq ON users (username)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci_uq ON users (lower(username)) WHERE username IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_email_uq ON users (email)",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_phone_uq ON users (phone_e164)",
+    "CREATE INDEX IF NOT EXISTS users_merged_into_idx ON users (merged_into_user_id)",
     "CREATE TABLE IF NOT EXISTS password_credentials (user_id text PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE, password_hash text NOT NULL, password_salt text NOT NULL, iterations integer NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS auth_sessions (id text PRIMARY KEY NOT NULL, token_hash text NOT NULL, user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at bigint NOT NULL, created_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_token_uq ON auth_sessions (token_hash)",
@@ -273,26 +276,145 @@ export async function loginOrCreateExternalUser(
 }
 
 export async function linkExternalIdentity(user: AuthenticatedUser, provider: ExternalProvider, subject: string, verifiedEmail: string) {
+  return linkOrMergeExternalIdentity(user, provider, subject, verifiedEmail, false);
+}
+
+export async function linkOrMergeExternalIdentity(
+  user: AuthenticatedUser,
+  provider: ExternalProvider,
+  subject: string,
+  verifiedEmail: string,
+  allowAccountMerge = false,
+): Promise<{ merged: boolean }> {
   await ensureAuthSchema();
   const db = database();
-  const owned = await db.prepare("SELECT user_id FROM auth_oidc_identities WHERE provider = ? AND subject = ?")
-    .bind(provider, subject).first<{ user_id: string }>();
-  if (owned && owned.user_id !== user.id) throw new ExternalIdentityConflictError("该第三方账号已绑定其他用户。");
-  const current = await db.prepare("SELECT subject FROM auth_oidc_identities WHERE provider = ? AND user_id = ?")
-    .bind(provider, user.id).first<{ subject: string }>();
-  if (current && current.subject !== subject) throw new ExternalIdentityConflictError("当前账号已经绑定另一个第三方账号。");
-  if (current) return;
-  const now = Math.floor(Date.now() / 1000);
   try {
-    await db.batch([
-      db.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(`oidc_${crypto.randomUUID()}`, user.id, provider, subject, verifiedEmail, now, now),
-      auditStatement(user.id, "auth.identity.link", "user", user.id, { provider }, now),
-    ]);
+    return await db.transaction(async transaction => {
+      const now = Math.floor(Date.now() / 1000);
+      const owned = await transaction.prepare("SELECT user_id FROM auth_oidc_identities WHERE provider = ? AND subject = ? FOR UPDATE")
+        .bind(provider, subject).first<{ user_id: string }>();
+      const current = await transaction.prepare("SELECT subject FROM auth_oidc_identities WHERE provider = ? AND user_id = ? FOR UPDATE")
+        .bind(provider, user.id).first<{ subject: string }>();
+      if (current && current.subject !== subject) {
+        throw new ExternalIdentityConflictError("当前账号已经绑定另一个第三方账号，无法自动合并。");
+      }
+      if (owned?.user_id === user.id || current) return { merged: false };
+      if (!owned) {
+        const activeTarget = await transaction.prepare("SELECT id FROM users WHERE id = ? AND status = 'active' FOR UPDATE")
+          .bind(user.id).first<{ id: string }>();
+        if (!activeTarget) throw new ExternalIdentityConflictError("当前账号状态不允许绑定。");
+        await transaction.prepare("INSERT INTO auth_oidc_identities (id, user_id, provider, subject, email_at_link, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .bind(`oidc_${crypto.randomUUID()}`, user.id, provider, subject, verifiedEmail, now, now).run();
+        await transaction.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, 'auth.identity.link', 'user', ?, ?, ?)")
+          .bind(`audit_${crypto.randomUUID()}`, user.id, user.id, JSON.stringify({ provider }), now).run();
+        return { merged: false };
+      }
+      if (!allowAccountMerge) throw new ExternalIdentityConflictError("该第三方账号已绑定其他用户。");
+      await mergeAccountIntoCurrent(transaction, user, owned.user_id, provider, now);
+      return { merged: true };
+    });
   } catch (error) {
     if (isUniqueViolation(error)) throw new ExternalIdentityConflictError("该第三方账号已经绑定其他用户。");
     throw error;
   }
+}
+
+type TransactionDatabase = Pick<PostgresDatabase, "prepare">;
+
+type MergeUserRow = {
+  id: string;
+  username: string | null;
+  email: string | null;
+  phone_e164: string | null;
+  account_locale: "zh" | "en";
+  display_name: string;
+  avatar_url: string | null;
+  status: string;
+  role: string;
+};
+
+async function mergeAccountIntoCurrent(
+  transaction: TransactionDatabase,
+  targetUser: AuthenticatedUser,
+  sourceUserId: string,
+  verifiedProvider: ExternalProvider,
+  now: number,
+) {
+  const users = await transaction.prepare(`
+    SELECT id, username, email, phone_e164, account_locale, display_name, avatar_url, status, role
+    FROM users
+    WHERE id IN (?, ?)
+    ORDER BY id
+    FOR UPDATE
+  `).bind(targetUser.id, sourceUserId).all<MergeUserRow>();
+  const target = users.results.find(item => item.id === targetUser.id);
+  const source = users.results.find(item => item.id === sourceUserId);
+  if (!target || target.status !== "active") throw new ExternalIdentityConflictError("当前账号状态不允许合并。");
+  if (!source || source.status !== "active") throw new ExternalIdentityConflictError("GitHub 原账号状态不允许合并。");
+  if (source.role === "admin") throw new ExternalIdentityConflictError("管理员账号不能通过个人中心自动合并，请联系系统管理员处理。");
+
+  const [targetIdentities, sourceIdentities, targetCredential, sourceCredential] = await Promise.all([
+    transaction.prepare("SELECT provider, subject FROM auth_oidc_identities WHERE user_id = ? FOR UPDATE").bind(target.id).all<{ provider: string; subject: string }>(),
+    transaction.prepare("SELECT provider, subject FROM auth_oidc_identities WHERE user_id = ? FOR UPDATE").bind(source.id).all<{ provider: string; subject: string }>(),
+    transaction.prepare("SELECT user_id FROM password_credentials WHERE user_id = ? FOR UPDATE").bind(target.id).first<{ user_id: string }>(),
+    transaction.prepare("SELECT user_id FROM password_credentials WHERE user_id = ? FOR UPDATE").bind(source.id).first<{ user_id: string }>(),
+  ]);
+  const targetByProvider = new Map(targetIdentities.results.map(identity => [identity.provider, identity.subject]));
+  for (const identity of sourceIdentities.results) {
+    const existingSubject = targetByProvider.get(identity.provider);
+    if (existingSubject && existingSubject !== identity.subject) {
+      throw new ExternalIdentityConflictError(`两个账号分别绑定了不同的 ${identity.provider} 身份，无法自动合并。`);
+    }
+    if (identity.provider === "google" && target.account_locale !== "en") {
+      throw new ExternalIdentityConflictError("包含 Google 身份的账号不能合并到中文账号。");
+    }
+  }
+  if (target.username && source.username) throw new ExternalIdentityConflictError("两个账号都已设置用户名，无法自动合并。");
+  if (target.phone_e164 && source.phone_e164) throw new ExternalIdentityConflictError("两个账号都已绑定手机号，无法自动合并。");
+  if (targetCredential && sourceCredential) throw new ExternalIdentityConflictError("两个账号都已设置密码，无法自动合并。");
+  if (sourceCredential && target.account_locale !== "zh") {
+    throw new ExternalIdentityConflictError("包含本地密码身份的账号不能合并到英文账号。");
+  }
+
+  await transaction.prepare(`
+    UPDATE users
+    SET username = NULL, email = NULL, phone_e164 = NULL, status = 'disabled',
+        merged_into_user_id = ?, merged_at = ?, updated_at = ?
+    WHERE id = ?
+  `).bind(target.id, now, now, source.id).run();
+  await transaction.prepare(`
+    UPDATE users
+    SET username = COALESCE(username, ?), email = COALESCE(email, ?), phone_e164 = COALESCE(phone_e164, ?),
+        avatar_url = COALESCE(avatar_url, ?), updated_at = ?
+    WHERE id = ?
+  `).bind(source.username, source.email, source.phone_e164, source.avatar_url, now, target.id).run();
+  if (sourceCredential) {
+    await transaction.prepare("UPDATE password_credentials SET user_id = ?, updated_at = ? WHERE user_id = ?")
+      .bind(target.id, now, source.id).run();
+  }
+  await transaction.prepare("DELETE FROM auth_sessions WHERE user_id = ?").bind(source.id).run();
+  await transaction.prepare("DELETE FROM auth_oauth_states WHERE link_user_id = ?").bind(source.id).run();
+  await transaction.prepare("UPDATE auth_oidc_identities SET user_id = ?, updated_at = ? WHERE user_id = ?")
+    .bind(target.id, now, source.id).run();
+  await transaction.prepare("UPDATE desktop_auth_requests SET user_id = ?, status = CASE WHEN status = 'pending' THEN 'denied' ELSE status END, updated_at = ? WHERE user_id = ?")
+    .bind(target.id, now, source.id).run();
+  await transaction.prepare("UPDATE desktop_sessions SET user_id = ?, revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE user_id = ?")
+    .bind(target.id, now, now, source.id).run();
+  await transaction.prepare("UPDATE agent_community_actions SET user_id = ? WHERE user_id = ?").bind(target.id, source.id).run();
+  await transaction.prepare("DELETE FROM user_agent_community_settings WHERE user_id = ?").bind(source.id).run();
+  await transaction.prepare("UPDATE forum_topics SET author_id = ? WHERE author_id = ?").bind(target.id, source.id).run();
+  await transaction.prepare("UPDATE forum_replies SET author_id = ? WHERE author_id = ?").bind(target.id, source.id).run();
+  await transaction.prepare("UPDATE blog_posts SET author_id = ? WHERE author_id = ?").bind(target.id, source.id).run();
+  await transaction.prepare("UPDATE release_settings SET updated_by = ? WHERE updated_by = ?").bind(target.id, source.id).run();
+  await transaction.prepare("UPDATE agent_community_policy SET updated_by = ? WHERE updated_by = ?").bind(target.id, source.id).run();
+  await transaction.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, 'auth.account.merge', 'user', ?, ?, ?)")
+    .bind(
+      `audit_${crypto.randomUUID()}`,
+      target.id,
+      target.id,
+      JSON.stringify({ sourceUserId: source.id, verifiedProvider, revokedSourceSessions: true, resetSourceCommunityConsent: true }),
+      now,
+    ).run();
 }
 
 async function userByVerifiedEmails(verifiedEmails: string[]) {

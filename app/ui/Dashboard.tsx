@@ -188,15 +188,26 @@ function Profile({ currentUser, notify }: { currentUser: DashboardUser; notify: 
       {isZh && <IdentityStatus title="账号密码" value={account.user.username || "尚未绑定"} connected={Boolean(account.user.username && account.passwordConfigured)}/>}
       {isZh && <IdentityStatus title="手机验证码" value={account.user.phoneE164 ? maskPhone(account.user.phoneE164) : "尚未绑定"} connected={Boolean(account.user.phoneE164)}/>}
       {!isZh && <IdentityStatus title="Google" value={account.providers.google?.emailAtLink || "Not linked"} connected={Boolean(account.providers.google)} action={!account.providers.google ? providerHref("google") : undefined}/>}
-      <IdentityStatus title="GitHub" value={account.providers.github?.emailAtLink || (isZh ? "尚未绑定" : "Not linked")} connected={Boolean(account.providers.github)} action={!account.providers.github ? providerHref("github") : undefined}/>
+      <IdentityStatus
+        title="GitHub"
+        value={account.providers.github?.emailAtLink || (isZh ? "尚未绑定" : "Not linked")}
+        connected={Boolean(account.providers.github)}
+        action={!account.providers.github ? providerHref("github") : undefined}
+        actionLabel={isZh ? "登录 GitHub 并绑定/合并" : "Sign in to link or merge"}
+        note={!account.providers.github
+          ? isZh
+            ? "必须通过 GitHub 官方登录认证。若该 GitHub 曾创建独立 Eval 账号，验证后会安全合并到当前账号并撤销旧会话。"
+            : "GitHub authentication is required. If this identity owns another Eval account, its data will be merged here and old sessions revoked."
+          : undefined}
+      />
     </div>
     {isZh && !localComplete && <article className="identity-form-panel"><header><small>LOCAL IDENTITY</small><h3>绑定账号、手机号与密码</h3><p>适用于首次通过 GitHub 登录的中文用户。验证码会发送到待绑定手机号。</p></header><form onSubmit={bindLocal}><label>账号<input name="username" defaultValue={account.user.username || ""} required minLength={3} maxLength={32} pattern="[A-Za-z0-9]{3,32}" title="仅支持 3–32 位英文字母和数字" placeholder="3–32 位英文字母或数字" autoComplete="username" autoCapitalize="none" spellCheck={false}/></label><label>手机号<div className="identity-code-row"><input name="phone" type="tel" defaultValue={account.user.phoneE164?.replace(/^\+86/, "") || ""} required inputMode="tel" autoComplete="tel"/><button type="button" onClick={event => { const form = event.currentTarget.form; void sendVerification("phone_bind", String(new FormData(form!).get("phone") || "")); }} disabled={sending || countdown > 0}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "发送验证码"}</button></div></label><label>验证码<input name="code" required inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6}/></label><label>设置密码<input name="password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="至少 10 位，包含字母与数字"/></label><button className="identity-primary" disabled={saving}>{saving ? "正在绑定…" : "完成统一绑定"}<Icon name="arrow"/></button></form></article>}
     {isZh && localComplete && <article className="identity-form-panel"><header><small>ACCOUNT SECURITY</small><h3>通过手机验证码修改密码</h3><p>验证码发送到 {maskPhone(account.user.phoneE164!)}。更新后其他网页登录会话会被撤销。</p></header><form onSubmit={updatePassword}><label>短信验证码<div className="identity-code-row"><input name="code" required inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6}/><button type="button" onClick={() => void sendVerification("password_change")} disabled={sending || countdown > 0}>{sending ? "发送中" : countdown > 0 ? `${countdown}s` : "发送验证码"}</button></div></label><label>新密码<input name="nextPassword" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="至少 10 位，包含字母与数字"/></label><button className="identity-primary" disabled={saving}>{saving ? "正在更新…" : "验证并更新密码"}<Icon name="arrow"/></button></form></article>}
   </section>;
 }
 
-function IdentityStatus({ title, value, connected, action }: { title: string; value: string; connected: boolean; action?: string }) {
-  return <article className={connected ? "connected" : "pending"}><Icon name={connected ? "check" : "key"}/><small>{title}</small><b>{value}</b><span>{connected ? "CONNECTED" : "NOT LINKED"}</span>{action && <a href={action}>绑定 / Link<Icon name="arrow"/></a>}</article>;
+function IdentityStatus({ title, value, connected, action, actionLabel, note }: { title: string; value: string; connected: boolean; action?: string; actionLabel?: string; note?: string }) {
+  return <article className={connected ? "connected" : "pending"}><Icon name={connected ? "check" : "key"}/><small>{title}</small><b>{value}</b><span>{connected ? "CONNECTED" : "NOT LINKED"}</span>{note && <p>{note}</p>}{action && <a href={action}>{actionLabel || "绑定 / Link"}<Icon name="arrow"/></a>}</article>;
 }
 
 function maskPhone(value: string) { return value.replace(/^\+86(\d{3})\d{4}(\d{4})$/, "$1 **** $2"); }

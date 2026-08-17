@@ -10,7 +10,8 @@ export async function GET(request: Request) {
   try {
     const result = await finishGitHubAuthorization(request);
     const destination = publicApplicationUrl(result.returnPath, request);
-    if (result.linked) destination.searchParams.set("linked", result.linked);
+    if (result.merged) destination.searchParams.set("merged", result.merged);
+    else if (result.linked) destination.searchParams.set("linked", result.linked);
     const headers = new Headers({
       Location: destination.toString(),
       "Cache-Control": "no-store",
