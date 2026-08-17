@@ -81,6 +81,8 @@ https://eval.zailink.space/api/auth/github/callback
 
 在管理员平台“登录与身份”中直接填写 OAuth App 的 Client ID 和 Client Secret，不填写环境变量名或 `KEY=value` 前缀。两项保存后都不会回显，留空不会覆盖已有值；Client Secret 使用 `AUTH_SETTINGS_ENCRYPTION_KEY` 加密后存入 PostgreSQL。GitHub 登录同时显示在中文和英文登录页。首次登录会创建普通用户；若已验证邮箱与现有用户一致则复用该用户。中文或英文用户也可在个人中心发起显式绑定，回调会校验当前会话与 OAuth state 中的用户一致性。
 
+GitHub OAuth App 中的 `Authorization callback URL` 必须精确填写上面的公网 HTTPS 地址，不能填写 `localhost:41738`。ECS 还必须允许 Node 进程通过 TCP 443 出站访问 `github.com` 和 `api.github.com`；`github_unavailable` 表示 Token 端点连接或超时失败，可在服务端日志中查看不包含凭据的错误类型与网络错误码。
+
 中文注册依赖已审核的阿里云短信模板。发送与校验必须保持 `login`、`register`、`phone_bind`、`password_change` 四种用途隔离；修改密码后服务端撤销该用户其他 Web 会话并为当前浏览器签发新会话。上线前应分别完成四条真实短信流程和 Google/GitHub 绑定冲突测试。
 
 博客与论坛均采用全站内容模型。部署包含论坛/博客功能的版本前必须运行迁移，创建 `blog_posts`、`forum_topics` 与 `forum_replies`；上线后由管理员在“内容中心”发布第一篇博客并治理论坛内容。

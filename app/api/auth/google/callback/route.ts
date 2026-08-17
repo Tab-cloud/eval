@@ -4,11 +4,12 @@ import {
   GoogleAuthenticationError,
   googleSessionCookie,
 } from "../../../../auth/google";
+import { publicApplicationUrl } from "../../../../auth/public-origin";
 
 export async function GET(request: Request) {
   try {
     const result = await finishGoogleAuthorization(request);
-    const destination = new URL(result.returnPath, request.url);
+    const destination = publicApplicationUrl(result.returnPath, request);
     if (result.linked) destination.searchParams.set("linked", result.linked);
     const headers = new Headers({
       Location: destination.toString(),
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
   } catch (error) {
     const reason = error instanceof GoogleAuthenticationError ? error.reason : "google_failed";
     if (error instanceof GoogleAuthenticationError && error.returnPath.includes("view=profile")) {
-      const location = new URL(error.returnPath, request.url);
+      const location = publicApplicationUrl(error.returnPath, request);
       location.searchParams.set("error", reason);
       return new Response(null, { status: 302, headers: { Location: location.toString(), "Set-Cookie": clearGoogleStateCookie(request), "Cache-Control": "no-store" } });
     }
@@ -35,7 +36,7 @@ function redirectToLogin(request: Request, reason: string, locale: "zh" | "en" =
   return new Response(null, {
     status: 302,
     headers: {
-      Location: new URL(`/login?lang=${locale}&error=${encodeURIComponent(reason)}`, request.url).toString(),
+      Location: publicApplicationUrl(`/login?lang=${locale}&error=${encodeURIComponent(reason)}`, request).toString(),
       "Set-Cookie": clearGoogleStateCookie(request),
       "Cache-Control": "no-store",
     },

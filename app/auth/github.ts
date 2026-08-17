@@ -11,6 +11,7 @@ import {
   type AuthenticatedUser,
 } from "./core";
 import { identityProviderSettings } from "./provider-settings";
+import { publicApplicationOrigin } from "./public-origin";
 import { safeReturnPath } from "./return-path";
 
 const GITHUB_STATE_COOKIE = "eval_github_state";
@@ -164,12 +165,13 @@ export async function finishGitHubAuthorization(request: Request): Promise<{
       }),
       signal: AbortSignal.timeout(15_000),
     });
-  } catch {
+  } catch (error) {
+    console.error("GitHub OAuth token endpoint unavailable.", providerNetworkError(error));
     throw new GitHubAuthenticationError("github_unavailable", context);
   }
   const tokenPayload = await tokenResponse.json().catch(() => ({})) as GitHubTokenResponse;
   if (!tokenResponse.ok || tokenPayload.error || !tokenPayload.access_token) {
-    throw new GitHubAuthenticationError("token_exchange_failed", context);
+    throw new GitHubAuthenticationError("github_token_exchange_failed", context);
   }
 
   let profile: GitHubProfile;
@@ -247,12 +249,21 @@ async function githubApi<T>(url: string, accessToken: string): Promise<T> {
 }
 
 function applicationOrigin(request: Request) {
-  const configured = process.env.APP_ORIGIN?.trim();
-  const origin = configured ? new URL(configured).origin : new URL(request.url).origin;
-  if (process.env.NODE_ENV === "production" && !origin.startsWith("https://")) {
-    throw new GitHubConfigurationError("生产环境 APP_ORIGIN 必须使用 HTTPS。");
+  try {
+    return publicApplicationOrigin(request);
+  } catch (error) {
+    throw new GitHubConfigurationError(error instanceof Error ? error.message : "站点公开地址配置无效。");
   }
-  return origin;
+}
+
+function providerNetworkError(error: unknown) {
+  const cause = error instanceof Error && error.cause && typeof error.cause === "object"
+    ? error.cause as { code?: unknown }
+    : null;
+  return {
+    name: error instanceof Error ? error.name : "UnknownError",
+    code: cause?.code ? String(cause.code) : undefined,
+  };
 }
 
 function isSecureOrigin(request: Request) {

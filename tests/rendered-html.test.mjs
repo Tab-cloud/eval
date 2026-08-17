@@ -4,6 +4,29 @@ import test from "node:test";
 
 const source = path => readFile(new URL(path, import.meta.url), "utf8");
 
+test("production OAuth redirects never expose the internal localhost origin", async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousOrigin = process.env.APP_ORIGIN;
+  try {
+    process.env.NODE_ENV = "production";
+    delete process.env.APP_ORIGIN;
+    const { publicApplicationOrigin, publicApplicationUrl } = await import("../app/auth/public-origin.ts");
+    const internalRequest = new Request("https://localhost:41738/api/auth/github/callback");
+    assert.equal(publicApplicationOrigin(internalRequest), "https://eval.zailink.space");
+    assert.equal(publicApplicationUrl("/login?error=github_unavailable", internalRequest).origin, "https://eval.zailink.space");
+    process.env.APP_ORIGIN = "https://accounts.example.com/internal-path";
+    assert.equal(publicApplicationOrigin(internalRequest), "https://accounts.example.com");
+    process.env.APP_ORIGIN = "http://accounts.example.com";
+    assert.throws(() => publicApplicationOrigin(internalRequest), /必须使用 HTTPS/);
+    assert.equal(publicApplicationUrl("/login", internalRequest).origin, "https://eval.zailink.space");
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousOrigin === undefined) delete process.env.APP_ORIGIN;
+    else process.env.APP_ORIGIN = previousOrigin;
+  }
+});
+
 test("encrypted admin secrets round-trip only with the matching context and reject tampering", async () => {
   const previousKey = process.env.AUTH_SETTINGS_ENCRYPTION_KEY;
   process.env.AUTH_SETTINGS_ENCRYPTION_KEY = "test-only-master-key-with-more-than-32-characters";
@@ -434,8 +457,11 @@ test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accoun
 });
 
 test("Google sign-in uses stored credentials, OIDC protections, creates English accounts, and supports explicit linking", async () => {
-  const [google, authCore, schema, migration, config] = await Promise.all([
+  const [google, start, callback, publicOrigin, authCore, schema, migration, config] = await Promise.all([
     source("../app/auth/google.ts"),
+    source("../app/api/auth/google/start/route.ts"),
+    source("../app/api/auth/google/callback/route.ts"),
+    source("../app/auth/public-origin.ts"),
     source("../app/auth/core.ts"),
     source("../db/schema.ts"),
     source("../drizzle/0012_illegal_machine_man.sql"),
@@ -467,13 +493,21 @@ test("Google sign-in uses stored credentials, OIDC protections, creates English 
   assert.match(google, /settings\.googleClientSecret/);
   assert.doesNotMatch(google, /environmentValue\(settings\.google/);
   assert.doesNotMatch(config, /GOOGLE_OAUTH_CLIENT_ID|GOOGLE_OAUTH_CLIENT_SECRET/);
+  assert.match(google, /publicApplicationOrigin/);
+  assert.match(start, /publicApplicationUrl/);
+  assert.match(callback, /publicApplicationUrl/);
+  assert.match(publicOrigin, /process\.env\.NODE_ENV === "production"[\s\S]*PRODUCTION_ORIGIN/);
+  assert.match(publicOrigin, /const PRODUCTION_ORIGIN = "https:\/\/eval\.zailink\.space"/);
 });
 
 test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, account creation, and explicit linking", async () => {
-  const [github, start, callback, authCore, schema, config] = await Promise.all([
+  const [github, start, callback, publicOrigin, login, deployment, authCore, schema, config] = await Promise.all([
     source("../app/auth/github.ts"),
     source("../app/api/auth/github/start/route.ts"),
     source("../app/api/auth/github/callback/route.ts"),
+    source("../app/auth/public-origin.ts"),
+    source("../app/login/page.tsx"),
+    source("../docs/ECS_DEPLOYMENT.md"),
     source("../app/auth/core.ts"),
     source("../db/schema.ts"),
     source("../.env.example"),
@@ -497,6 +531,17 @@ test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, acco
   assert.match(github, /settings\.githubClientSecret/);
   assert.doesNotMatch(github, /environmentValue\(settings\.github/);
   assert.doesNotMatch(config, /GITHUB_OAUTH_CLIENT_ID|GITHUB_OAUTH_CLIENT_SECRET/);
+  assert.match(github, /publicApplicationOrigin/);
+  assert.match(github, /GitHub OAuth token endpoint unavailable/);
+  assert.match(github, /providerNetworkError\(error\)/);
+  assert.match(start, /publicApplicationUrl/);
+  assert.match(callback, /publicApplicationUrl/);
+  assert.doesNotMatch(start + callback, /new URL\([^\n]+request\.url/);
+  assert.match(publicOrigin, /https:\/\/eval\.zailink\.space/);
+  assert.match(login, /服务器暂时无法连接 GitHub/);
+  assert.match(login, /GitHub 凭据或回调地址校验失败/);
+  assert.match(deployment, /不能填写 `localhost:41738`/);
+  assert.match(deployment, /github\.com` 和 `api\.github\.com/);
 });
 
 test("personal center exposes locale-specific identities and binds them to one user", async () => {

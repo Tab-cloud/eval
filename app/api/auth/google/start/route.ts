@@ -1,5 +1,6 @@
 import { beginGoogleAuthorization, GoogleAuthenticationError, GoogleConfigurationError } from "../../../../auth/google";
 import { safeReturnPath } from "../../../../auth/return-path";
+import { publicApplicationUrl } from "../../../../auth/public-origin";
 
 export async function GET(request: Request) {
   try {
@@ -18,10 +19,10 @@ export async function GET(request: Request) {
     const returnPath = safeReturnPath(url.searchParams.get("returnTo"));
     const locale = url.searchParams.get("lang") === "zh" ? "zh" : "en";
     if (url.searchParams.get("intent") === "link") {
-      const location = new URL(returnPath.startsWith("/console") ? returnPath : "/console?view=profile", request.url);
+      const location = publicApplicationUrl(returnPath.startsWith("/console") ? returnPath : "/console?view=profile", request);
       location.searchParams.set("error", reason);
       return Response.redirect(location);
     }
-    return Response.redirect(new URL(`/login?lang=${locale}&error=${reason}&returnTo=${encodeURIComponent(returnPath)}`, request.url));
+    return Response.redirect(publicApplicationUrl(`/login?lang=${locale}&error=${reason}&returnTo=${encodeURIComponent(returnPath)}`, request));
   }
 }

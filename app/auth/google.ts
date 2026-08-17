@@ -13,6 +13,7 @@ import {
   type AuthenticatedUser,
 } from "./core";
 import { identityProviderSettings } from "./provider-settings";
+import { publicApplicationOrigin } from "./public-origin";
 import { safeReturnPath } from "./return-path";
 
 const GOOGLE_STATE_COOKIE = "eval_google_state";
@@ -123,7 +124,7 @@ export async function finishGoogleAuthorization(request: Request): Promise<{ use
     });
     idToken = tokenResponse.tokens.id_token;
   } catch {
-    throw new GoogleAuthenticationError("token_exchange_failed");
+    throw new GoogleAuthenticationError("google_token_exchange_failed");
   }
   if (!idToken) throw new GoogleAuthenticationError("missing_id_token");
 
@@ -191,12 +192,11 @@ async function googleConfiguration() {
 }
 
 function applicationOrigin(request: Request) {
-  const configured = process.env.APP_ORIGIN?.trim();
-  const origin = configured ? new URL(configured).origin : new URL(request.url).origin;
-  if (process.env.NODE_ENV === "production" && !origin.startsWith("https://")) {
-    throw new GoogleConfigurationError("生产环境 APP_ORIGIN 必须使用 HTTPS。");
+  try {
+    return publicApplicationOrigin(request);
+  } catch (error) {
+    throw new GoogleConfigurationError(error instanceof Error ? error.message : "站点公开地址配置无效。");
   }
-  return origin;
 }
 
 function isSecureOrigin(request: Request) {
