@@ -29,7 +29,7 @@ export type AuthSettingsSnapshot = {
 type Props = {
   settings: AuthSettingsSnapshot;
   busy: boolean;
-  action: (name: string, input: Record<string, unknown>, success: string) => Promise<void>;
+  action: (name: string, input: Record<string, unknown>, success: string) => Promise<boolean>;
 };
 
 export function AuthSettingsView({ settings, busy, action }: Props) {
@@ -40,8 +40,8 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       smsEnabled: data.get("smsEnabled") === "on",
       googleEnabled: data.get("googleEnabled") === "on",
       githubEnabled: data.get("githubEnabled") === "on",
-    }, "登录与身份配置已保存。").finally(() => {
-      form.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input => { input.value = ""; });
+    }, "登录与身份配置已保存。").then(saved => {
+      if (saved) form.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input => { input.value = ""; });
     });
   };
 
@@ -75,7 +75,7 @@ export function AuthSettingsView({ settings, busy, action }: Props) {
       </article>
     </section>
 
-    <form key={settings.updatedAt ?? "defaults"} className="auth-settings-form" onSubmit={event => {
+    <form key={`${settings.updatedAt ?? "defaults"}:${Number(settings.smsEnabled)}:${Number(settings.googleEnabled)}:${Number(settings.githubEnabled)}:${Number(settings.googleClientIdConfigured)}:${Number(settings.googleClientSecretConfigured)}:${Number(settings.githubClientIdConfigured)}:${Number(settings.githubClientSecretConfigured)}`} className="auth-settings-form" onSubmit={event => {
       event.preventDefault();
       save(event.currentTarget);
     }}>

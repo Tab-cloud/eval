@@ -127,9 +127,19 @@ export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
     clientId: Boolean(githubClientId),
     clientSecret: Boolean(githubClientSecret),
   };
+  const smsReady = Boolean(settings.aliyunSignName && settings.aliyunTemplateCode)
+    && Object.values(smsCredentials).every(Boolean);
+  const googleReady = Object.values(googleCredentials).every(Boolean);
+  const githubReady = Object.values(githubCredentials).every(Boolean);
+  const smsEnabled = settings.smsEnabled && smsReady;
+  const googleEnabled = settings.googleEnabled && googleReady;
+  const githubEnabled = settings.githubEnabled && githubReady;
   const origin = process.env.APP_ORIGIN?.trim() || "https://eval.zailink.space";
   return {
     ...safeSettings,
+    smsEnabled,
+    googleEnabled,
+    githubEnabled,
     aliyunAccessKeyIdConfigured: smsCredentials.accessKeyId,
     aliyunAccessKeySecretConfigured: smsCredentials.accessKeySecret,
     smsCodePepperConfigured: smsCredentials.pepper,
@@ -140,24 +150,22 @@ export function providerSettingsSnapshot(settings: IdentityProviderSettings) {
     callbackUrl: `${new URL(origin).origin}/api/auth/google/callback`,
     githubCallbackUrl: `${new URL(origin).origin}/api/auth/github/callback`,
     smsCredentials,
-    smsConfigured: settings.smsEnabled
-      && Boolean(settings.aliyunSignName && settings.aliyunTemplateCode)
-      && Object.values(smsCredentials).every(Boolean),
-    googleConfigured: settings.googleEnabled && Object.values(googleCredentials).every(Boolean),
-    githubConfigured: settings.githubEnabled && Object.values(githubCredentials).every(Boolean),
+    smsConfigured: smsEnabled,
+    googleConfigured: googleEnabled,
+    githubConfigured: githubEnabled,
   };
 }
 
 function defaultSettings(): IdentityProviderSettings {
   return {
-    smsEnabled: true,
+    smsEnabled: false,
     aliyunSignName: process.env.ALIYUN_SMS_SIGN_NAME?.trim() || "",
     aliyunTemplateCode: process.env.ALIYUN_SMS_TEMPLATE_CODE?.trim() || "",
     aliyunTemplateCodeKey: process.env.ALIYUN_SMS_TEMPLATE_CODE_KEY?.trim() || "code",
     aliyunAccessKeyId: "",
     aliyunAccessKeySecret: "",
     smsCodePepper: "",
-    googleEnabled: true,
+    googleEnabled: false,
     googleClientId: "",
     googleClientSecret: "",
     googleAllowedHostedDomain: process.env.GOOGLE_ALLOWED_HOSTED_DOMAIN?.trim().toLowerCase() || "",

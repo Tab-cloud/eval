@@ -11,7 +11,7 @@ export type ContentAdminSnapshot = {
 type Props = {
   content: ContentAdminSnapshot;
   busy: boolean;
-  action: (name: string, input: Record<string, unknown>, success: string) => Promise<void>;
+  action: (name: string, input: Record<string, unknown>, success: string) => Promise<boolean>;
 };
 
 export function ContentSettingsView({ content, busy, action }: Props) {

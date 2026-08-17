@@ -12,7 +12,7 @@ export type AgentCommunityAction = { requestId: string; userId: string; desktopS
 
 export function AgentCommunityPolicyView({ policy, actions, busy, action }: {
   policy: AgentCommunityPolicy; actions: AgentCommunityAction[]; busy: boolean;
-  action: (name: string, input: Record<string, unknown>, success: string) => Promise<void>;
+  action: (name: string, input: Record<string, unknown>, success: string) => Promise<boolean>;
 }) {
   const writesActive = policy.enabled && policy.writesEnabled;
   return <div className="admin-module agent-community-admin">

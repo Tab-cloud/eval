@@ -559,6 +559,11 @@ test("admin identity settings accept protected SMS, Google, and GitHub credentia
   assert.match(identityUi, /填写至少 32 位随机值/);
   assert.match(identityUi, /真实值不会回显；留空将保留当前配置/);
   assert.match(identityUi, /querySelectorAll<HTMLInputElement>\('input\[type="password"\]'\)/);
+  assert.match(identityUi, /\.then\(saved =>/);
+  assert.match(identityUi, /if \(saved\).*input\[type="password"\]/s);
+  assert.doesNotMatch(identityUi, /\.finally\(\(\) =>.*input\[type="password"\]/s);
+  assert.match(consoleUi, /await load\(\); setNotice\(success\); return true/);
+  assert.match(consoleUi, /setError\(reason instanceof Error \? reason\.message : "操作失败。"\); return false/);
   assert.doesNotMatch(identityUi, /AccessKey ID 变量/);
   assert.doesNotMatch(identityUi, /AccessKey Secret 变量|验证码 Pepper 变量/);
   assert.match(identityUi, /name="googleClientId"/);
@@ -581,6 +586,11 @@ test("admin identity settings accept protected SMS, Google, and GitHub credentia
   assert.match(settings, /googleClientSecret: openSecret/);
   assert.match(settings, /githubClientSecretEncrypted = sealSecret/);
   assert.match(settings, /githubClientSecret: openSecret/);
+  assert.match(settings, /const githubReady = Object\.values\(githubCredentials\)\.every\(Boolean\)/);
+  assert.match(settings, /const githubEnabled = settings\.githubEnabled && githubReady/);
+  assert.match(settings, /githubConfigured: githubEnabled/);
+  assert.match(settings, /githubEnabled: false/);
+  assert.match(settings, /googleEnabled: false/);
   assert.doesNotMatch(settings, /googleClientIdRef|googleClientSecretRef|githubClientIdRef|githubClientSecretRef/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_ID/);
   assert.doesNotMatch(settings, /ALIBABA_CLOUD_ACCESS_KEY_SECRET|AUTH_SMS_CODE_PEPPER/);
