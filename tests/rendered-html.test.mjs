@@ -570,15 +570,17 @@ test("GitHub sign-in uses stored credentials, state, PKCE, verified emails, acco
   assert.match(mergeMigration, /users_merged_into_idx/);
 });
 
-test("personal center exposes locale-specific identities and binds or merges authenticated GitHub accounts", async () => {
-  const [dashboard, accountRoute, localRoute, usernameRoute, authCore, css, consolePage] = await Promise.all([
+test("personal center exposes locale-specific identities and safely links, merges, or unlinks authenticated GitHub accounts", async () => {
+  const [dashboard, accountRoute, localRoute, githubRoute, usernameRoute, authCore, css, consolePage, requestSecurity] = await Promise.all([
     source("../app/ui/Dashboard.tsx"),
     source("../app/api/auth/account/route.ts"),
     source("../app/api/auth/account/local/route.ts"),
+    source("../app/api/auth/account/github/route.ts"),
     source("../app/api/auth/username/login/route.ts"),
     source("../app/auth/core.ts"),
     source("../app/console/style.css"),
     source("../app/console/page.tsx"),
+    source("../app/security/request.ts"),
   ]);
   assert.match(dashboard, /个人中心/);
   assert.match(dashboard, /One account\. Two verified identities/);
@@ -592,6 +594,14 @@ test("personal center exposes locale-specific identities and binds or merges aut
   assert.match(consolePage, /GitHub 原账号已安全合并到当前账号/);
   assert.match(consolePage, /两个账号存在登录身份冲突/);
   assert.match(accountRoute, /accountIdentitySnapshot/);
+  assert.match(dashboard, /解绑 GitHub/);
+  assert.match(dashboard, /method: "DELETE"/);
+  assert.match(dashboard, /account\.unlink\.github\.allowed/);
+  assert.match(githubRoute, /rejectCrossSiteWrite/);
+  assert.match(githubRoute, /getSessionUser\(cookieToken\(request\)\)/);
+  assert.match(githubRoute, /unlinkGitHubIdentity/);
+  assert.match(githubRoute, /status: 409/);
+  assert.match(requestSecurity, /sec-fetch-site/);
   assert.match(localRoute, /verifySmsCode\("phone_bind"/);
   assert.match(localRoute, /bindChineseLocalIdentity/);
   assert.match(localRoute, /isValidNewUsername/);
@@ -599,6 +609,10 @@ test("personal center exposes locale-specific identities and binds or merges aut
   assert.match(usernameRoute, /authenticateUsername/);
   assert.match(usernameRoute, /user\.accountLocale !== "zh"/);
   assert.match(authCore, /auth\.local_identity\.bind/);
+  assert.match(authCore, /auth\.identity\.unlink/);
+  assert.match(authCore, /last_sign_in_method/);
+  assert.match(authCore, /DELETE FROM auth_oidc_identities WHERE user_id = \? AND provider = 'github'/);
+  assert.match(authCore, /DELETE FROM auth_oauth_states WHERE link_user_id = \? AND provider = 'github'/);
   assert.match(authCore, /DELETE FROM auth_sessions WHERE user_id = \?/);
   assert.match(css, /\.identity-status-grid/);
   assert.match(css, /\.identity-form-panel/);

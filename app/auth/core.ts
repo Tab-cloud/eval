@@ -202,6 +202,13 @@ export type ExternalProvider = "google" | "github";
 
 export class ExternalIdentityConflictError extends Error {}
 export class ExternalIdentityPolicyError extends Error {}
+export type ExternalIdentityUnlinkReason = "github_not_linked" | "last_sign_in_method";
+
+export class ExternalIdentityUnlinkError extends Error {
+  constructor(public readonly reason: ExternalIdentityUnlinkReason) {
+    super(reason);
+  }
+}
 
 export async function loginOrCreateExternalUser(
   provider: ExternalProvider,
@@ -277,6 +284,50 @@ export async function loginOrCreateExternalUser(
 
 export async function linkExternalIdentity(user: AuthenticatedUser, provider: ExternalProvider, subject: string, verifiedEmail: string) {
   return linkOrMergeExternalIdentity(user, provider, subject, verifiedEmail, false);
+}
+
+export async function unlinkGitHubIdentity(user: AuthenticatedUser) {
+  await ensureAuthSchema();
+  const db = database();
+  await db.transaction(async transaction => {
+    const [freshUser, identities, credential] = await Promise.all([
+      transaction.prepare(`
+        SELECT id, username, phone_e164, account_locale
+        FROM users
+        WHERE id = ? AND status = 'active'
+        FOR UPDATE
+      `).bind(user.id).first<{ id: string; username: string | null; phone_e164: string | null; account_locale: "zh" | "en" }>(),
+      transaction.prepare("SELECT provider FROM auth_oidc_identities WHERE user_id = ? FOR UPDATE")
+        .bind(user.id).all<{ provider: string }>(),
+      transaction.prepare("SELECT user_id FROM password_credentials WHERE user_id = ? FOR UPDATE")
+        .bind(user.id).first<{ user_id: string }>(),
+    ]);
+    if (!freshUser) throw new ExternalIdentityUnlinkError("last_sign_in_method");
+    const providers = new Set(identities.results.map(identity => identity.provider));
+    const reason = githubUnlinkReason({
+      accountLocale: freshUser.account_locale,
+      username: freshUser.username,
+      phoneE164: freshUser.phone_e164,
+      passwordConfigured: Boolean(credential),
+      githubLinked: providers.has("github"),
+      googleLinked: providers.has("google"),
+    });
+    if (reason) throw new ExternalIdentityUnlinkError(reason);
+
+    const now = Math.floor(Date.now() / 1000);
+    await transaction.prepare("DELETE FROM auth_oidc_identities WHERE user_id = ? AND provider = 'github'")
+      .bind(user.id).run();
+    await transaction.prepare("DELETE FROM auth_oauth_states WHERE link_user_id = ? AND provider = 'github'")
+      .bind(user.id).run();
+    await transaction.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, 'auth.identity.unlink', 'user', ?, ?, ?)")
+      .bind(
+        `audit_${crypto.randomUUID()}`,
+        user.id,
+        user.id,
+        JSON.stringify({ provider: "github", retainedSignIn: freshUser.account_locale === "zh" ? "local" : "google" }),
+        now,
+      ).run();
+  });
 }
 
 export async function linkOrMergeExternalIdentity(
@@ -623,6 +674,16 @@ export async function accountIdentitySnapshot(user: AuthenticatedUser) {
     db.prepare("SELECT provider, email_at_link AS \"emailAtLink\" FROM auth_oidc_identities WHERE user_id = ? ORDER BY provider").bind(user.id).all<{ provider: string; emailAtLink: string }>(),
     db.prepare("SELECT user_id FROM password_credentials WHERE user_id = ?").bind(user.id).first<{ user_id: string }>(),
   ]);
+  const githubLinked = identities.results.some(item => item.provider === "github");
+  const googleLinked = identities.results.some(item => item.provider === "google");
+  const githubUnlink = githubUnlinkReason({
+    accountLocale: user.accountLocale,
+    username: user.username ?? null,
+    phoneE164: user.phoneE164 ?? null,
+    passwordConfigured: Boolean(credential),
+    githubLinked,
+    googleLinked,
+  });
   return {
     user: { id: user.id, username: user.username ?? null, email: user.email ?? null, phoneE164: user.phoneE164 ?? null, displayName: user.displayName, accountLocale: user.accountLocale },
     providers: {
@@ -630,7 +691,25 @@ export async function accountIdentitySnapshot(user: AuthenticatedUser) {
       github: identities.results.find(item => item.provider === "github") ?? null,
     },
     passwordConfigured: Boolean(credential),
+    unlink: {
+      github: { allowed: githubLinked && !githubUnlink, reason: githubUnlink },
+    },
   };
+}
+
+function githubUnlinkReason(input: {
+  accountLocale: "zh" | "en";
+  username: string | null;
+  phoneE164: string | null;
+  passwordConfigured: boolean;
+  githubLinked: boolean;
+  googleLinked: boolean;
+}): ExternalIdentityUnlinkReason | null {
+  if (!input.githubLinked) return "github_not_linked";
+  if (input.accountLocale === "zh") {
+    return input.username && input.phoneE164 && input.passwordConfigured ? null : "last_sign_in_method";
+  }
+  return input.googleLinked ? null : "last_sign_in_method";
 }
 
 export function sessionCookie(token: string, secure: boolean) {
