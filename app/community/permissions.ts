@@ -24,7 +24,7 @@ export function sanitizeCommunityScopes(value: unknown): CommunityScope[] {
   return [...new Set(value.filter((item): item is CommunityScope => typeof item === "string" && allowed.has(item as CommunityScope)))];
 }
 export function roleAllowsCommunityScope(role: AuthenticatedUser["role"], scope: CommunityScope) {
-  return scope !== "community.blog.publish" || role === "admin";
+  return (role === "member" || role === "admin") && communityScopes.includes(scope);
 }
 
 export function isCommunityWriteScope(scope: CommunityScope) {

@@ -107,7 +107,7 @@ export async function saveUserAgentCommunitySettings(user: AuthenticatedUser, in
     allowForumTopicCreate: input.allowForumTopicCreate === true,
     allowForumReplyCreate: input.allowForumReplyCreate === true,
     allowBlogDraftCreate: input.allowBlogDraftCreate === true,
-    allowBlogPublish: user.role === "admin" && input.allowBlogPublish === true,
+    allowBlogPublish: input.allowBlogPublish === true,
   };
   const db = authDatabase();
   await db.batch([

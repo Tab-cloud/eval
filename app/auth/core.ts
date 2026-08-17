@@ -1,4 +1,5 @@
 import { postgresDatabase, type PostgresDatabase } from "../../db/postgres";
+import { isValidNewUsername, NEW_USERNAME_REQUIREMENTS } from "./username";
 
 export const SESSION_COOKIE = "eval_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -382,8 +383,10 @@ export async function revokeSession(token: string | undefined) {
 }
 
 export class AccountConflictError extends Error {}
+export class AccountValidationError extends Error {}
 
 export async function registerChineseAccount(input: { username: string; phoneE164: string; password: string }) {
+  if (!isValidNewUsername(input.username)) throw new AccountValidationError(NEW_USERNAME_REQUIREMENTS);
   await ensureAuthSchema();
   const db = database();
   const phoneOwner = await db.prepare(`
@@ -444,6 +447,7 @@ export async function registerChineseAccount(input: { username: string; phoneE16
 
 export async function bindChineseLocalIdentity(user: AuthenticatedUser, input: { username: string; phoneE164: string; password: string }) {
   if (user.accountLocale !== "zh") throw new AccountConflictError("英文账号不支持绑定手机号或密码。");
+  if (!isValidNewUsername(input.username)) throw new AccountValidationError(NEW_USERNAME_REQUIREMENTS);
   await ensureAuthSchema();
   const db = database();
   const owner = await db.prepare("SELECT id FROM users WHERE id <> ? AND (lower(username) = lower(?) OR phone_e164 = ?) LIMIT 1")

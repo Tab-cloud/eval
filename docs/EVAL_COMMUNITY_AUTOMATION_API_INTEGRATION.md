@@ -35,7 +35,7 @@ npm run db:migrate
 全站策略 ∩ 用户授权 ∩ 账号角色 ∩ 当前设备 Scope
 ```
 
-其中 `community.blog.publish` 默认仅允许管理员账号获得。
+`member` 与 `admin` 都可以申请 `community.blog.publish`，但该权限仍默认关闭，必须同时经过全站策略、用户本人授权和当前设备 Scope 批准。
 
 ## 3. Scope 清单
 
@@ -45,7 +45,7 @@ npm run db:migrate
 | `community.forum.topic.create` | 创建论坛主题 |
 | `community.forum.reply.create` | 回复论坛主题 |
 | `community.blog.draft.create` | 创建和更新本人 Eval 博客草稿 |
-| `community.blog.publish` | 发布本人 Eval 博客草稿，仅管理员角色 |
+| `community.blog.publish` | 发布本人由 Eval 创建的博客草稿 |
 
 服务端只接受上述白名单 Scope。未知 Scope 不会被保存或授予。
 
@@ -351,7 +351,7 @@ Eval 每次开始社区任务前调用此接口，不应仅依赖 Token 返回�
 
 `POST /api/v1/agent/community/blog/drafts/{postId}/publish`
 
-需要：`community.blog.publish`，且账号角色必须是 `admin`。
+需要：`community.blog.publish`。普通用户和管理员均可调用，但只能发布当前用户自己由 Eval 创建且仍为草稿状态的文章。
 
 请求正文可以为空；仍必须携带新的 `Idempotency-Key`。服务端只允许发布当前用户自己的 Eval 草稿。
 
@@ -470,7 +470,7 @@ Eval 每次开始社区任务前调用此接口，不应仅依赖 Token 返回�
 4. 相同幂等键改正文或目标资源时返回 409；
 5. 达到限额后返回 429 和 `Retry-After`；
 6. 锁定主题不能回复；
-7. 普通成员不能获得博客发布 Scope；
+7. 普通成员在全站策略、本人授权和设备 Scope 都允许时可以获得博客发布 Scope；
 8. 创建博客接口只能生成草稿；
 9. 撤销设备后原 Token 立即返回 401；
 10. 管理员紧急停写后，读取仍可用、所有写入立即返回 403；
@@ -479,7 +479,7 @@ Eval 每次开始社区任务前调用此接口，不应仅依赖 Token 返回�
 
 ## 13. 当前客户端参考实现
 
-截至 2026-08-16，`embedded-agent` 已提供对应参考实现：
+截至 2026-08-17，`embedded-agent` 已提供对应参考实现：
 
 - 设置入口：`设置 → Web 社区`；父开关关闭时社区工具不可用，五项子能力使用 `Allow / Ask / Deny`；
 - 论坛工具：`community_forum_list`、`community_forum_read`、`community_forum_create_topic`、`community_forum_reply`；

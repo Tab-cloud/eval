@@ -10,10 +10,10 @@ import { AgentCommunityPolicyView, type AgentCommunityAction, type AgentCommunit
 
 type AdminUser = { id: string; email?: string; phoneE164?: string | null; displayName: string; role: "admin" | "member" };
 type Snapshot = {
-  metrics: { users: number; activeUsers: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; blogPosts: number; forumTopics: number; forumReplies: number };
+  metrics: { users: number; activeUsers: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; blogPosts: number; forumTopics: number; forumReplies: number; downloads: number; downloadsLast7Days: number };
   readiness: { users: boolean; identity: boolean; content: boolean; artifacts: boolean; releases: boolean; billing: boolean };
   users: Array<{ id: string; username?: string | null; email?: string | null; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
-  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; signatureVerifiedAt?: number; signatureKeyId?: string; embeddedVersion?: string | null; productName?: string | null; versionSource?: string | null; platform: string; architecture: string; status: string; createdAt: number }>;
+  artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; signatureVerifiedAt?: number; signatureKeyId?: string; embeddedVersion?: string | null; productName?: string | null; versionSource?: string | null; platform: string; architecture: string; status: string; createdAt: number; downloadCount: number; downloadsLast7Days: number; lastDownloadedAt?: number | null }>;
   releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
   plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
@@ -118,6 +118,7 @@ function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (modu
   const score = Math.round(completed / readiness.length * 100);
   const stats: Array<[string, string]> = [
     [compactNumber(data.metrics.activeUsers), "活动用户"],
+    [compactNumber(data.metrics.downloads), "软件下载"],
     [compactNumber(data.metrics.artifacts), "工具产物"],
     [compactNumber(data.metrics.publishedReleases), "公开版本"],
     [compactNumber(data.metrics.blogPosts + data.metrics.forumTopics + data.metrics.forumReplies), "社区内容"],
@@ -140,7 +141,7 @@ function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (modu
 }
 
 function UsersView({ data, busy, action }: ViewProps) {
-  return <div className="admin-module"><AdminForm title="创建用户账号" note="普通用户可自行注册；此处用于人工创建账号或增加管理员。管理员必须设置唯一用户名和至少 12 位初始密码。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("create_user",Object.fromEntries(f),"用户账号已创建。");event.currentTarget.reset();}}><input name="displayName" placeholder="姓名" required/><input name="email" type="email" placeholder="name@example.com" required/><input name="username" placeholder="管理员用户名（仅管理员必填）" pattern="[a-z0-9][a-z0-9._-]{2,31}"/><input name="password" type="password" placeholder="管理员初始密码（至少 12 位）" minLength={12} maxLength={128}/><select name="role" defaultValue="member"><option value="member">普通用户</option><option value="admin">管理员</option></select><button disabled={busy}>创建账号 <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["用户","状态","角色","最近登录","操作"]}>{data.users.map(user=><article key={user.id}><div><b>{user.displayName}</b><small>{user.username ? `@${user.username}` : user.email ?? user.phoneE164 ?? "未绑定登录身份"}{user.username && user.email ? ` · ${user.email}` : ""}</small></div><span className={`admin-status ${user.status}`}><i/>{user.status === "active" ? "正常" : "已停用"}</span><select defaultValue={user.role} onChange={event=>void action("update_user",{id:user.id,status:user.status,role:event.target.value},"用户角色已更新。")}><option value="member">普通用户</option><option value="admin">管理员</option></select><code>{user.lastLoginAt ? new Date(user.lastLoginAt*1000).toLocaleDateString("zh-CN") : "尚未登录"}</code><button onClick={()=>void action("update_user",{id:user.id,role:user.role,status:user.status === "active" ? "disabled" : "active"},user.status === "active" ? "用户已停用。" : "用户已启用。")} disabled={busy}>{user.status === "active" ? "停用" : "启用"}</button></article>)}</AdminLedger></div>;
+  return <div className="admin-module"><AdminForm title="创建用户账号" note="普通用户可自行注册；此处用于人工创建账号或增加管理员。管理员用户名仅支持 3–32 位英文字母和数字，并需设置至少 12 位初始密码。"><form onSubmit={event=>{event.preventDefault();const f=new FormData(event.currentTarget);void action("create_user",Object.fromEntries(f),"用户账号已创建。");event.currentTarget.reset();}}><input name="displayName" placeholder="姓名" required/><input name="email" type="email" placeholder="name@example.com" required/><input name="username" placeholder="管理员用户名：3–32 位英文字母或数字" pattern="[A-Za-z0-9]{3,32}" title="仅支持 3–32 位英文字母和数字" autoCapitalize="none" spellCheck={false}/><input name="password" type="password" placeholder="管理员初始密码（至少 12 位）" minLength={12} maxLength={128}/><select name="role" defaultValue="member"><option value="member">普通用户</option><option value="admin">管理员</option></select><button disabled={busy}>创建账号 <Icon name="arrow"/></button></form></AdminForm><AdminLedger headings={["用户","状态","角色","最近登录","操作"]}>{data.users.map(user=><article key={user.id}><div><b>{user.displayName}</b><small>{user.username ? `@${user.username}` : user.email ?? user.phoneE164 ?? "未绑定登录身份"}{user.username && user.email ? ` · ${user.email}` : ""}</small></div><span className={`admin-status ${user.status}`}><i/>{user.status === "active" ? "正常" : "已停用"}</span><select defaultValue={user.role} onChange={event=>void action("update_user",{id:user.id,status:user.status,role:event.target.value},"用户角色已更新。")}><option value="member">普通用户</option><option value="admin">管理员</option></select><code>{user.lastLoginAt ? new Date(user.lastLoginAt*1000).toLocaleDateString("zh-CN") : "尚未登录"}</code><button onClick={()=>void action("update_user",{id:user.id,role:user.role,status:user.status === "active" ? "disabled" : "active"},user.status === "active" ? "用户已停用。" : "用户已启用。")} disabled={busy}>{user.status === "active" ? "停用" : "启用"}</button></article>)}</AdminLedger></div>;
 }
 
 function PhoneBindingPanel({ data, busy, action }: ViewProps) {
@@ -184,9 +185,15 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
     <section className={`release-current ${currentRelease ? "is-live" : "is-empty"}`}>
       <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个签名版本后，新用户下载与老用户升级会在这里汇合。"}</small></div>
       <div className="release-current-files">
-        <article className={currentArtifact ? "ready primary" : "missing"}><span>WINDOWS INSTALL / EXE</span><b>{currentArtifact ? currentArtifact.fileName : "EXE 未提供"}</b><small>{currentArtifact ? `${formatBytes(currentArtifact.sizeBytes)} · SHA256 ${currentArtifact.sha256.slice(0, 12)}…` : "当前还没有可公开下载的安装包"}</small>{currentArtifact ? <a href={`/api/v1/downloads/${currentArtifact.id}`}>下载最新 EXE<Icon name="download"/></a> : <i/>}</article>
+        <article className={currentArtifact ? "ready primary" : "missing"}><span>WINDOWS INSTALL / EXE</span><b>{currentArtifact ? currentArtifact.fileName : "EXE 未提供"}</b><small>{currentArtifact ? `${formatBytes(currentArtifact.sizeBytes)} · SHA256 ${currentArtifact.sha256.slice(0, 12)}…` : "当前还没有可公开下载的安装包"}</small><small>{currentArtifact ? `累计公开下载 ${compactNumber(currentArtifact.downloadCount)} 次 · 近 7 天 ${compactNumber(currentArtifact.downloadsLast7Days)} 次` : "下载统计将在版本公开后开始记录"}</small>{currentArtifact ? <a href={`/api/admin/artifacts/${currentArtifact.id}`}>内部下载<Icon name="download"/></a> : <i/>}</article>
       </div>
       {currentRelease && <button className="release-rollback" disabled={busy} onClick={()=>void action("set_release_status",{id:currentRelease.id,status:"draft"},"当前版本已停止公开分发。")}>停止公开分发</button>}
+    </section>
+
+    <section className="release-download-stats" aria-label="软件下载统计">
+      <article><span>TOTAL DOWNLOADS</span><strong>{compactNumber(data.metrics.downloads)}</strong><small>全部公开 EXE 累计下载请求</small></article>
+      <article><span>LAST 7 DAYS</span><strong>{compactNumber(data.metrics.downloadsLast7Days)}</strong><small>最近 7 个 UTC 自然日</small></article>
+      <article><span>LATEST DOWNLOAD</span><strong>{currentArtifact?.lastDownloadedAt ? new Date(currentArtifact.lastDownloadedAt * 1000).toLocaleDateString("zh-CN") : "—"}</strong><small>{currentArtifact?.lastDownloadedAt ? "当前稳定版本最近下载日期" : "尚无公开下载记录"}</small></article>
     </section>
 
     <section className="release-delivery-paths">

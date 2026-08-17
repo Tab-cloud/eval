@@ -23,7 +23,7 @@ const controls: Array<{ flag: keyof Omit<Settings, "enabled">; scope: Scope; lab
   { flag: "allowForumTopicCreate", scope: "community.forum.topic.create", label: "创建论坛主题", detail: "允许以你的账号发布新主题。" },
   { flag: "allowForumReplyCreate", scope: "community.forum.reply.create", label: "回复论坛主题", detail: "允许以你的账号发布公开回复。" },
   { flag: "allowBlogDraftCreate", scope: "community.blog.draft.create", label: "创建和更新博客草稿", detail: "草稿不会自动公开。" },
-  { flag: "allowBlogPublish", scope: "community.blog.publish", label: "自动发布博客", detail: "仅管理员账号可以开启。" },
+  { flag: "allowBlogPublish", scope: "community.blog.publish", label: "自动发布博客", detail: "允许发布你自己的 Eval 博客草稿。" },
 ];
 
 export function CommunitySettings({ notify }: { notify: (message: string) => void }) {

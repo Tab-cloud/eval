@@ -110,6 +110,7 @@ test("admin has a dedicated username login that never grants normal users contro
   assert.match(core, /WHERE lower\(u\.username\) = lower\(\?\)/);
   assert.match(core, /verifyPassword/);
   assert.match(store, /createPasswordHash/);
+  assert.match(store, /isValidNewUsername/);
   assert.match(schema, /username: text\("username"\)/);
   assert.match(migration, /ADD COLUMN "username" text/);
   assert.match(migration, /users_username_uq/);
@@ -152,11 +153,41 @@ test("published downloads require a real stored artifact", async () => {
   assert.match(catalog, /r\.status = 'published'/);
   assert.match(catalog, /r\.channel = 'stable'/);
   assert.match(download, /getArtifact/);
+  assert.match(download, /recordArtifactDownload/);
+  assert.match(download, /Cache-Control", "private, no-store"/);
   assert.match(upload, /stageArtifactReplacement/);
   assert.match(upload, /\.exe/);
   assert.doesNotMatch(upload, /\.msi/i);
   assert.match(upload, /SHA-256/);
   assert.doesNotMatch(upload, /\.dmg|\.deb|\.rpm/);
+});
+
+test("public EXE downloads are aggregated by artifact and UTC day for the admin dashboard", async () => {
+  const [stats, schema, migration, store, adminUi, css] = await Promise.all([
+    source("../app/releases/download-stats.ts"),
+    source("../db/schema.ts"),
+    source("../drizzle/0017_graceful_cardiac.sql"),
+    source("../app/admin/store.ts"),
+    source("../app/admin/AdminConsole.tsx"),
+    source("../app/admin/style.css"),
+  ]);
+  assert.match(stats, /ON CONFLICT \(artifact_id, download_date\) DO UPDATE/);
+  assert.match(stats, /download_count = artifact_download_stats\.download_count \+ 1/);
+  assert.match(stats, /toISOString\(\)\.slice\(0, 10\)/);
+  assert.match(schema, /artifactDownloadStats/);
+  assert.match(schema, /artifact_download_stats_pk/);
+  assert.match(migration, /CREATE TABLE "artifact_download_stats"/);
+  assert.match(migration, /ON DELETE cascade/);
+  assert.match(store, /downloadsLast7DaysStart/);
+  assert.match(store, /SUM\(d\.download_count\)/);
+  assert.match(store, /downloadsLast7Days/);
+  assert.match(adminUi, /软件下载/);
+  assert.match(adminUi, /TOTAL DOWNLOADS/);
+  assert.match(adminUi, /累计公开下载/);
+  assert.match(adminUi, /\/api\/admin\/artifacts\/\$\{currentArtifact\.id\}/);
+  assert.doesNotMatch(adminUi, /\/api\/v1\/downloads\/\$\{currentArtifact\.id\}/);
+  assert.match(css, /\.release-download-stats/);
+
 });
 
 test("LLM API relay routes, storage, settings, and sales copy are structurally removed", async () => {
@@ -312,6 +343,8 @@ test("locale selects phone SMS and the configured external identity entry points
   assert.match(login, /使用 GitHub 登录/);
   assert.match(login, /手机号验证/);
   assert.match(login, /注册账号/);
+  assert.match(login, /pattern="\[A-Za-z0-9\]\{3,32\}"/);
+  assert.match(login, /3–32 位英文字母或数字/);
   assert.match(login, /账号密码/);
   assert.match(login, /id="login-password"/);
   assert.match(login, /id="register-password"/);
@@ -335,11 +368,12 @@ test("locale selects phone SMS and the configured external identity entry points
 });
 
 test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accounts, and database rate limits", async () => {
-  const [provider, settings, sms, authCore, schema, phoneStatusRoute, sendRoute, loginRoute, passwordRoute, registrationRoute] = await Promise.all([
+  const [provider, settings, sms, authCore, usernamePolicy, schema, phoneStatusRoute, sendRoute, loginRoute, passwordRoute, registrationRoute] = await Promise.all([
     source("../app/auth/aliyun-sms.ts"),
     source("../app/auth/provider-settings.ts"),
     source("../app/auth/sms.ts"),
     source("../app/auth/core.ts"),
+    source("../app/auth/username.ts"),
     source("../db/schema.ts"),
     source("../app/api/auth/phone/status/route.ts"),
     source("../app/api/auth/sms/send/route.ts"),
@@ -381,6 +415,17 @@ test("SMS verification uses Alibaba Cloud, purpose-bound codes, completed accoun
   assert.match(authCore, /hasCompleteChineseLocalIdentity/);
   assert.match(authCore, /auth\.account\.complete/);
   assert.match(authCore, /phoneOwner\.username && phoneOwner\.credential_user_id/);
+  assert.match(authCore, /isValidNewUsername/);
+  assert.match(usernamePolicy, /\^\[A-Za-z0-9\]\{3,32\}\$/);
+  assert.match(registrationRoute, /isValidNewUsername/);
+  assert.doesNotMatch(registrationRoute, /\\p\{L\}|_\.\-/);
+  const usernameModule = await import("../app/auth/username.ts");
+  for (const username of ["abc", "User2026", "A1B2C3", "x".repeat(32)]) {
+    assert.equal(usernameModule.isValidNewUsername(username), true, `${username} should be accepted`);
+  }
+  for (const username of ["ab", "x".repeat(33), "用户名", "user_name", "user.name", "user-name", "user name", "test@example.com"]) {
+    assert.equal(usernameModule.isValidNewUsername(username), false, `${username} should be rejected`);
+  }
   assert.match(passwordRoute, /verifySmsCode\("password_change"/);
   assert.match(passwordRoute, /replacePassword/);
   assert.doesNotMatch(passwordRoute, /currentPassword|authenticateUsername/);
@@ -466,6 +511,8 @@ test("personal center exposes locale-specific identities and binds them to one u
   assert.match(accountRoute, /accountIdentitySnapshot/);
   assert.match(localRoute, /verifySmsCode\("phone_bind"/);
   assert.match(localRoute, /bindChineseLocalIdentity/);
+  assert.match(localRoute, /isValidNewUsername/);
+  assert.match(dashboard, /pattern="\[A-Za-z0-9\]\{3,32\}"/);
   assert.match(usernameRoute, /authenticateUsername/);
   assert.match(usernameRoute, /user\.accountLocale !== "zh"/);
   assert.match(authCore, /auth\.local_identity\.bind/);
@@ -879,7 +926,7 @@ test("Eval community automation APIs enforce four-layer consent, idempotency, li
   for (const scope of ["community.forum.read", "community.forum.topic.create", "community.forum.reply.create", "community.blog.draft.create", "community.blog.publish"]) {
     assert.match(permissions, new RegExp(scope.replaceAll(".", "\\.")));
   }
-  assert.match(permissions, /scope !== "community\.blog\.publish" \|\| role === "admin"/);
+  assert.match(permissions, /role === "member" \|\| role === "admin"/);
   assert.match(policy, /policyAllows\(policy, scope\).*userAllows\(settings, scope\).*roleAllowsCommunityScope/s);
   assert.match(policy, /context\.session\.grantedScopes\.includes\(scope\)/);
   assert.match(policy, /site_policy_denied/);
@@ -945,7 +992,10 @@ test("Eval community automation APIs enforce four-layer consent, idempotency, li
 
   const permissionModule = await import("../app/community/permissions.ts");
   assert.deepEqual(permissionModule.sanitizeCommunityScopes(["community.forum.read", "unknown", "community.forum.read"]), ["community.forum.read"]);
-  assert.equal(permissionModule.roleAllowsCommunityScope("member", "community.blog.publish"), false);
+  assert.doesNotMatch(policy, /user\.role === "admin" && input\.allowBlogPublish/);
+  assert.match(policy, /allowBlogPublish: input\.allowBlogPublish === true/);
+  assert.match(await source("../app/ui/CommunitySettings.tsx"), /允许发布你自己的 Eval 博客草稿/);
+  assert.equal(permissionModule.roleAllowsCommunityScope("member", "community.blog.publish"), true);
   assert.equal(permissionModule.roleAllowsCommunityScope("admin", "community.blog.publish"), true);
 
   const attributionModule = await import("../app/content/attribution.ts");

@@ -56,7 +56,7 @@ GITHUB_OAUTH_CLIENT_ID=replace-with-oauth-app-client-id
 GITHUB_OAUTH_CLIENT_SECRET=replace-with-oauth-app-client-secret
 ```
 
-`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `admin` 角色的账号；公开注册和第三方首次登录只创建 `member`，不会授予管理员权限。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
+`EVAL_ENABLE_PASSWORD_LOGIN` 仅控制普通用户的旧邮箱密码接口，不影响新的中文用户名密码登录。新建用户名必须为 3–32 位 ASCII 英文字母或数字，服务端按大小写不敏感方式检查唯一性；历史用户名仍可继续登录。管理员专用入口固定为 `https://eval.zailink.space/admin/auth/login`，生产数据库必须提前创建具有唯一用户名、密码凭据以及 `admin` 角色的账号；公开注册和第三方首次登录只创建 `member`，不会授予管理员权限。不要在生产环境启用示例账号，部署密码也不得写入仓库或 systemd 服务文件。
 
 桌面账号绑定复用 `APP_ORIGIN` 指定的 HTTPS 站点，并通过 `/device` 完成浏览器确认。部署新版本前必须执行数据库迁移；当前账号体系还要求 `users.account_locale`、可空邮箱、大小写不敏感的唯一用户名，以及 OAuth `intent`/`link_user_id` 字段。不得将桌面令牌、设备码或会话明文写入日志。
 

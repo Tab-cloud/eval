@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, index, integer, jsonb, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
 
 const epoch = (name: string) => bigint(name, { mode: "number" });
 const timestamps = {
@@ -87,6 +87,16 @@ export const agentArtifacts = pgTable("agent_artifacts", {
 }, (table) => [
   uniqueIndex("agent_artifacts_object_key_uq").on(table.objectKey),
   uniqueIndex("agent_artifacts_embedded_version_uq").on(table.embeddedVersion),
+]);
+
+export const artifactDownloadStats = pgTable("artifact_download_stats", {
+  artifactId: text("artifact_id").notNull().references(() => agentArtifacts.id, { onDelete: "cascade" }),
+  downloadDate: text("download_date").notNull(),
+  downloadCount: bigint("download_count", { mode: "number" }).notNull().default(0),
+  lastDownloadedAt: epoch("last_downloaded_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.artifactId, table.downloadDate], name: "artifact_download_stats_pk" }),
+  index("artifact_download_stats_date_idx").on(table.downloadDate),
 ]);
 
 export const artifactCleanupQueue = pgTable("artifact_cleanup_queue", {

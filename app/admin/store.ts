@@ -1,6 +1,7 @@
 import type { PostgresDatabase } from "../../db/postgres";
 import { authDatabase, createPasswordHash, ensureAuthSchema, type AuthenticatedUser } from "../auth/core";
 import { normalizeChinesePhone } from "../auth/phone";
+import { isValidNewUsername } from "../auth/username";
 import { identityProviderSettings, providerSettingsSnapshot, saveProviderSettings } from "../auth/provider-settings";
 import { displayBlogAuthorName } from "../content/attribution";
 import { contentSlug, ensureContentSchema, validateBlogDraftInput } from "../content/store";
@@ -34,6 +35,8 @@ async function initializeAdminSchema() {
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS architecture text NOT NULL DEFAULT 'x86_64'",
     "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_embedded_version_uq ON agent_artifacts (embedded_version)",
+    "CREATE TABLE IF NOT EXISTS artifact_download_stats (artifact_id text NOT NULL REFERENCES agent_artifacts(id) ON DELETE CASCADE, download_date text NOT NULL, download_count bigint NOT NULL DEFAULT 0, last_downloaded_at bigint NOT NULL, CONSTRAINT artifact_download_stats_pk PRIMARY KEY (artifact_id, download_date))",
+    "CREATE INDEX IF NOT EXISTS artifact_download_stats_date_idx ON artifact_download_stats (download_date)",
     "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_version_uq ON release_versions (version, channel)",
     "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
@@ -65,9 +68,21 @@ async function drainArtifactCleanupQueue(db: PostgresDatabase) {
 export async function adminSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
+  const downloadsLast7DaysStart = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
   const [users, artifacts, releases, plans, audits, blogPosts, forumTopics, forumReplies] = await Promise.all([
     db.prepare("SELECT id, username, email, phone_e164 AS phoneE164, display_name AS displayName, status, role, last_login_at AS lastLoginAt FROM users ORDER BY created_at DESC").all(),
-    db.prepare("SELECT id, file_name AS fileName, label, format, size_bytes AS sizeBytes, sha256, signature_verified_at IS NOT NULL AS signed, signature_verified_at AS signatureVerifiedAt, signature_key_id AS signatureKeyId, embedded_version AS embeddedVersion, product_name AS productName, version_source AS versionSource, platform, architecture, status, created_at AS createdAt FROM agent_artifacts WHERE format = 'NSIS' ORDER BY created_at DESC").all(),
+    db.prepare(`SELECT a.id, a.file_name AS fileName, a.label, a.format, a.size_bytes AS sizeBytes, a.sha256,
+      a.signature_verified_at IS NOT NULL AS signed, a.signature_verified_at AS signatureVerifiedAt,
+      a.signature_key_id AS signatureKeyId, a.embedded_version AS embeddedVersion, a.product_name AS productName,
+      a.version_source AS versionSource, a.platform, a.architecture, a.status, a.created_at AS createdAt,
+      COALESCE(SUM(d.download_count), 0) AS downloadCount,
+      COALESCE(SUM(d.download_count) FILTER (WHERE d.download_date >= ?), 0) AS downloadsLast7Days,
+      MAX(d.last_downloaded_at) AS lastDownloadedAt
+      FROM agent_artifacts a
+      LEFT JOIN artifact_download_stats d ON d.artifact_id = a.id
+      WHERE a.format = 'NSIS'
+      GROUP BY a.id
+      ORDER BY a.created_at DESC`).bind(downloadsLast7DaysStart).all(),
     db.prepare(`SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName,
       r.notes, r.mandatory, r.status, r.published_at AS publishedAt
       FROM release_versions r
@@ -101,7 +116,12 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       action, resource_type AS "resourceType", resource_id AS "resourceId", status, reason_code AS "reasonCode",
       created_at AS "createdAt" FROM agent_community_actions ORDER BY created_at DESC LIMIT 100`).all(),
   ]);
-  const artifactRows = artifacts.results as Array<Record<string, unknown>>;
+  const artifactRows = (artifacts.results as Array<Record<string, unknown>>).map(artifact => ({
+    ...artifact,
+    downloadCount: Number(artifact.downloadCount ?? 0),
+    downloadsLast7Days: Number(artifact.downloadsLast7Days ?? 0),
+    lastDownloadedAt: artifact.lastDownloadedAt == null ? null : Number(artifact.lastDownloadedAt),
+  })) as Array<Record<string, unknown>>;
   const releaseRows = releases.results as Array<Record<string, unknown>>;
   const planRows = plans.results as Array<Record<string, unknown>>;
   const blogPostRows = (blogPosts.results as Array<Record<string, unknown>>).map(post => ({
@@ -112,6 +132,8 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion && item.signatureKeyId === signingSettings?.publicKeyId).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
   const activePlans = planRows.filter(item => item.status === "active").length;
+  const downloads = artifactRows.reduce((total, item) => total + Number(item.downloadCount ?? 0), 0);
+  const downloadsLast7Days = artifactRows.reduce((total, item) => total + Number(item.downloadsLast7Days ?? 0), 0);
   return {
     currentUser: user,
     metrics: {
@@ -124,6 +146,8 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       blogPosts: blogPostRows.length,
       forumTopics: forumTopics.results.length,
       forumReplies: forumReplies.results.length,
+      downloads,
+      downloadsLast7Days,
     },
     readiness: {
       users: activeUsers > 0,
@@ -134,7 +158,7 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       billing: activePlans > 0,
     },
     users: userRows,
-    artifacts: artifacts.results,
+    artifacts: artifactRows,
     releases: releases.results,
     plans: plans.results,
     audits: audits.results,
@@ -161,8 +185,8 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     const username = text(input.username).toLowerCase();
     const password = text(input.password);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || displayName.length < 2) throw new Error("请填写有效邮箱和姓名。");
-    if (role === "admin" && (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username) || password.length < 12 || password.length > 128)) {
-      throw new Error("管理员账号需要 3–32 位用户名和至少 12 位初始密码。");
+    if (role === "admin" && (!isValidNewUsername(username) || password.length < 12 || password.length > 128)) {
+      throw new Error("管理员用户名仅支持 3–32 位英文字母和数字，并需要 12–128 位初始密码。");
     }
     const id = `usr_${crypto.randomUUID()}`;
     const statements = [
