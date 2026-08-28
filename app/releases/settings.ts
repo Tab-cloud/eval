@@ -1,9 +1,20 @@
 import { authDatabase } from "../auth/core";
 import { validateUpdaterPublicKey } from "./signature";
 
-const SETTINGS_ID = "global";
+export type UpdaterPlatform = "windows" | "darwin";
+
+const SETTINGS_IDS: Record<UpdaterPlatform, UpdaterPlatform> = {
+  windows: "windows",
+  darwin: "darwin",
+};
+const LEGACY_WINDOWS_SETTINGS_ID = "global";
+const ENVIRONMENT_KEYS: Record<UpdaterPlatform, string> = {
+  windows: "EVAL_UPDATER_PUBLIC_KEY",
+  darwin: "EVAL_MACOS_UPDATER_PUBLIC_KEY",
+};
 
 export type ReleaseSigningSettings = {
+  platform: UpdaterPlatform;
   publicKey: string;
   publicKeyId: string;
   source: "database" | "environment";
@@ -16,13 +27,20 @@ type ReleaseSettingsRow = {
   updated_at: number;
 };
 
-export async function releaseSigningSettings(): Promise<ReleaseSigningSettings | null> {
-  const row = await authDatabase().prepare(`
-    SELECT updater_public_key, updater_public_key_id, updated_at
-    FROM release_settings WHERE id = ?
-  `).bind(SETTINGS_ID).first<ReleaseSettingsRow>();
+export async function releaseSigningSettings(platform: UpdaterPlatform = "windows"): Promise<ReleaseSigningSettings | null> {
+  const row = platform === "windows"
+    ? await authDatabase().prepare(`
+        SELECT updater_public_key, updater_public_key_id, updated_at
+        FROM release_settings WHERE id IN (?, ?)
+        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1
+      `).bind(SETTINGS_IDS.windows, LEGACY_WINDOWS_SETTINGS_ID, SETTINGS_IDS.windows).first<ReleaseSettingsRow>()
+    : await authDatabase().prepare(`
+        SELECT updater_public_key, updater_public_key_id, updated_at
+        FROM release_settings WHERE id = ?
+      `).bind(SETTINGS_IDS.darwin).first<ReleaseSettingsRow>();
   if (row) {
     return {
+      platform,
       publicKey: row.updater_public_key,
       publicKeyId: row.updater_public_key_id,
       source: "database",
@@ -30,11 +48,12 @@ export async function releaseSigningSettings(): Promise<ReleaseSigningSettings |
     };
   }
 
-  const environmentKey = process.env.EVAL_UPDATER_PUBLIC_KEY?.trim();
+  const environmentKey = process.env[ENVIRONMENT_KEYS[platform]]?.trim();
   if (!environmentKey) return null;
   try {
     const validated = await validateUpdaterPublicKey(environmentKey);
     return {
+      platform,
       publicKey: validated.publicKey,
       publicKeyId: validated.publicKeyId,
       source: "environment",
@@ -45,15 +64,17 @@ export async function releaseSigningSettings(): Promise<ReleaseSigningSettings |
   }
 }
 
-export const publicReleaseSigningSettings = releaseSigningSettings;
+export async function publicReleaseSigningSettings(platform: UpdaterPlatform = "windows") {
+  return releaseSigningSettings(platform);
+}
 
-export async function requireReleaseSigningSettings() {
-  const settings = await releaseSigningSettings();
-  if (!settings) throw new Error("请先在版本发布页面配置更新签名公钥。");
+export async function requireReleaseSigningSettings(platform: UpdaterPlatform = "windows") {
+  const settings = await releaseSigningSettings(platform);
+  if (!settings) throw new Error(`请先在版本发布页面配置${platform === "darwin" ? "macOS" : "Windows"}更新签名公钥。`);
   return settings;
 }
 
-export async function saveReleaseSigningSettings(updatedBy: string, value: unknown) {
+export async function saveReleaseSigningSettings(updatedBy: string, platform: UpdaterPlatform, value: unknown) {
   const input = typeof value === "string" ? value : "";
   if (input.length > 8_192) throw new Error("更新签名公钥内容过长。");
   const validated = await validateUpdaterPublicKey(input);
@@ -67,12 +88,13 @@ export async function saveReleaseSigningSettings(updatedBy: string, value: unkno
       updater_public_key_id=excluded.updater_public_key_id,
       updated_by=excluded.updated_by,
       updated_at=excluded.updated_at
-  `).bind(SETTINGS_ID, validated.publicKey, validated.publicKeyId, updatedBy, now, now).run();
-  return releaseSigningSettings();
+  `).bind(SETTINGS_IDS[platform], validated.publicKey, validated.publicKeyId, updatedBy, now, now).run();
+  return releaseSigningSettings(platform);
 }
 
 export function releaseSettingsSnapshot(settings: ReleaseSigningSettings | null) {
   return {
+    platform: settings?.platform ?? null,
     configured: Boolean(settings),
     updaterPublicKey: settings?.publicKey ?? "",
     updaterPublicKeyId: settings?.publicKeyId ?? "",

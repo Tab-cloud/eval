@@ -48,7 +48,7 @@ export async function createDesktopAuthorization(
   input: { deviceName?: unknown; clientVersion?: unknown; requestedScopes?: unknown },
 ): Promise<DesktopAuthorization> {
   await ensureAgentCommunitySchema();
-  const deviceName = boundedText(input.deviceName, 80, "Windows 设备");
+  const deviceName = boundedText(input.deviceName, 80, "桌面设备");
   const clientVersion = boundedText(input.clientVersion, 32, "unknown");
   const requestedScopes = sanitizeCommunityScopes(input.requestedScopes);
   const sourceHash = await sha256(requestSource(request));

@@ -55,9 +55,9 @@ npm run db:migrate
 
 ## 安装包文件
 
-管理员上传真实 `.exe` 及其同名 `.sig`。安装包保存于 `ARTIFACT_STORAGE_PATH`，生产环境应将该目录放在独立云盘或共享文件系统中，并纳入备份。
+管理员上传 Windows NSIS `.exe` 和 macOS `.dmg`。macOS DMG 没有 Apple Developer ID、没有 `.sig` 也可以直接上传和公开下载；如需 Mac 自动更新，再上传 Tauri 生成的 `.app.tar.gz` 与同名 `.sig`。Windows 与 Mac 更新包分别使用各自平台的 Tauri 私钥签名。安装包保存于 `ARTIFACT_STORAGE_PATH`，生产环境应将该目录放在独立云盘或共享文件系统中，并纳入备份。
 
-管理员先在“版本发布”页面粘贴 `updater.pub` 公钥内容；未保存数据库配置时，服务器兼容使用 `EVAL_UPDATER_PUBLIC_KEY` 作为后备。系统使用该公钥对 EXE 和签名进行 Minisign 验证，并从 PE 元数据读取内部产品版本。全站同一内部版本只保留一条产物记录和一个物理文件：重新上传会在验签后原位替换，SHA-256 未变化时不重复写盘。每个渠道只允许一个公开版本：已有同版本草稿会直接更新并发布，新版本发布后旧版本转为私有保留以支持审计和回滚；新用户只能下载最新稳定版 EXE，已安装客户端通过更新接口取得同一最新版本。
+管理员在“版本发布”页面分别配置 Windows 与 macOS 的 `updater.pub`；未保存数据库配置时，服务器分别兼容 `EVAL_UPDATER_PUBLIC_KEY` 和 `EVAL_MACOS_UPDATER_PUBLIC_KEY` 环境变量后备。系统从 Windows PE 或 macOS App Bundle 读取内部版本，并使用产物所属平台的公钥验签。产物按“版本、平台、架构、格式”唯一保存；重新上传会原位替换，SHA-256 未变化时不重复写盘。macOS 只上传 DMG 即可发布和下载；同版本 `.app.tar.gz` 与 `.sig` 上传后，`darwin` 客户端即可自动升级。未使用 Developer ID 签名和 Apple 公证的 DMG 可能被 Gatekeeper 拦截，用户首次打开时需要手动确认。
 
 ## 主要入口
 

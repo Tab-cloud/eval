@@ -148,6 +148,20 @@
       "when": 1786958630113,
       "tag": "0020_account_merge_tombstones",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787572085849,
+      "tag": "0021_bright_lady_vermin",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787910070810,
+      "tag": "0022_steep_doorman",
+      "breakpoints": true
     }
   ]
 }

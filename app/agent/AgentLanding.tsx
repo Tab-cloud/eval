@@ -7,10 +7,11 @@ import { useEffect, useRef, useState } from "react";
 type PublicRelease = {
   id: string;
   name: string;
+  nameEn: string;
   version: string;
   platform: string;
-  format: "NSIS";
-  fileExtension: ".exe";
+  format: "NSIS" | "DMG";
+  fileExtension: ".exe" | ".dmg";
   available: boolean;
   downloadUrl: string | null;
   size: number | null;
@@ -55,7 +56,7 @@ export function AgentLanding() {
   const rootRef = useRef<HTMLDivElement>(null);
   const touchStartRef = useRef<number | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark");
-  const [locale, setLocale] = useState<"zh" | "en">(() => typeof localStorage !== "undefined" && localStorage.getItem("eval-locale") === "en" ? "en" : "zh");
+  const [locale, setLocale] = useState<"zh" | "en">(() => typeof window !== "undefined" && typeof window.localStorage?.getItem === "function" && window.localStorage.getItem("eval-locale") === "en" ? "en" : "zh");
   const [activeRuntime, setActiveRuntime] = useState(0);
   const [downloads, setDownloads] = useState<PublicRelease[]>([]);
   const [downloadsLoading, setDownloadsLoading] = useState(true);
@@ -189,13 +190,13 @@ export function AgentLanding() {
         <div className="release-list" aria-live="polite">
           {downloadsLoading ? <div className="release-loading">{isZh ? "正在读取发布目录" : "Reading release catalog"}<i/><i/><i/></div> : downloads.map((release, index) => <article className="is-standard" key={release.id}>
             <div className="release-index">0{index + 1}</div>
-            <div className="release-name"><small>{isZh ? "Windows 安装" : "WINDOWS INSTALL"} · {release.platform}</small><h3>{isZh ? "Eval Agent Windows 安装程序" : "Eval Agent Windows Installer"}</h3></div>
+            <div className="release-name"><small>{release.format === "DMG" ? (isZh ? "macOS 安装" : "MACOS INSTALL") : (isZh ? "Windows 安装" : "WINDOWS INSTALL")} · {release.platform}</small><h3>{isZh ? release.name : release.nameEn}</h3></div>
             <div className="release-spec"><span>{release.format}</span><span>{release.fileExtension}</span><span>v{release.version}</span></div>
             {release.available && release.downloadUrl ? <a className="release-action is-ready" href={release.downloadUrl} download>{isZh ? `下载 ${release.fileExtension.toUpperCase()}` : `Download ${release.fileExtension.toUpperCase()}`}<i className="download-arrow" aria-hidden="true"/></a> : <span className="release-action is-pending" aria-disabled="true"><i/>{isZh ? "等待管理员上传" : "Awaiting administrator upload"}</span>}
           </article>)}
           {!downloadsLoading && downloads.length === 0 ? <div className="release-empty">{isZh ? "发布目录暂不可用" : "Release catalog is currently unavailable"}</div> : null}
         </div>
-        <div className="release-truth" data-reveal><span>LATEST STABLE RELEASE</span><p>{isZh ? "这里只提供一个最新稳定版 EXE。新用户直接下载安装，已安装客户端通过自动升级获得同一版本。" : "Only the latest stable EXE is provided. New users install it directly, while existing clients receive the same release through automatic updates."}</p></div>
+        <div className="release-truth" data-reveal><span>LATEST STABLE RELEASE</span><p>{isZh ? "这里只提供最新稳定版的 Windows EXE 与 macOS DMG。已安装客户端会按系统和芯片架构获取同一版本的签名自动更新。" : "Only the latest stable Windows EXE and macOS DMG are provided. Installed clients receive the matching signed update for their OS and architecture."}</p></div>
       </section>
 
       <section className="closing-scene">

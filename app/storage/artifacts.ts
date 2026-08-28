@@ -106,6 +106,8 @@ export async function artifactExists(objectKey: string) {
 
 function contentTypeFor(fileName: string) {
   if (fileName.toLowerCase().endsWith(".exe")) return "application/vnd.microsoft.portable-executable";
+  if (fileName.toLowerCase().endsWith(".dmg")) return "application/x-apple-diskimage";
+  if (fileName.toLowerCase().endsWith(".app.tar.gz")) return "application/gzip";
   return "application/octet-stream";
 }
 

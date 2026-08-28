@@ -9,16 +9,17 @@ import { ContentSettingsView, type ContentAdminSnapshot } from "./ContentSetting
 import { AgentCommunityPolicyView, type AgentCommunityAction, type AgentCommunityPolicy } from "./AgentCommunityPolicyView";
 
 type AdminUser = { id: string; email?: string; phoneE164?: string | null; displayName: string; role: "admin" | "member" };
+type ReleaseSettingsSnapshot = { configured: boolean; updaterPublicKey: string; updaterPublicKeyId: string; source: "database" | "environment" | "missing"; updatedAt: number | null };
 type Snapshot = {
   metrics: { users: number; activeUsers: number; artifacts: number; publishedReleases: number; activePlans: number; auditEvents: number; blogPosts: number; forumTopics: number; forumReplies: number; downloads: number; downloadsLast7Days: number };
   readiness: { users: boolean; identity: boolean; content: boolean; artifacts: boolean; releases: boolean; billing: boolean };
   users: Array<{ id: string; username?: string | null; email?: string | null; phoneE164?: string | null; displayName: string; status: string; role: string; lastLoginAt?: number }>;
   artifacts: Array<{ id: string; fileName: string; label: string; format: string; sizeBytes: number; sha256: string; signed: boolean; signatureVerifiedAt?: number; signatureKeyId?: string; embeddedVersion?: string | null; productName?: string | null; versionSource?: string | null; platform: string; architecture: string; status: string; createdAt: number; downloadCount: number; downloadsLast7Days: number; lastDownloadedAt?: number | null }>;
-  releases: Array<{ id: string; version: string; channel: string; artifactId: string; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
+  releases: Array<{ id: string; version: string; channel: string; artifactId: string; artifactIds: string[]; fileName: string; notes: string; mandatory: number; status: string; publishedAt?: number }>;
   plans: Array<{ id: string; name: string; monthlyPriceCents: number; currency: string; features: string | string[]; status: string }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId?: string; metadata?: unknown; createdAt: number; actorName: string }>;
   authSettings: AuthSettingsSnapshot;
-  releaseSettings: { configured: boolean; updaterPublicKey: string; updaterPublicKeyId: string; source: "database" | "environment" | "missing"; updatedAt: number | null };
+  releaseSettings: Record<"windows" | "darwin", ReleaseSettingsSnapshot>;
   content: ContentAdminSnapshot;
   agentCommunityPolicy: AgentCommunityPolicy;
   agentCommunityActions: AgentCommunityAction[];
@@ -75,8 +76,8 @@ export function AdminConsole({ currentUser }: { currentUser: AdminUser }) {
       const payload = await response.json() as { error?: string; artifacts?: unknown[]; replaced?: boolean; contentChanged?: boolean };
       if (!response.ok) throw new Error(payload.error ?? "上传失败。");
       form.reset(); await load(); setNotice(payload.replaced
-        ? payload.contentChanged ? "同版本安装包已完成验签并替换原文件。" : "安装包内容未变化，已复用现有文件并刷新验签信息。"
-        : `${payload.artifacts?.length ?? 0} 个安装包已完成验签并安全上传。`);
+        ? payload.contentChanged ? "同版本安装包已检查并替换原文件。" : "安装包内容未变化，已复用现有文件并刷新信息。"
+        : `${payload.artifacts?.length ?? 0} 个安装包已检查并安全上传。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "上传失败。"); }
     finally { setBusy(false); }
   };
@@ -110,7 +111,7 @@ function DashboardView({ data, onNavigate }: { data: Snapshot; onNavigate: (modu
     { key: "users", module: "users", label: "用户与管理员", detail: `${data.metrics.activeUsers} 位活跃用户`, ready: data.readiness.users },
     { key: "identity", module: "identity", label: "登录身份服务", detail: "短信、Google 或 GitHub 登录", ready: data.readiness.identity },
     { key: "content", module: "content", label: "社区与内容", detail: `${data.metrics.blogPosts + data.metrics.forumTopics} 项内容`, ready: data.readiness.content },
-    { key: "artifacts", module: "releases", label: "已签名安装包", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
+    { key: "artifacts", module: "releases", label: "可发布安装包", detail: `${data.metrics.artifacts} 个安装包`, ready: data.readiness.artifacts },
     { key: "releases", module: "releases", label: "公开升级版本", detail: `${data.metrics.publishedReleases} 个公开版本`, ready: data.readiness.releases },
     { key: "billing", module: "billing", label: "生效收费套餐", detail: `${data.metrics.activePlans} 个生效套餐`, ready: data.readiness.billing },
   ];
@@ -161,69 +162,124 @@ function PhoneBindingPanel({ data, busy, action }: ViewProps) {
   </AdminForm>;
 }
 
+function ReleaseKeyPanel({ platform, settings, busy, action }: {
+  platform: "windows" | "darwin";
+  settings: ReleaseSettingsSnapshot;
+  busy: boolean;
+  action: ViewProps["action"];
+}) {
+  const isMac = platform === "darwin";
+  const platformLabel = isMac ? "macOS" : "Windows";
+  return <section className={`release-key-config ${settings.configured ? "is-ready" : "is-missing"}`}>
+    <div className="release-key-copy">
+      <span><i/>{settings.configured ? "SIGNING KEY READY" : "SIGNING KEY REQUIRED"}</span>
+      <h2>{platformLabel} 更新签名公钥</h2>
+      <p>{isMac ? "该公钥只验证 macOS APP_TAR_GZ 自动更新包；DMG 直接下载不依赖它。" : "该公钥只验证 Windows NSIS 更新包。"} 不要在这里填写或上传签名私钥。</p>
+      <small>{settings.configured ? `${settings.source === "database" ? "管理员配置" : "环境变量后备"} · 指纹 ${settings.updaterPublicKeyId}` : `尚未配置 ${platformLabel} 更新公钥。`}</small>
+    </div>
+    <form key={`${platform}-${settings.source}-${settings.updatedAt ?? "default"}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);void action("save_release_settings",{platform,updaterPublicKey:form.get("updaterPublicKey")},`${platformLabel} 更新签名公钥已保存。`);}}>
+      <label><span>{platformLabel.toUpperCase()} MINISIGN PUBLIC KEY / updater.pub</span><textarea name="updaterPublicKey" defaultValue={settings.updaterPublicKey} placeholder={"untrusted comment: minisign public key\nRW..."} required spellCheck={false}/></label>
+      <div><small>公钥可安全保存；私钥必须永久保留在对应平台的构建机或 CI Secret。</small><button disabled={busy}>{busy ? "正在验证…" : "验证并保存公钥"}<Icon name="shield"/></button></div>
+    </form>
+  </section>;
+}
+
 function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload: (form: HTMLFormElement) => Promise<void> }) {
-  const latestArtifact = data.artifacts
-    .filter(artifact => artifact.format === "NSIS" && artifact.signed && artifact.embeddedVersion && artifact.status === "ready" && artifact.signatureKeyId === data.releaseSettings.updaterPublicKeyId)
-    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  const artifactUsesCurrentKey = (artifact: Snapshot["artifacts"][number]) => {
+    const settings = artifact.platform === "darwin" ? data.releaseSettings.darwin : data.releaseSettings.windows;
+    return artifact.format === "DMG" || (artifact.signed && artifact.signatureKeyId === settings.updaterPublicKeyId);
+  };
+  const verifiedArtifacts = data.artifacts
+    .filter(artifact => artifact.embeddedVersion && artifact.status === "ready" && artifactUsesCurrentKey(artifact))
+    .sort((left, right) => right.createdAt - left.createdAt);
+  const latestVersion = verifiedArtifacts[0]?.embeddedVersion;
+  const candidateArtifacts = latestVersion ? verifiedArtifacts.filter(artifact => artifact.embeddedVersion === latestVersion) : [];
   const publishedStableRelease = data.releases
     .filter(release => release.status === "published" && release.channel === "stable")
     .sort((left, right) => Number(right.publishedAt ?? 0) - Number(left.publishedAt ?? 0))[0];
-  const publishedArtifact = publishedStableRelease ? data.artifacts.find(artifact => artifact.id === publishedStableRelease.artifactId) : undefined;
-  const currentArtifact = publishedArtifact?.signatureKeyId === data.releaseSettings.updaterPublicKeyId ? publishedArtifact : undefined;
-  const currentRelease = currentArtifact ? publishedStableRelease : undefined;
-  const candidateDrafts = latestArtifact ? data.releases.filter(release => release.artifactId === latestArtifact.id && release.status === "draft") : [];
+  const currentArtifacts = publishedStableRelease
+    ? data.artifacts.filter(artifact => publishedStableRelease.artifactIds.includes(artifact.id) && artifactUsesCurrentKey(artifact))
+    : [];
+  const currentRelease = currentArtifacts.length ? publishedStableRelease : undefined;
+  const candidateDrafts = latestVersion ? data.releases.filter(release => release.version === latestVersion && release.status === "draft") : [];
+  const latestDownload = currentArtifacts.reduce((latest, artifact) => Math.max(latest, Number(artifact.lastDownloadedAt ?? 0)), 0);
 
   return <div className="admin-module release-center">
-    <section className={`release-key-config ${data.releaseSettings.configured ? "is-ready" : "is-missing"}`}>
-      <div className="release-key-copy"><span><i/>{data.releaseSettings.configured ? "SIGNING KEY READY" : "SIGNING KEY REQUIRED"}</span><h2>更新签名公钥</h2><p>粘贴构建目录中的 <code>updater.pub</code> 内容。该公钥用于验证 EXE 对应的签名，不要在这里填写签名私钥。</p><small>{data.releaseSettings.configured ? `${data.releaseSettings.source === "database" ? "管理员配置" : "环境变量后备"} · 指纹 ${data.releaseSettings.updaterPublicKeyId}` : "配置后才能上传、发布和分发更新包。"}</small></div>
-      <form key={`${data.releaseSettings.source}-${data.releaseSettings.updatedAt ?? "default"}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);void action("save_release_settings",{updaterPublicKey:form.get("updaterPublicKey")},"更新签名公钥已保存。");}}>
-        <label><span>MINISIGN PUBLIC KEY / updater.pub</span><textarea name="updaterPublicKey" defaultValue={data.releaseSettings.updaterPublicKey} placeholder={"untrusted comment: minisign public key\nRW..."} required spellCheck={false}/></label>
-        <div><small>该公钥用于全站官网下载安装包与桌面自动升级验签。</small><button disabled={busy}>{busy ? "正在验证…" : "验证并保存公钥"}<Icon name="shield"/></button></div>
-      </form>
-    </section>
+    <ReleaseKeyPanel platform="windows" settings={data.releaseSettings.windows} busy={busy} action={action}/>
+    <ReleaseKeyPanel platform="darwin" settings={data.releaseSettings.darwin} busy={busy} action={action}/>
 
     <section className={`release-current ${currentRelease ? "is-live" : "is-empty"}`}>
-      <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个签名版本后，新用户下载与老用户升级会在这里汇合。"}</small></div>
+      <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个版本后，新用户即可在官网下载；签名更新包可后续补充。"}</small></div>
       <div className="release-current-files">
-        <article className={currentArtifact ? "ready primary" : "missing"}><span>WINDOWS INSTALL / EXE</span><b>{currentArtifact ? currentArtifact.fileName : "EXE 未提供"}</b><small>{currentArtifact ? `${formatBytes(currentArtifact.sizeBytes)} · SHA256 ${currentArtifact.sha256.slice(0, 12)}…` : "当前还没有可公开下载的安装包"}</small><small>{currentArtifact ? `累计公开下载 ${compactNumber(currentArtifact.downloadCount)} 次 · 近 7 天 ${compactNumber(currentArtifact.downloadsLast7Days)} 次` : "下载统计将在版本公开后开始记录"}</small>{currentArtifact ? <a href={`/api/admin/artifacts/${currentArtifact.id}`}>内部下载<Icon name="download"/></a> : <i/>}</article>
+        {currentArtifacts.length ? currentArtifacts.map(artifact => <article className={`ready ${artifact.format === "NSIS" || artifact.format === "DMG" ? "primary" : ""}`} key={artifact.id}><span>{artifactTargetLabel(artifact)} / {artifact.format}</span><b>{artifact.fileName}</b><small>{formatBytes(artifact.sizeBytes)} · SHA256 {artifact.sha256.slice(0, 12)}…</small><small>累计公开下载 {compactNumber(artifact.downloadCount)} 次 · 近 7 天 {compactNumber(artifact.downloadsLast7Days)} 次</small><a href={`/api/admin/artifacts/${artifact.id}`}>内部下载<Icon name="download"/></a></article>) : <article className="missing"><span>MULTI-PLATFORM RELEASE</span><b>尚未提供安装包</b><small>当前还没有可公开下载的安装包</small><small>下载统计将在版本公开后开始记录</small><i/></article>}
       </div>
       {currentRelease && <button className="release-rollback" disabled={busy} onClick={()=>void action("set_release_status",{id:currentRelease.id,status:"draft"},"当前版本已停止公开分发。")}>停止公开分发</button>}
     </section>
 
     <section className="release-download-stats" aria-label="软件下载统计">
-      <article><span>TOTAL DOWNLOADS</span><strong>{compactNumber(data.metrics.downloads)}</strong><small>全部公开 EXE 累计下载请求</small></article>
+      <article><span>TOTAL DOWNLOADS</span><strong>{compactNumber(data.metrics.downloads)}</strong><small>全部公开安装与更新包累计下载请求</small></article>
       <article><span>LAST 7 DAYS</span><strong>{compactNumber(data.metrics.downloadsLast7Days)}</strong><small>最近 7 个 UTC 自然日</small></article>
-      <article><span>LATEST DOWNLOAD</span><strong>{currentArtifact?.lastDownloadedAt ? new Date(currentArtifact.lastDownloadedAt * 1000).toLocaleDateString("zh-CN") : "—"}</strong><small>{currentArtifact?.lastDownloadedAt ? "当前稳定版本最近下载日期" : "尚无公开下载记录"}</small></article>
+      <article><span>LATEST DOWNLOAD</span><strong>{latestDownload ? new Date(latestDownload * 1000).toLocaleDateString("zh-CN") : "—"}</strong><small>{latestDownload ? "当前稳定版本最近下载日期" : "尚无公开下载记录"}</small></article>
     </section>
 
     <section className="release-delivery-paths">
-      <article><span>01 / NEW USER</span><Icon name="download"/><b>官网直接下载</b><p>公开下载页始终只展示当前最新稳定版 EXE。</p></article>
-      <article><span>02 / EXISTING USER</span><Icon name="route"/><b>客户端直接升级</b><p>Eval 使用当前版本检查接口，命中后下载同一稳定版本的签名主包。</p></article>
+      <article><span>01 / NEW USER</span><Icon name="download"/><b>官网直接下载</b><p>公开下载页展示最新稳定版 Windows EXE 与 macOS DMG。</p></article>
+      <article><span>02 / EXISTING USER</span><Icon name="route"/><b>客户端自动升级</b><p>Windows 与 macOS 分别使用独立公钥验证对应平台的签名更新包。</p></article>
       <article><span>03 / RETENTION</span><Icon name="shield"/><b>历史版本转为私有</b><p>旧版本不再公开下载，但保留文件与审计记录，支持紧急回滚。</p></article>
     </section>
 
-    <AdminForm title="上传新版本文件" note="提交 EXE 与对应签名。系统会自动验签并读取安装包内部版本。">
+    <AdminForm title="上传 Windows 版本文件" note="提交 NSIS EXE 与 Tauri 生成的同名签名；系统会读取 PE 内部版本。">
       <form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}>
+        <input type="hidden" name="platform" value="windows"/><input type="hidden" name="architecture" value="x86_64"/><input type="hidden" name="format" value="NSIS"/>
         <input className="artifact-label" name="label" placeholder="显示名称，如 Eval Agent Windows x64" required/>
         <section className="artifact-channel">
           <header><span>WINDOWS X64</span><b>NSIS / .EXE</b></header>
           <label className="admin-file"><Icon name="download"/><span>选择 .exe 安装包</span><input name="file" type="file" accept=".exe" required/></label>
           <label className="admin-file"><Icon name="shield"/><span>选择对应的 .exe.sig</span><input name="signature" type="file" accept=".sig" required/></label>
         </section>
-        <button disabled={busy || !data.releaseSettings.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.configured ? "验签并上传最新产物" : "请先保存更新公钥"} <Icon name="arrow"/></button>
+        <button disabled={busy || !data.releaseSettings.windows.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.windows.configured ? "验签并上传最新产物" : "请先保存 Windows 更新公钥"} <Icon name="arrow"/></button>
       </form>
     </AdminForm>
 
-    {latestArtifact && <section className="release-candidate"><header><div><span>LATEST VERIFIED BUILD</span><h3>v{latestArtifact.embeddedVersion}</h3></div><small>{candidateDrafts.length ? `已有 ${candidateDrafts.map(release => release.channel.toUpperCase()).join(" / ")} 草稿，可在下方直接发布` : "仅最新上传的 EXE 进入发布候选"}</small></header><div><article><span>EXE</span><div><b>{latestArtifact.fileName}</b><small>{formatBytes(latestArtifact.sizeBytes)} · {latestArtifact.productName || "Eval Agent"}</small></div><a href={`/api/admin/artifacts/${latestArtifact.id}`}>内部下载</a></article></div></section>}
+    <AdminForm title="上传 macOS 自动更新包（可选）" note="提交 Tauri 生成的 .app.tar.gz 与同名 .sig；系统只使用独立的 macOS 更新公钥验签。">
+      <form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}>
+        <input type="hidden" name="platform" value="darwin"/><input type="hidden" name="format" value="APP_TAR_GZ"/>
+        <input className="artifact-label" name="label" placeholder="显示名称，如 Eval Agent macOS 自动更新包" required/>
+        <input name="version" placeholder="版本号，如 1.2.3" required/>
+        <section className="artifact-channel">
+          <header><span>MACOS AUTO UPDATE</span><b>APP.TAR.GZ + SIG</b></header>
+          <label>设备架构<select name="architecture" defaultValue="aarch64"><option value="aarch64">Apple Silicon / aarch64</option><option value="x86_64">Intel / x86_64</option><option value="universal">Universal / 通用包</option></select></label>
+          <label className="admin-file"><Icon name="download"/><span>选择 .app.tar.gz 更新包</span><input name="file" type="file" accept=".gz" required/></label>
+          <label className="admin-file"><Icon name="shield"/><span>选择对应的 .app.tar.gz.sig</span><input name="signature" type="file" accept=".sig" required/></label>
+        </section>
+        <button disabled={busy || !data.releaseSettings.darwin.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.darwin.configured ? "验签并上传 Mac 更新包" : "请先保存 macOS 更新公钥"} <Icon name="arrow"/></button>
+      </form>
+    </AdminForm>
 
-    <AdminForm title="发布到用户" note="选择最新验签版本并发布。已有同版本草稿会直接更新并转为正式发布，不会重复创建版本记录。">
-      <form onSubmit={event=>{event.preventDefault();if(!latestArtifact?.embeddedVersion)return;const form=new FormData(event.currentTarget);void action("create_release",{version:latestArtifact.embeddedVersion,artifactId:latestArtifact.id,channel:form.get("channel"),status:form.get("status"),notes:form.get("notes"),mandatory:form.get("mandatory")==="on"},form.get("status")==="published"?"最新版本已发布。":"版本草稿已保存。");event.currentTarget.reset();}}>
-        <label>待发布版本<select name="artifactVersion" value={latestArtifact?.embeddedVersion ?? ""} disabled><option value={latestArtifact?.embeddedVersion ?? ""}>{latestArtifact?.embeddedVersion ? `v${latestArtifact.embeddedVersion} · EXE` : "请先上传安装包"}</option></select></label>
+    <AdminForm title="直接上传 macOS DMG" note="无需 Apple Developer ID 或 .sig，可直接上传并公开下载。未签名、未公证的应用首次打开时可能被 macOS Gatekeeper 拦截。">
+      <form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}>
+        <input type="hidden" name="platform" value="darwin"/><input type="hidden" name="format" value="DMG"/>
+        <input className="artifact-label" name="label" placeholder="显示名称，如 Eval Agent macOS Apple Silicon" required/>
+        <input name="version" placeholder="版本号，如 1.2.3" required/>
+        <section className="artifact-channel">
+          <header><span>MACOS DIRECT DOWNLOAD</span><b>DMG</b></header>
+          <label>设备架构<select name="architecture" defaultValue="aarch64"><option value="aarch64">Apple Silicon / aarch64</option><option value="x86_64">Intel / x86_64</option><option value="universal">Universal / 通用包</option></select></label>
+          <label className="admin-file"><Icon name="download"/><span>选择 .dmg 安装包</span><input name="file" type="file" accept=".dmg" required/></label>
+        </section>
+        <button disabled={busy}>{busy ? "正在检查并上传…" : "直接上传 DMG"} <Icon name="arrow"/></button>
+      </form>
+    </AdminForm>
+
+    {latestVersion && <section className="release-candidate"><header><div><span>LATEST PUBLISHABLE BUILD</span><h3>v{latestVersion}</h3></div><small>{candidateDrafts.length ? `已有 ${candidateDrafts.map(release => release.channel.toUpperCase()).join(" / ")} 草稿，可在下方直接发布` : "同版本的可发布平台产物会一起进入发布候选；DMG 无需签名"}</small></header><div>{candidateArtifacts.map(artifact => <article key={artifact.id}><span>{artifact.format}</span><div><b>{artifact.fileName}</b><small>{artifactTargetLabel(artifact)} · {formatBytes(artifact.sizeBytes)} · {artifact.productName || "Eval Agent"} · {artifact.signed ? "已验签" : "直接上传"}</small></div><a href={`/api/admin/artifacts/${artifact.id}`}>内部下载</a></article>)}</div></section>}
+
+    <AdminForm title="发布到用户" note="macOS 只上传 DMG 也可以公开下载；同版本的签名 APP_TAR_GZ 上传后会同时启用自动更新。">
+      <form onSubmit={event=>{event.preventDefault();if(!latestVersion)return;const form=new FormData(event.currentTarget);void action("create_release",{version:latestVersion,channel:form.get("channel"),status:form.get("status"),notes:form.get("notes"),mandatory:form.get("mandatory")==="on"},form.get("status")==="published"?"最新多平台版本已发布。":"版本草稿已保存。");event.currentTarget.reset();}}>
+        <label>待发布版本<select name="artifactVersion" value={latestVersion ?? ""} disabled><option value={latestVersion ?? ""}>{latestVersion ? `v${latestVersion} · ${candidateArtifacts.length} 个平台产物` : "请先上传安装包"}</option></select></label>
         <label>发布渠道<select name="channel" defaultValue="stable"><option value="stable">Stable / 正式版</option><option value="beta">Beta / 测试版</option><option value="internal">Internal / 内部版</option></select></label>
         <label>发布方式<select name="status" defaultValue="draft"><option value="draft">先保存草稿</option><option value="published">立即公开发布</option></select></label>
         <label className="release-notes">更新说明<textarea name="notes" placeholder="说明新增能力、修复内容与升级注意事项"/></label>
         <label className="admin-check"><input name="mandatory" type="checkbox"/>将此版本标记为强制升级</label>
-        <button disabled={busy || !latestArtifact || !data.releaseSettings.configured}>保存并应用发布设置 <Icon name="arrow"/></button>
+        <button disabled={busy || !latestVersion}>保存并应用发布设置 <Icon name="arrow"/></button>
       </form>
     </AdminForm>
   </div>;
@@ -241,8 +297,9 @@ type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Rec
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",community:"控制 Eval Agent 访问论坛与博客的全站能力、限额和紧急停止。",releases:"上传、验签并发布当前最新的 EXE 与桌面升级版本。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",community:"控制 Eval Agent 访问论坛与博客的全站能力、限额和紧急停止。",releases:"上传并发布 Windows 与 macOS 安装包；两个平台使用相互隔离的签名密钥自动更新。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
+function artifactTargetLabel(artifact:{platform:string;architecture:string}){return artifact.platform==="darwin"?`macOS ${artifact.architecture==="aarch64"?"Apple Silicon":artifact.architecture==="x86_64"?"Intel":"Universal"}`:"Windows x64"}
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}
 function maskPhone(value:string){return value.replace(/(\+86\d{3})\d{4}(\d{4})/,"$1****$2")}
 function safeFeatures(value:string|string[]){if(Array.isArray(value))return value.filter(item=>typeof item==="string");try{const result=JSON.parse(value);return Array.isArray(result)?result:[]}catch{return []}}

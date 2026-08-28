@@ -7,7 +7,7 @@ import { displayBlogAuthorName } from "../content/attribution";
 import { contentSlug, ensureContentSchema, validateBlogDraftInput } from "../content/store";
 import { disableAgentCommunityWrites, globalAgentCommunityPolicy, saveGlobalAgentCommunityPolicy } from "../community/policy-store";
 import { normalizeSemver } from "../releases/public";
-import { releaseSettingsSnapshot, releaseSigningSettings, requireReleaseSigningSettings, saveReleaseSigningSettings } from "../releases/settings";
+import { releaseSettingsSnapshot, releaseSigningSettings, saveReleaseSigningSettings, type UpdaterPlatform } from "../releases/settings";
 import { artifactExists, deleteArtifact } from "../storage/artifacts";
 
 let adminSchemaInitialization: Promise<void> | null = null;
@@ -34,18 +34,20 @@ async function initializeAdminSchema() {
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS version_source text",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'windows'",
     "ALTER TABLE agent_artifacts ADD COLUMN IF NOT EXISTS architecture text NOT NULL DEFAULT 'x86_64'",
-    "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_embedded_version_uq ON agent_artifacts (embedded_version)",
+    "DROP INDEX IF EXISTS agent_artifacts_embedded_version_uq",
+    "CREATE UNIQUE INDEX IF NOT EXISTS agent_artifacts_release_target_uq ON agent_artifacts (embedded_version, platform, architecture, format)",
     "CREATE TABLE IF NOT EXISTS artifact_download_stats (artifact_id text NOT NULL REFERENCES agent_artifacts(id) ON DELETE CASCADE, download_date text NOT NULL, download_count bigint NOT NULL DEFAULT 0, last_downloaded_at bigint NOT NULL, CONSTRAINT artifact_download_stats_pk PRIMARY KEY (artifact_id, download_date))",
     "CREATE INDEX IF NOT EXISTS artifact_download_stats_date_idx ON artifact_download_stats (download_date)",
     "CREATE TABLE IF NOT EXISTS release_versions (id text PRIMARY KEY NOT NULL, version text NOT NULL, channel text NOT NULL, artifact_id text NOT NULL REFERENCES agent_artifacts(id), notes text NOT NULL, mandatory boolean NOT NULL, status text NOT NULL, published_at bigint, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS release_artifacts (release_id text NOT NULL REFERENCES release_versions(id) ON DELETE CASCADE, artifact_id text NOT NULL REFERENCES agent_artifacts(id), created_at bigint NOT NULL, CONSTRAINT release_artifacts_pk PRIMARY KEY (release_id, artifact_id))",
+    "CREATE INDEX IF NOT EXISTS release_artifacts_artifact_idx ON release_artifacts (artifact_id)",
+    "INSERT INTO release_artifacts (release_id, artifact_id, created_at) SELECT id, artifact_id, created_at FROM release_versions ON CONFLICT (release_id, artifact_id) DO NOTHING",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_version_uq ON release_versions (version, channel)",
     "WITH ranked_releases AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY published_at DESC NULLS LAST, created_at DESC) AS release_rank FROM release_versions WHERE status = 'published') UPDATE release_versions SET status = 'draft' WHERE id IN (SELECT id FROM ranked_releases WHERE release_rank > 1)",
     "CREATE UNIQUE INDEX IF NOT EXISTS release_versions_one_published_channel_uq ON release_versions (channel) WHERE status = 'published'",
     "CREATE TABLE IF NOT EXISTS artifact_cleanup_queue (object_key text PRIMARY KEY NOT NULL, created_at bigint NOT NULL)",
-    "WITH ranked_artifacts AS (SELECT id, object_key, FIRST_VALUE(id) OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) INSERT INTO artifact_cleanup_queue (object_key, created_at) SELECT object_key, FLOOR(EXTRACT(EPOCH FROM NOW()))::bigint FROM ranked_artifacts WHERE artifact_rank > 1 ON CONFLICT (object_key) DO NOTHING",
-    "WITH ranked_artifacts AS (SELECT id, FIRST_VALUE(id) OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS keeper_id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) UPDATE release_versions SET artifact_id = ranked_artifacts.keeper_id FROM ranked_artifacts WHERE ranked_artifacts.artifact_rank > 1 AND release_versions.artifact_id = ranked_artifacts.id",
-    "WITH ranked_artifacts AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY embedded_version ORDER BY created_at DESC, id DESC) AS artifact_rank FROM agent_artifacts WHERE embedded_version IS NOT NULL) DELETE FROM agent_artifacts WHERE id IN (SELECT id FROM ranked_artifacts WHERE artifact_rank > 1)",
-    "CREATE TABLE IF NOT EXISTS release_settings (id text PRIMARY KEY NOT NULL DEFAULT 'global', updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS release_settings (id text PRIMARY KEY NOT NULL DEFAULT 'windows', updater_public_key text NOT NULL, updater_public_key_id text NOT NULL, updated_by text REFERENCES users(id) ON DELETE SET NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
+    "UPDATE release_settings SET id = 'windows' WHERE id = 'global' AND NOT EXISTS (SELECT 1 FROM release_settings WHERE id = 'windows')",
     "CREATE TABLE IF NOT EXISTS billing_plans (id text PRIMARY KEY NOT NULL, name text NOT NULL, monthly_price_cents integer NOT NULL, currency text NOT NULL, features jsonb NOT NULL, status text NOT NULL, created_at bigint NOT NULL, updated_at bigint NOT NULL)",
     "CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY NOT NULL, actor_id text, action text NOT NULL, resource_type text NOT NULL, resource_id text, ip_hash text, metadata jsonb, created_at bigint NOT NULL)",
     "CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_logs (created_at)",
@@ -80,13 +82,15 @@ export async function adminSnapshot(user: AuthenticatedUser) {
       MAX(d.last_downloaded_at) AS lastDownloadedAt
       FROM agent_artifacts a
       LEFT JOIN artifact_download_stats d ON d.artifact_id = a.id
-      WHERE a.format = 'NSIS'
       GROUP BY a.id
       ORDER BY a.created_at DESC`).bind(downloadsLast7DaysStart).all(),
-    db.prepare(`SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, a.file_name AS fileName,
-      r.notes, r.mandatory, r.status, r.published_at AS publishedAt
+    db.prepare(`SELECT r.id, r.version, r.channel, r.artifact_id AS artifactId, primary_a.file_name AS fileName,
+      r.notes, r.mandatory, r.status, r.published_at AS publishedAt,
+      COALESCE(ARRAY_AGG(ra.artifact_id ORDER BY ra.created_at) FILTER (WHERE ra.artifact_id IS NOT NULL), ARRAY[r.artifact_id]) AS "artifactIds"
       FROM release_versions r
-      JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+      JOIN agent_artifacts primary_a ON primary_a.id = r.artifact_id
+      LEFT JOIN release_artifacts ra ON ra.release_id = r.id
+      GROUP BY r.id, primary_a.file_name
       ORDER BY r.created_at DESC`).all(),
     db.prepare("SELECT id, name, monthly_price_cents AS monthlyPriceCents, currency, features, status FROM billing_plans ORDER BY monthly_price_cents ASC").all(),
     db.prepare("SELECT a.id, a.action, a.resource_type AS resourceType, a.resource_id AS resourceId, a.metadata, a.created_at AS createdAt, COALESCE(u.display_name, '系统') AS actorName FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id ORDER BY a.created_at DESC LIMIT 100").all(),
@@ -108,8 +112,14 @@ export async function adminSnapshot(user: AuthenticatedUser) {
   ]);
   const userRows = users.results as Array<Record<string, unknown>>;
   const authSettings = providerSettingsSnapshot(await identityProviderSettings());
-  const signingSettings = await releaseSigningSettings();
-  const releaseSettings = releaseSettingsSnapshot(signingSettings);
+  const [windowsSigningSettings, macSigningSettings] = await Promise.all([
+    releaseSigningSettings("windows"),
+    releaseSigningSettings("darwin"),
+  ]);
+  const releaseSettings = {
+    windows: releaseSettingsSnapshot(windowsSigningSettings),
+    darwin: releaseSettingsSnapshot(macSigningSettings),
+  };
   const [agentCommunityPolicy, agentCommunityActions] = await Promise.all([
     globalAgentCommunityPolicy(),
     db.prepare(`SELECT request_id AS "requestId", user_id AS "userId", desktop_session_id AS "desktopSessionId",
@@ -129,7 +139,10 @@ export async function adminSnapshot(user: AuthenticatedUser) {
     authorName: displayBlogAuthorName(String(post.authorName ?? ""), post.createdVia),
   }));
   const activeUsers = userRows.filter(item => item.status === "active").length;
-  const signedArtifacts = artifactRows.filter(item => item.status === "ready" && item.signed && item.embeddedVersion && item.signatureKeyId === signingSettings?.publicKeyId).length;
+  const signedArtifacts = artifactRows.filter(item => {
+    const publicKeyId = item.platform === "darwin" ? macSigningSettings?.publicKeyId : windowsSigningSettings?.publicKeyId;
+    return item.status === "ready" && item.embeddedVersion && (item.format === "DMG" || (item.signed && item.signatureKeyId === publicKeyId));
+  }).length;
   const publishedReleases = releaseRows.filter(item => item.status === "published").length;
   const activePlans = planRows.filter(item => item.status === "active").length;
   const downloads = artifactRows.reduce((total, item) => total + Number(item.downloadCount ?? 0), 0);
@@ -254,8 +267,10 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     return providerSettingsSnapshot(settings);
   }
   if (action === "save_release_settings") {
-    const settings = await saveReleaseSigningSettings(user.id, input.updaterPublicKey);
-    await recordAudit(db, user, "release.settings.save", "release_settings", "global", {
+    const platform = allowed(text(input.platform), ["windows", "darwin"], "windows");
+    const settings = await saveReleaseSigningSettings(user.id, platform, input.updaterPublicKey);
+    await recordAudit(db, user, "release.settings.save", "release_settings", platform, {
+      platform,
       updaterPublicKeyId: settings?.publicKeyId ?? null,
       source: settings?.source ?? "missing",
     });
@@ -320,21 +335,18 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     return { id, status };
   }
   if (action === "create_release") {
-    const artifactId = text(input.artifactId);
     const version = text(input.version), notes = text(input.notes);
     const channel = allowed(text(input.channel), ["stable", "beta", "internal"], "stable");
     const status = allowed(text(input.status), ["draft", "published"], "draft");
     const normalizedVersion = normalizeSemver(version);
-    if (!normalizedVersion || !artifactId) throw new Error("请选择 EXE 安装包，并填写有效的语义化版本号。");
-    const artifactResult = await db.prepare(`SELECT id, format, object_key, status, signature_verified_at, signature_key_id, embedded_version
-      FROM agent_artifacts WHERE id = ? AND format = 'NSIS'`)
-      .bind(artifactId)
-      .all<PublishableArtifact>();
-    const artifact = artifactResult.results[0];
-    if (!artifact) throw new Error("EXE 安装包不存在。");
-    const signingSettings = await requireReleaseSigningSettings();
-    await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
-    ensureArtifactVersionMatchesRelease(artifact, normalizedVersion.version);
+    if (!normalizedVersion) throw new Error("请选择可发布的安装包版本，并填写有效的语义化版本号。");
+    const signingKeyIds = await releaseSigningKeyIds();
+    const artifacts = await publishableArtifactsForVersion(db, normalizedVersion.version, signingKeyIds);
+    await ensureReleaseArtifactSet(artifacts, normalizedVersion.version, signingKeyIds);
+    const primaryArtifact = artifacts.find(item => item.format === "NSIS")
+      ?? artifacts.find(item => item.format === "DMG")
+      ?? artifacts[0];
+    const artifactIds = artifacts.map(item => item.id);
     const duplicate = await db.prepare("SELECT id, status FROM release_versions WHERE version = ? AND channel = ?")
       .bind(normalizedVersion.version, channel)
       .first<{ id: string; status: string }>();
@@ -346,11 +358,13 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
         ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE channel = ? AND status = 'published' AND id <> ?").bind(now, channel, duplicate.id)] : []),
         status === "published"
           ? db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ?")
-            .bind(artifactId, notes, Boolean(input.mandatory), now, now, duplicate.id)
+            .bind(primaryArtifact.id, notes, Boolean(input.mandatory), now, now, duplicate.id)
           : db.prepare("UPDATE release_versions SET artifact_id = ?, notes = ?, mandatory = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
-            .bind(artifactId, notes, Boolean(input.mandatory), now, duplicate.id),
+            .bind(primaryArtifact.id, notes, Boolean(input.mandatory), now, duplicate.id),
+        db.prepare("DELETE FROM release_artifacts WHERE release_id = ?").bind(duplicate.id),
+        ...artifactIds.map(artifactId => db.prepare("INSERT INTO release_artifacts (release_id, artifact_id, created_at) VALUES (?, ?, ?)").bind(duplicate.id, artifactId, now)),
         db.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, ?, 'release_version', ?, ?, ?)")
-          .bind(`audit_${crypto.randomUUID()}`, user.id, status === "published" ? "release.publish" : "release.update", duplicate.id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory), reusedDraft: duplicate.status === "draft" }), now),
+          .bind(`audit_${crypto.randomUUID()}`, user.id, status === "published" ? "release.publish" : "release.update", duplicate.id, JSON.stringify({ version: normalizedVersion.version, channel, artifactIds, status, mandatory: Boolean(input.mandatory), reusedDraft: duplicate.status === "draft" }), now),
       ]);
       return { id: duplicate.id, status, reused: true };
     }
@@ -358,9 +372,10 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
     await db.batch([
       ...(status === "published" ? [db.prepare("UPDATE release_versions SET status = 'draft', updated_at = ? WHERE channel = ? AND status = 'published'").bind(now, channel)] : []),
       db.prepare("INSERT INTO release_versions (id, version, channel, artifact_id, notes, mandatory, status, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, normalizedVersion.version, channel, artifactId, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now),
+        .bind(id, normalizedVersion.version, channel, primaryArtifact.id, notes, Boolean(input.mandatory), status, status === "published" ? now : null, now, now),
+      ...artifactIds.map(artifactId => db.prepare("INSERT INTO release_artifacts (release_id, artifact_id, created_at) VALUES (?, ?, ?)").bind(id, artifactId, now)),
       db.prepare("INSERT INTO audit_logs (id, actor_id, action, resource_type, resource_id, metadata, created_at) VALUES (?, ?, 'release.create', 'release_version', ?, ?, ?)")
-        .bind(`audit_${crypto.randomUUID()}`, user.id, id, JSON.stringify({ version: normalizedVersion.version, channel, artifactId, status, mandatory: Boolean(input.mandatory) }), now),
+        .bind(`audit_${crypto.randomUUID()}`, user.id, id, JSON.stringify({ version: normalizedVersion.version, channel, artifactIds, status, mandatory: Boolean(input.mandatory) }), now),
     ]);
     return { id };
   }
@@ -405,6 +420,8 @@ export async function executeAdminAction(user: AuthenticatedUser, action: string
 type PublishableArtifact = {
   id: string;
   format: string;
+  platform: string;
+  architecture: string;
   object_key: string;
   status: string;
   signature_verified_at: number | null;
@@ -412,18 +429,65 @@ type PublishableArtifact = {
   embedded_version: string | null;
 };
 
-async function ensureArtifactPublishable(artifact: PublishableArtifact, publicKeyId: string) {
+type SigningKeyIds = Record<UpdaterPlatform, string | null>;
+
+function artifactSigningKeyId(artifact: Pick<PublishableArtifact, "platform">, signingKeyIds: SigningKeyIds) {
+  return artifact.platform === "darwin" ? signingKeyIds.darwin : signingKeyIds.windows;
+}
+
+async function releaseSigningKeyIds(): Promise<SigningKeyIds> {
+  const [windows, darwin] = await Promise.all([
+    releaseSigningSettings("windows"),
+    releaseSigningSettings("darwin"),
+  ]);
+  return { windows: windows?.publicKeyId ?? null, darwin: darwin?.publicKeyId ?? null };
+}
+
+async function ensureArtifactPublishable(artifact: PublishableArtifact, signingKeyIds: SigningKeyIds) {
   if (artifact.status !== "ready") throw new Error("已归档的安装包不能绑定到发布版本。");
-  if (!artifact.signature_verified_at || !artifact.signature_key_id) {
+  const publicKeyId = artifactSigningKeyId(artifact, signingKeyIds);
+  if (artifact.format !== "DMG" && (!artifact.signature_verified_at || !artifact.signature_key_id || !publicKeyId)) {
     throw new Error("安装包尚未通过当前 Tauri 更新公钥验签，不能发布。");
   }
-  if (artifact.signature_key_id !== publicKeyId) {
+  if (artifact.format !== "DMG" && artifact.signature_key_id !== publicKeyId) {
     throw new Error("安装包由旧的 Tauri 更新公钥验签，请使用当前密钥重新构建并上传。");
   }
   if (!artifact.embedded_version) {
     throw new Error("安装包缺少可信的内部版本信息，请重新上传后再发布。");
   }
   if (!await artifactExists(artifact.object_key)) throw new Error("安装包源文件不存在，不能发布。");
+}
+
+async function publishableArtifactsForVersion(db: PostgresDatabase, version: string, signingKeyIds: SigningKeyIds) {
+  const result = await db.prepare(`SELECT id, format, platform, architecture, object_key, status,
+      signature_verified_at, signature_key_id, embedded_version
+    FROM agent_artifacts
+    WHERE embedded_version = ? AND status = 'ready'
+      AND (format = 'DMG'
+        OR (platform = 'windows' AND signature_verified_at IS NOT NULL AND signature_key_id = ?)
+        OR (platform = 'darwin' AND signature_verified_at IS NOT NULL AND signature_key_id = ?))
+    ORDER BY platform, architecture, format`)
+    .bind(version, signingKeyIds.windows ?? "__windows_not_configured__", signingKeyIds.darwin ?? "__darwin_not_configured__")
+    .all<PublishableArtifact>();
+  return result.results;
+}
+
+async function ensureReleaseArtifactSet(artifacts: PublishableArtifact[], releaseVersion: string, signingKeyIds: SigningKeyIds) {
+  if (!artifacts.length) throw new Error("该版本没有可发布的安装包。");
+  await Promise.all(artifacts.map(async artifact => {
+    await ensureArtifactPublishable(artifact, signingKeyIds);
+    ensureArtifactVersionMatchesRelease(artifact, releaseVersion);
+  }));
+  const targets = new Set(artifacts.map(item => `${item.platform}:${item.architecture}:${item.format}`));
+  if (![...targets].some(target => target.endsWith(":NSIS") || target.endsWith(":DMG"))) {
+    throw new Error("该版本至少需要一个可供新用户下载的 NSIS 或 DMG 安装包。");
+  }
+  const macArchitectures = new Set(artifacts.filter(item => item.platform === "darwin").map(item => item.architecture));
+  for (const architecture of macArchitectures) {
+    if (!targets.has(`darwin:${architecture}:DMG`)) {
+      throw new Error(`macOS ${architecture} 必须上传 DMG 首次安装包；APP_TAR_GZ 自动更新包可以后续补充。`);
+    }
+  }
 }
 
 function ensureArtifactVersionMatchesRelease(artifact: PublishableArtifact, releaseVersion: string) {
@@ -434,17 +498,17 @@ function ensureArtifactVersionMatchesRelease(artifact: PublishableArtifact, rele
 }
 
 async function ensureReleasePublishable(db: PostgresDatabase, releaseId: string) {
-  const signingSettings = await requireReleaseSigningSettings();
-  const artifact = await db.prepare(`SELECT a.id, a.format, a.object_key, a.status, a.signature_verified_at, a.signature_key_id,
-      a.embedded_version, r.version AS releaseVersion
+  const signingKeyIds = await releaseSigningKeyIds();
+  const result = await db.prepare(`SELECT a.id, a.format, a.platform, a.architecture, a.object_key, a.status,
+      a.signature_verified_at, a.signature_key_id, a.embedded_version, r.version AS "releaseVersion"
     FROM release_versions r
-    JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+    JOIN release_artifacts ra ON ra.release_id = r.id
+    JOIN agent_artifacts a ON a.id = ra.artifact_id
     WHERE r.id = ?`)
     .bind(releaseId)
-    .first<PublishableArtifact & { releaseVersion: string }>();
-  if (!artifact) throw new Error("版本不存在或没有绑定 EXE 安装包。");
-  await ensureArtifactPublishable(artifact, signingSettings.publicKeyId);
-  ensureArtifactVersionMatchesRelease(artifact, artifact.releaseVersion);
+    .all<PublishableArtifact & { releaseVersion: string }>();
+  if (!result.results.length) throw new Error("版本不存在或没有绑定安装包。");
+  await ensureReleaseArtifactSet(result.results, result.results[0].releaseVersion, signingKeyIds);
 }
 
 function text(value: unknown) { return typeof value === "string" ? value.trim() : ""; }

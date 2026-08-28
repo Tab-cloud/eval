@@ -73,7 +73,7 @@ export const agentArtifacts = pgTable("agent_artifacts", {
   id: text("id").primaryKey(),
   fileName: text("file_name").notNull(),
   label: text("label").notNull(),
-  format: text("format", { enum: ["NSIS"] }).notNull(),
+  format: text("format", { enum: ["NSIS", "DMG", "APP_TAR_GZ"] }).notNull(),
   objectKey: text("object_key").notNull(),
   sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
   sha256: text("sha256").notNull(),
@@ -89,7 +89,7 @@ export const agentArtifacts = pgTable("agent_artifacts", {
   createdAt: epoch("created_at").notNull(),
 }, (table) => [
   uniqueIndex("agent_artifacts_object_key_uq").on(table.objectKey),
-  uniqueIndex("agent_artifacts_embedded_version_uq").on(table.embeddedVersion),
+  uniqueIndex("agent_artifacts_release_target_uq").on(table.embeddedVersion, table.platform, table.architecture, table.format),
 ]);
 
 export const artifactDownloadStats = pgTable("artifact_download_stats", {
@@ -122,8 +122,17 @@ export const releaseVersions = pgTable("release_versions", {
   uniqueIndex("release_versions_one_published_channel_uq").on(table.channel).where(sql`${table.status} = 'published'`),
 ]);
 
+export const releaseArtifacts = pgTable("release_artifacts", {
+  releaseId: text("release_id").notNull().references(() => releaseVersions.id, { onDelete: "cascade" }),
+  artifactId: text("artifact_id").notNull().references(() => agentArtifacts.id),
+  createdAt: epoch("created_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.releaseId, table.artifactId], name: "release_artifacts_pk" }),
+  index("release_artifacts_artifact_idx").on(table.artifactId),
+]);
+
 export const releaseSettings = pgTable("release_settings", {
-  id: text("id").primaryKey().default("global"),
+  id: text("id").primaryKey().default("windows"),
   updaterPublicKey: text("updater_public_key").notNull(),
   updaterPublicKeyId: text("updater_public_key_id").notNull(),
   updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),

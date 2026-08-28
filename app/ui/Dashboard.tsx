@@ -24,7 +24,7 @@ type ConsoleSnapshot = {
     publishedPosts: number;
     activeDesktopSessions: number;
   };
-  releases: Array<{ id: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string; sizeBytes: number }>;
+  releases: Array<{ id: string; releaseId: string; version: string; channel: string; status: string; publishedAt: number | null; fileName: string; format: string; platform: string; architecture: string; sizeBytes: number }>;
   forumTopics: Array<{ id: string; title: string; slug: string; category: string; status: string; pinned: boolean; lastActivityAt: number; authorName: string; replyCount: number }>;
   audits: Array<{ id: string; action: string; resourceType: string; resourceId: string | null; createdAt: number }>;
 };
@@ -85,7 +85,7 @@ function Overview({ snapshot }: { snapshot: ConsoleSnapshot | null }) {
   const latest = snapshot?.releases.find(item => item.status === "published");
   return <>
     <section className="workspace-hero">
-      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程论坛，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与其他用户沉淀工程经验。</p><div><button onClick={() => location.href = latest ? `/api/v1/downloads/${latest.id}` : "/docs"}><Icon name="download"/>{latest ? `下载 v${latest.version}` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
+      <div><small>AGENT PRODUCT HOME</small><h2>工具、版本与工程论坛，<br/>都在这里。</h2><p>获取 Eval Agent 桌面端，关注发布动态，并与其他用户沉淀工程经验。</p><div><button onClick={() => location.href = latest ? "/#downloads" : "/docs"}><Icon name="download"/>{latest ? `选择 v${latest.version} 安装包` : "查看安装指南"}</button><Link href="/forum">进入论坛<Icon name="arrow"/></Link><Link href="/blog">阅读博客<Icon name="arrow"/></Link></div></div>
       <aside><span>PRODUCT STATUS</span><strong>{latest ? `v${latest.version}` : "—"}</strong><small>{latest ? `${latest.channel.toUpperCase()} · 已发布` : "等待首个公开版本"}</small><i/></aside>
     </section>
     <section className="workspace-metrics">
@@ -242,10 +242,11 @@ function maskPhone(value: string) { return value.replace(/^\+86(\d{3})\d{4}(\d{4
 
 function Metric({ icon, value, label }: { icon: IconName; value: number; label: string }) { return <article><Icon name={icon}/><strong>{value.toLocaleString("zh-CN")}</strong><span>{label}</span></article>; }
 function PanelHead({ eyebrow, title, href, link }: { eyebrow: string; title: string; href: string; link: string }) { return <header><div><small>{eyebrow}</small><h3>{title}</h3></div><Link href={href}>{link}<Icon name="arrow"/></Link></header>; }
-function ReleaseList({ releases, detailed = false }: { releases: ConsoleSnapshot["releases"]; detailed?: boolean }) { return <div className="workspace-release-list">{releases.length ? releases.map(item => <article key={item.id}><span><Icon name="download"/></span><div><b>Eval Agent v{item.version}</b><small>{item.channel.toUpperCase()} · {item.format} · {item.fileName}{detailed ? ` · ${formatBytes(item.sizeBytes)}` : ""}</small></div><em className={item.status}>{item.status === "published" ? "已发布" : "草稿"}</em>{item.status === "published" ? <a href={`/api/v1/downloads/${item.id}`} aria-label={`下载 v${item.version}`}><Icon name="download"/></a> : <i/>}</article>) : <Empty text="还没有可用版本。"/>}</div>; }
+function ReleaseList({ releases, detailed = false }: { releases: ConsoleSnapshot["releases"]; detailed?: boolean }) { return <div className="workspace-release-list">{releases.length ? releases.map(item => <article key={item.id}><span><Icon name="download"/></span><div><b>Eval Agent v{item.version}</b><small>{item.channel.toUpperCase()} · {platformLabel(item.platform, item.architecture)} · {item.format} · {item.fileName}{detailed ? ` · ${formatBytes(item.sizeBytes)}` : ""}</small></div><em className={item.status}>{item.status === "published" ? "已发布" : "草稿"}</em>{item.status === "published" ? <a href={`/api/v1/downloads/${item.id}`} aria-label={`下载 v${item.version} ${platformLabel(item.platform, item.architecture)}`}><Icon name="download"/></a> : <i/>}</article>) : <Empty text="还没有可用版本。"/>}</div>; }
 function TopicList({ topics }: { topics: ConsoleSnapshot["forumTopics"] }) { return <div className="workspace-topic-list">{topics.length ? topics.map(item => <Link href={`/forum/${item.slug}`} key={item.id}><span>{item.pinned ? "置顶" : item.category}</span><div><b>{item.title}</b><small>{item.authorName} · {item.replyCount} 条回复 · {formatRelative(item.lastActivityAt)}</small></div><Icon name="chevron"/></Link>) : <Empty text="还没有论坛主题。"/>}</div>; }
 function Empty({ text }: { text: string }) { return <div className="workspace-empty"><i/><p>{text}</p></div>; }
 function formatTime(value: number) { return new Date(value * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }
 function formatRelative(value: number) { const seconds = Math.max(0, Math.floor(Date.now() / 1000 - value)); if (seconds < 60) return "刚刚"; if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`; if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`; return new Date(value * 1000).toLocaleDateString("zh-CN"); }
 function formatBytes(value: number) { return value > 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`; }
+function platformLabel(platform: string, architecture: string) { return platform === "darwin" ? `macOS ${architecture === "aarch64" ? "Apple Silicon" : architecture === "x86_64" ? "Intel" : "Universal"}` : "Windows x64"; }
 function auditLabel(value: string) { return ({ "auth.password.change": "修改密码", "auth.identity.unlink": "解绑登录身份", "desktop.auth.approve": "授权桌面端", "desktop.session.revoke": "撤销桌面端", "forum.topic.create": "发布论坛主题", "forum.reply.create": "发布论坛回复", "blog.post.create": "创建博客", "blog.post.update": "更新博客", "release.publish": "发布版本" } as Record<string, string>)[value] || "系统操作"; }

@@ -181,11 +181,13 @@ test("published downloads require a real stored artifact", async () => {
   assert.match(upload, /stageArtifactReplacement/);
   assert.match(upload, /\.exe/);
   assert.doesNotMatch(upload, /\.msi/i);
+  assert.match(upload, /\.dmg/);
+  assert.match(upload, /\.app\.tar\.gz/);
   assert.match(upload, /SHA-256/);
-  assert.doesNotMatch(upload, /\.dmg|\.deb|\.rpm/);
+  assert.doesNotMatch(upload, /\.deb|\.rpm/);
 });
 
-test("public EXE downloads are aggregated by artifact and UTC day for the admin dashboard", async () => {
+test("public installer downloads are aggregated by artifact and UTC day for the admin dashboard", async () => {
   const [stats, schema, migration, store, adminUi, css] = await Promise.all([
     source("../app/releases/download-stats.ts"),
     source("../db/schema.ts"),
@@ -207,8 +209,8 @@ test("public EXE downloads are aggregated by artifact and UTC day for the admin 
   assert.match(adminUi, /软件下载/);
   assert.match(adminUi, /TOTAL DOWNLOADS/);
   assert.match(adminUi, /累计公开下载/);
-  assert.match(adminUi, /\/api\/admin\/artifacts\/\$\{currentArtifact\.id\}/);
-  assert.doesNotMatch(adminUi, /\/api\/v1\/downloads\/\$\{currentArtifact\.id\}/);
+  assert.match(adminUi, /\/api\/admin\/artifacts\/\$\{artifact\.id\}/);
+  assert.doesNotMatch(adminUi, /\/api\/v1\/downloads\/\$\{artifact\.id\}/);
   assert.match(css, /\.release-download-stats/);
 
 });
@@ -339,7 +341,7 @@ test("runs as a standard ECS Node service backed by PostgreSQL", async () => {
   assert.match(service, /ReadWritePaths=\/srv\/eval-web\/artifacts \/opt\/eval-web\/current\/\.next\/cache/);
   assert.match(nginx, /server_name eval\.zailink\.space/);
   assert.match(nginx, /X-Forwarded-Proto/);
-  assert.match(nginx, /client_max_body_size 128m/);
+  assert.match(nginx, /client_max_body_size 384m/);
   assert.doesNotMatch(nginx, /chat\/completions|responses|proxy_buffering off/);
   assert.match(hosting, /PostgreSQL/);
   assert.doesNotMatch(hosting, /\bD1\b|\bR2\b|Cloudflare Workers/);
@@ -850,8 +852,8 @@ test("admin content center publishes blogs and moderates global forum content wi
   assert.match(landing, /agent-mobile-content/);
 });
 
-test("desktop updater exposes only the global verified, version-matched EXE", async () => {
-  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, artifactStorage, metadata, signature, signingSettings, schema, releaseMigration, settingsMigration, replacementMigration, config, packageJson] = await Promise.all([
+test("release delivery exposes direct macOS downloads and verified auto-update artifacts", async () => {
+  const [updateRoute, catalog, download, releaseStore, consoleStore, adminUi, landing, upload, artifactStorage, metadata, signature, signingSettings, schema, multiPlatformMigration, isolationMigration, config, packageJson] = await Promise.all([
     source("../app/api/v1/updates/[target]/[arch]/[currentVersion]/route.ts"),
     source("../app/api/v1/downloads/route.ts"),
     source("../app/api/v1/downloads/[id]/route.ts"),
@@ -865,9 +867,8 @@ test("desktop updater exposes only the global verified, version-matched EXE", as
     source("../app/releases/signature.ts"),
     source("../app/releases/settings.ts"),
     source("../db/schema.ts"),
-    source("../drizzle/0009_faulty_lady_deathstrike.sql"),
-    source("../drizzle/0010_empty_diamondback.sql"),
-    source("../drizzle/0011_peaceful_sebastian_shaw.sql"),
+    source("../drizzle/0021_bright_lady_vermin.sql"),
+    source("../drizzle/0022_steep_doorman.sql"),
     source("../.env.example"),
     source("../package.json"),
   ]);
@@ -878,31 +879,52 @@ test("desktop updater exposes only the global verified, version-matched EXE", as
   assert.match(updateRoute, /signature_verified_at IS NOT NULL/);
   assert.match(updateRoute, /signature_key_id = \?/);
   assert.match(updateRoute, /a\.embedded_version = r\.version/);
-  assert.match(updateRoute, /a\.format = 'NSIS'/);
+  assert.match(updateRoute, /target === "darwin"/);
+  assert.match(updateRoute, /"APP_TAR_GZ"/);
+  assert.match(updateRoute, /a\.architecture = 'universal'/);
+  assert.match(updateRoute, /JOIN release_artifacts/);
   assert.match(updateRoute, /publicReleaseSigningSettings/);
-  assert.match(updateRoute, /format:\s*"nsis"/);
-  assert.doesNotMatch(updateRoute, /x-eval-installer-format|release_artifacts|MSI/i);
+  assert.match(updateRoute, /publicReleaseSigningSettings\(updaterPlatform\)/);
+  assert.match(updateRoute, /release\.format === "NSIS" \? "nsis" : "app"/);
   assert.match(updateRoute, /SELECT latest_r\.id/);
   assert.doesNotMatch(catalog, /JOIN tenants|tenant_id/);
-  assert.match(catalog, /latestReleaseId/);
-  assert.match(catalog, /a\.format = 'NSIS'/);
-  assert.doesNotMatch(catalog, /release_artifacts|MSI|\.msi/i);
+  assert.match(catalog, /JOIN release_artifacts/);
+  assert.match(catalog, /a\.format IN \('NSIS', 'DMG'\)/);
+  assert.match(catalog, /a\.format = 'DMG' OR \(a\.signature_verified_at IS NOT NULL AND a\.signature_key_id = \?\)/);
+  assert.match(catalog, /macUniversalSlot/);
   assert.match(catalog, /publicReleaseSigningSettings/);
   assert.match(catalog, /a\.embedded_version = r\.version/);
   assert.match(catalog, /SELECT latest_r\.id/);
   assert.doesNotMatch(download, /JOIN tenants|tenant_id|publicReleaseTenantSlug/);
   assert.match(download, /publicReleaseSigningSettings/);
   assert.match(download, /a\.embedded_version = r\.version/);
-  assert.match(download, /a\.format = 'NSIS'/);
-  assert.doesNotMatch(download, /release_artifacts|MSI|\.msi/i);
+  assert.match(download, /JOIN release_artifacts/);
   assert.match(download, /SELECT latest_r\.id/);
+  assert.match(download, /a\.platform = 'windows'.*a\.signature_key_id = \?.*a\.platform = 'darwin'.*a\.signature_key_id = \?/);
   assert.match(releaseStore, /尚未通过当前 Tauri 更新公钥验签/);
   assert.match(releaseStore, /旧的 Tauri 更新公钥验签/);
+  assert.match(releaseStore, /macOS.*必须上传 DMG.*APP_TAR_GZ.*可以后续补充/);
+  assert.match(releaseStore, /format !== "DMG"/);
+  assert.match(releaseStore, /INSERT INTO release_artifacts/);
   assert.match(adminUi, /name="file"/);
   assert.match(adminUi, /name="signature"/);
+  assert.match(adminUi, /value="darwin"/);
+  assert.match(adminUi, /Apple Silicon/);
+  assert.match(adminUi, /直接上传 macOS DMG/);
+  assert.match(adminUi, /无需 Apple Developer ID 或 \.sig/);
+  assert.match(adminUi, /直接上传 DMG/);
+  assert.match(adminUi, /value="APP_TAR_GZ"/);
+  assert.match(adminUi, /macOS 自动更新包（可选）/);
+  assert.match(adminUi, /MACOS AUTO UPDATE/);
+  assert.match(adminUi, /Windows 与 macOS 分别使用独立公钥/);
   assert.match(upload, /verifyUpdaterSignature/);
   assert.match(upload, /requireReleaseSigningSettings/);
+  assert.match(upload, /requireReleaseSigningSettings\(spec\.platform\)/);
+  assert.match(upload, /spec\.format !== "DMG" && !signatureFile/);
+  assert.match(upload, /signed: Boolean\(artifact\.signatureVerifiedAt\)/);
   assert.match(upload, /inspectWindowsInstaller/);
+  assert.match(upload, /inspectMacDmg/);
+  assert.match(upload, /inspectMacUpdaterBundle/);
   assert.match(upload, /WHERE embedded_version = \?/);
   assert.doesNotMatch(upload, /tenant_id|tenantId/);
   assert.match(upload, /stageArtifactReplacement/);
@@ -921,29 +943,32 @@ test("desktop updater exposes only the global verified, version-matched EXE", as
   assert.match(signingSettings, /release_settings/);
   assert.match(signingSettings, /saveReleaseSigningSettings/);
   assert.match(signingSettings, /EVAL_UPDATER_PUBLIC_KEY/);
+  assert.match(signingSettings, /EVAL_MACOS_UPDATER_PUBLIC_KEY/);
+  assert.match(signingSettings, /SETTINGS_IDS/);
+  assert.match(signingSettings, /LEGACY_WINDOWS_SETTINGS_ID/);
   assert.match(signingSettings, /source:\s*"database"/);
   assert.match(metadata, /AppInfoParser/);
   assert.match(metadata, /PE\.ProductVersion/);
-  assert.doesNotMatch(metadata, /MSI|\.msi/i);
+  assert.match(metadata, /CFBundleShortVersionString/);
+  assert.match(metadata, /isDmgInfo/);
+  assert.match(metadata, /assertMacArchitecture/);
   assert.match(metadata, /mkdtemp/);
   assert.match(schema, /updaterSignature/);
   assert.match(schema, /signatureVerifiedAt/);
   assert.match(schema, /embeddedVersion/);
   assert.match(schema, /releaseSettings/);
-  assert.match(schema, /agent_artifacts_embedded_version_uq/);
+  assert.match(schema, /agent_artifacts_release_target_uq/);
   assert.match(schema, /artifactCleanupQueue/);
-  assert.doesNotMatch(schema, /releaseArtifacts|MSI/);
-  assert.match(releaseMigration, /ADD COLUMN "embedded_version" text/);
-  assert.match(releaseMigration, /ROW_NUMBER\(\) OVER/);
-  assert.match(releaseMigration, /release_versions_one_published_channel_uq/);
-  assert.match(settingsMigration, /CREATE TABLE "release_settings"/);
-  assert.match(settingsMigration, /updater_public_key_id/);
-  assert.match(replacementMigration, /CREATE TABLE "artifact_cleanup_queue"/);
-  assert.match(replacementMigration, /ROW_NUMBER\(\) OVER/);
-  assert.match(replacementMigration, /UPDATE "release_versions"/);
-  assert.match(replacementMigration, /DELETE FROM "agent_artifacts"/);
-  assert.match(replacementMigration, /agent_artifacts_tenant_embedded_version_uq/);
+  assert.match(schema, /releaseArtifacts/);
+  assert.match(schema, /"NSIS", "DMG", "APP_TAR_GZ"/);
+  assert.match(multiPlatformMigration, /CREATE TABLE "release_artifacts"/);
+  assert.match(multiPlatformMigration, /DROP INDEX "agent_artifacts_embedded_version_uq"/);
+  assert.match(multiPlatformMigration, /agent_artifacts_release_target_uq/);
+  assert.match(multiPlatformMigration, /INSERT INTO "release_artifacts"/);
+  assert.match(isolationMigration, /SET "id" = 'windows'/);
+  assert.match(isolationMigration, /ALTER COLUMN "id" SET DEFAULT 'windows'/);
   assert.match(releaseStore, /ensureArtifactVersionMatchesRelease/);
+  assert.match(releaseStore, /ensureReleaseArtifactSet/);
   assert.match(releaseStore, /save_release_settings/);
   assert.match(releaseStore, /release\.settings\.save/);
   assert.match(releaseStore, /reusedDraft/);
@@ -951,25 +976,28 @@ test("desktop updater exposes only the global verified, version-matched EXE", as
   assert.match(releaseStore, /内部版本.*与发布版本.*不一致/);
   assert.match(releaseStore, /SET status = 'draft'.*channel = \?.*status = 'published'/);
   assert.match(schema, /release_versions_one_published_channel_uq/);
-  assert.doesNotMatch(releaseStore, /release_artifacts|STRING_AGG|MSI/i);
   assert.match(consoleStore, /r\.status = 'published' AND r\.channel = 'stable'/);
-  assert.match(consoleStore, /LIMIT 1/);
+  assert.match(consoleStore, /a\.format IN \('NSIS', 'DMG'\)/);
+  assert.match(consoleStore, /a\.format = 'DMG' OR \(a\.signature_verified_at IS NOT NULL AND a\.signature_key_id = \?\)/);
   assert.match(adminUi, /CURRENT DISTRIBUTION/);
   assert.match(adminUi, /更新签名公钥/);
   assert.match(adminUi, /name="updaterPublicKey"/);
   assert.match(adminUi, /save_release_settings/);
-  assert.match(adminUi, /不要在这里填写签名私钥/);
+  assert.match(adminUi, /不要在这里填写或上传签名私钥/);
   assert.match(adminUi, /官网直接下载/);
-  assert.match(adminUi, /客户端直接升级/);
+  assert.match(adminUi, /Windows 与 macOS 分别使用独立公钥/);
   assert.match(adminUi, /历史版本转为私有/);
-  assert.match(adminUi, /已有同版本草稿会直接更新并转为正式发布/);
+  assert.match(adminUi, /同版本的可发布平台产物/);
   assert.match(adminUi, /保存并应用发布设置/);
   assert.doesNotMatch(adminUi, /MSI|\.msi/i);
   assert.doesNotMatch(landing, /MSI|\.msi/i);
+  assert.match(landing, /macOS DMG/);
   assert.doesNotMatch(adminUi, /function ArtifactsView|function ReleasesView/);
   assert.match(packageJson, /@h-t-m\/app-inspect/);
+  assert.match(packageJson, /"tar"/);
   assert.doesNotMatch(config, /EVAL_PUBLIC_RELEASE_TENANT_SLUG/);
   assert.match(config, /EVAL_UPDATER_PUBLIC_KEY/);
+  assert.match(config, /EVAL_MACOS_UPDATER_PUBLIC_KEY/);
 });
 
 test("minisign verifier accepts authentic bytes and rejects modified bytes", async () => {

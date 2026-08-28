@@ -1,17 +1,25 @@
 import { authDatabase, type AuthenticatedUser } from "../auth/core";
 import { ensureAdminSchema } from "../admin/store";
+import { publicReleaseSigningSettings } from "../releases/settings";
 
 export async function consoleSnapshot(user: AuthenticatedUser) {
   await ensureAdminSchema();
   const db = authDatabase();
   const now = Math.floor(Date.now() / 1000);
   const admin = user.role === "admin";
+  const signingSettings = await publicReleaseSigningSettings("windows");
+  const publicKeyId = signingSettings?.publicKeyId ?? "__not_configured__";
   const [releases, forumTopics, forumTopicCount, forumReplies, blogPostCount, desktopSessions, audits] = await Promise.all([
-    db.prepare(`SELECT r.id, r.version, r.channel, r.status, r.published_at AS "publishedAt",
-      a.file_name AS "fileName", a.format, a.size_bytes AS "sizeBytes"
-      FROM release_versions r JOIN agent_artifacts a ON a.id = r.artifact_id AND a.format = 'NSIS'
+    db.prepare(`SELECT a.id, r.id AS "releaseId", r.version, r.channel, r.status, r.published_at AS "publishedAt",
+      a.file_name AS "fileName", a.format, a.platform, a.architecture, a.size_bytes AS "sizeBytes"
+      FROM release_versions r
+      JOIN release_artifacts ra ON ra.release_id = r.id
+      JOIN agent_artifacts a ON a.id = ra.artifact_id AND a.format IN ('NSIS', 'DMG')
       WHERE r.status = 'published' AND r.channel = 'stable'
-      ORDER BY r.published_at DESC NULLS LAST, r.created_at DESC LIMIT 1`).all(),
+        AND a.status = 'ready'
+        AND (a.format = 'DMG' OR (a.signature_verified_at IS NOT NULL AND a.signature_key_id = ?))
+        AND a.embedded_version = r.version
+      ORDER BY r.published_at DESC NULLS LAST, r.created_at DESC, a.platform DESC, a.architecture LIMIT 6`).bind(publicKeyId).all(),
     db.prepare(`SELECT t.id, t.title, t.slug, t.category, t.status, t.pinned,
       t.last_activity_at AS "lastActivityAt", u.display_name AS "authorName",
       COUNT(r.id) FILTER (WHERE r.status = 'visible') AS "replyCount"
@@ -36,7 +44,7 @@ export async function consoleSnapshot(user: AuthenticatedUser) {
   return {
     generatedAt: now,
     metrics: {
-      publishedReleases: releaseRows.filter(item => item.status === "published").length,
+      publishedReleases: new Set(releaseRows.filter(item => item.status === "published").map(item => item.releaseId)).size,
       forumTopics: Number(forumTopicCount?.count ?? 0),
       forumReplies: Number(forumReplies?.count ?? 0),
       publishedPosts: Number(blogPostCount?.count ?? 0),

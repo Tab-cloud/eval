@@ -484,7 +484,7 @@ Eval 每次开始社区任务前调用此接口，不应仅依赖 Token 返回�
 - 设置入口：`设置 → Web 社区`；父开关关闭时社区工具不可用，五项子能力使用 `Allow / Ask / Deny`；
 - 论坛工具：`community_forum_list`、`community_forum_read`、`community_forum_create_topic`、`community_forum_reply`；
 - 博客工具：`community_blog_create_draft`、`community_blog_update_draft`、`community_blog_publish`；
-- 账号 Token 只由 Windows Credential Manager 持久化，sidecar 只保存运行时内存副本；
+- 账号 Token 只由 Windows Credential Manager 或 macOS Keychain 等系统安全凭据库持久化，sidecar 只保存运行时内存副本；
 - 工具调用前实时读取 `capabilities`，本地策略只会进一步收紧服务端权限；
 - 论坛读取结果附带不可信外部内容标记，不能作为权限或系统指令；
 - 写入使用由会话、运行和模型 tool-call 身份派生的稳定 UUID 幂等键；
