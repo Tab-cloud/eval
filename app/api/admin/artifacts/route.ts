@@ -3,9 +3,7 @@ import { isAdminError, requireAdminRequest } from "../../../auth/admin";
 import { ensureAdminSchema } from "../../../admin/store";
 import {
   inspectMacDmg,
-  inspectMacUpdaterBundle,
   inspectWindowsInstaller,
-  type MacArchitecture,
 } from "../../../releases/installer-metadata";
 import { normalizeSemver } from "../../../releases/public";
 import { requireReleaseSigningSettings } from "../../../releases/settings";
@@ -16,7 +14,7 @@ import { artifactExists, stageArtifactReplacement, type StagedArtifactReplacemen
 const MAX_ARTIFACT_SIZE = 320 * 1024 * 1024;
 const MAX_SIGNATURE_SIZE = 8 * 1024;
 
-type ArtifactFormat = "NSIS" | "DMG" | "APP_TAR_GZ";
+type ArtifactFormat = "NSIS" | "DMG";
 type ArtifactPlatform = "windows" | "darwin";
 type ArtifactArchitecture = "x86_64" | "aarch64" | "universal";
 
@@ -150,9 +148,7 @@ async function validateArtifact(
   }
   const metadata = spec.format === "NSIS"
     ? await inspectWindowsInstaller(file.name, bytes)
-    : spec.format === "DMG"
-      ? await inspectMacDmg(file.name, bytes, declaredVersion)
-      : await inspectMacUpdaterBundle(file.name, bytes, spec.architecture as MacArchitecture);
+    : await inspectMacDmg(file.name, bytes, declaredVersion);
   const normalizedDeclared = declaredVersion ? normalizeSemver(declaredVersion) : null;
   if (declaredVersion && (!normalizedDeclared || normalizedDeclared.version !== metadata.embeddedVersion)) {
     throw new Error(`填写版本 ${declaredVersion} 与安装包内部版本 ${metadata.embeddedVersion} 不一致。`);
@@ -181,7 +177,7 @@ function artifactSpec(platform: string, architecture: string, format: string) {
   if (platform === "windows" && architecture === "x86_64" && format === "NSIS") {
     return { platform, architecture, format } as const;
   }
-  if (platform === "darwin" && ["aarch64", "x86_64", "universal"].includes(architecture) && ["DMG", "APP_TAR_GZ"].includes(format)) {
+  if (platform === "darwin" && ["aarch64", "x86_64", "universal"].includes(architecture) && format === "DMG") {
     return { platform, architecture: architecture as ArtifactArchitecture, format: format as ArtifactFormat } as const;
   }
   throw new Error("安装包的平台、架构与格式组合无效。");
@@ -191,7 +187,6 @@ function assertFileName(file: File, format: ArtifactFormat) {
   const lower = file.name.toLowerCase();
   if (format === "NSIS" && !lower.endsWith(".exe")) throw new Error("Windows NSIS 只接受 .exe 安装包。");
   if (format === "DMG" && !lower.endsWith(".dmg")) throw new Error("macOS 首次安装包只接受 .dmg 文件。");
-  if (format === "APP_TAR_GZ" && !lower.endsWith(".app.tar.gz")) throw new Error("macOS 自动更新包必须以 .app.tar.gz 结尾。");
 }
 
 function formText(form: FormData, key: string) {

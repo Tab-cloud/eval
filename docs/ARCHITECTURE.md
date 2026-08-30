@@ -75,7 +75,7 @@ PostgreSQL 保存用户、手机号、短信挑战、OAuth 状态、外部身份
 
 ## 桌面端下载与自动升级
 
-macOS DMG 首次安装包不依赖 Tauri 签名，可以单独上传。Windows NSIS/EXE 与 macOS `.app.tar.gz` 自动更新包必须分别附带同名 `.sig`。`release_settings` 以 `windows`、`darwin` 两条记录隔离保存平台公钥与指纹；数据库未配置时分别使用 `EVAL_UPDATER_PUBLIC_KEY`、`EVAL_MACOS_UPDATER_PUBLIC_KEY` 后备。服务器从 PE `ProductVersion`/`FileVersion` 或 App Bundle `CFBundleShortVersionString` 读取内部版本，校验 Mac Mach-O 架构，并只使用产物所属平台的公钥验签。私钥始终留在对应构建机或 CI Secret，不进入 Web 服务。
+macOS 管理端只接受 DMG，不依赖 Tauri 签名；公开目录也只返回一个 Mac DMG 槽位。Windows NSIS/EXE 必须附带同名 `.sig`，由 Windows `updater.pub` 验证。数据模型和 `darwin` 更新路由保留未来扩展能力，但当前管理上传接口拒绝 APP_TAR_GZ，因此 macOS 采用手动下载安装新版 DMG 的升级方式。私钥始终留在构建机或 CI Secret，不进入 Web 服务。
 
 `agent_artifacts` 对 `(embedded_version, platform, architecture, format)` 设置唯一约束。同一目标产物重新上传时复用原产物 ID 和对象地址，验签成功后以临时文件加回滚备份完成原子替换；SHA-256 相同且源文件存在时只刷新元数据，不重复写盘。`release_versions` 保存逻辑版本和兼容主产物，`release_artifacts` 关联该版本的全部平台产物。旧版本迁移时会把原 Windows 主产物回填到关联表。
 

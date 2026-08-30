@@ -445,6 +445,7 @@ async function releaseSigningKeyIds(): Promise<SigningKeyIds> {
 
 async function ensureArtifactPublishable(artifact: PublishableArtifact, signingKeyIds: SigningKeyIds) {
   if (artifact.status !== "ready") throw new Error("已归档的安装包不能绑定到发布版本。");
+  if (artifact.platform === "darwin" && artifact.format !== "DMG") throw new Error("macOS 发布当前只支持 DMG 安装包。");
   const publicKeyId = artifactSigningKeyId(artifact, signingKeyIds);
   if (artifact.format !== "DMG" && (!artifact.signature_verified_at || !artifact.signature_key_id || !publicKeyId)) {
     throw new Error("安装包尚未通过当前 Tauri 更新公钥验签，不能发布。");
@@ -464,10 +465,9 @@ async function publishableArtifactsForVersion(db: PostgresDatabase, version: str
     FROM agent_artifacts
     WHERE embedded_version = ? AND status = 'ready'
       AND (format = 'DMG'
-        OR (platform = 'windows' AND signature_verified_at IS NOT NULL AND signature_key_id = ?)
-        OR (platform = 'darwin' AND signature_verified_at IS NOT NULL AND signature_key_id = ?))
+        OR (platform = 'windows' AND signature_verified_at IS NOT NULL AND signature_key_id = ?))
     ORDER BY platform, architecture, format`)
-    .bind(version, signingKeyIds.windows ?? "__windows_not_configured__", signingKeyIds.darwin ?? "__darwin_not_configured__")
+    .bind(version, signingKeyIds.windows ?? "__windows_not_configured__")
     .all<PublishableArtifact>();
   return result.results;
 }
@@ -485,7 +485,7 @@ async function ensureReleaseArtifactSet(artifacts: PublishableArtifact[], releas
   const macArchitectures = new Set(artifacts.filter(item => item.platform === "darwin").map(item => item.architecture));
   for (const architecture of macArchitectures) {
     if (!targets.has(`darwin:${architecture}:DMG`)) {
-      throw new Error(`macOS ${architecture} 必须上传 DMG 首次安装包；APP_TAR_GZ 自动更新包可以后续补充。`);
+      throw new Error(`macOS ${architecture} 只支持上传 DMG 安装包。`);
     }
   }
 }

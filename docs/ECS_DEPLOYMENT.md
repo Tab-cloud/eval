@@ -151,18 +151,16 @@ Nginx 模板已经包含：
 
 ## 桌面端版本发布
 
-桌面安装包在独立构建机生成，不在 ECS 上签名。Windows 构建生成 NSIS `.exe` 与 `.exe.sig`，macOS 构建生成 `.dmg`、`.app.tar.gz` 与 `.app.tar.gz.sig`。两个平台分别使用独立的 Tauri 升级密钥；对应 `updater.pub` 保存到 Web 管理后台并内置进对应平台客户端，私钥不得复制到 ECS。
+桌面安装包在独立构建机生成，不在 ECS 上签名。Windows 构建生成 NSIS `.exe` 与 `.exe.sig`，对应 `updater.pub` 保存到 Web 管理后台；私钥不得复制到 ECS。macOS 管理端只上传一个 `.dmg`，不上传 Tauri 更新归档或签名。
 
-macOS 没有 Developer ID 时也可直接分发 ad-hoc 签名的 DMG，但 Gatekeeper 可能在首次打开时拦截，用户需要手动确认。为了获得正常的站外安装体验，仍建议未来使用 Developer ID Application 签名、Hardened Runtime 和 Apple 公证。Tauri 自动更新签名与 Apple 签名相互独立：启用 `bundle.createUpdaterArtifacts` 并提供 Mac Tauri 私钥后，可免费生成 `.app.tar.gz` 与 `.sig`。
+macOS 没有 Developer ID 时也可直接分发 ad-hoc 签名的 DMG，但 Gatekeeper 可能在首次打开时拦截，用户需要手动确认。当前 macOS 不启用 Tauri 自动更新，用户通过官网下载新版 DMG 手动安装。
 
-管理员可以直接提交 macOS DMG，无需公钥或 `.sig`；如需自动更新，先保存独立的 macOS `updater.pub`，再上传同架构的 `.app.tar.gz` 与 `.sig`。Windows NSIS 使用独立的 Windows 公钥。数据库配置优先于 `EVAL_UPDATER_PUBLIC_KEY`、`EVAL_MACOS_UPDATER_PUBLIC_KEY` 环境变量后备，切勿上传私钥。发布时系统自动关联同版本全部可发布产物；官网提供最新稳定版 EXE/DMG，桌面客户端按 `windows` 或 `darwin` 取得由对应平台密钥签名的更新包。Nginx 的 `client_max_body_size` 必须覆盖单个安装包，仓库示例配置为 `384m`。发布后可验证：
+管理员直接提交一个 macOS DMG，无需公钥或 `.sig`；Mac 上传接口拒绝其他格式。Windows NSIS 使用 Windows 公钥验签，数据库配置优先于 `EVAL_UPDATER_PUBLIC_KEY` 环境变量后备，切勿上传私钥。官网只展示最新稳定版 Windows EXE 和一个 macOS DMG。Nginx 的 `client_max_body_size` 必须覆盖单个安装包，仓库示例配置为 `384m`。发布后可验证：
 
 如果轮换任一平台公钥，由旧公钥验签的该平台产物会立即退出公开下载或更新通道，也不能重新发布；另一个平台不受影响。已安装客户端的密钥轮换仍需使用旧私钥签名过渡版本。DMG 直接下载不依赖 Tauri 公钥。公钥指纹只基于密钥内容，不受 `.pub` 注释或配置编码形式影响。
 
 ```bash
 curl -i "https://eval.zailink.space/api/v1/updates/windows/x86_64/0.1.0?channel=stable"
-curl -i "https://eval.zailink.space/api/v1/updates/darwin/aarch64/0.1.0?channel=stable"
-curl -i "https://eval.zailink.space/api/v1/updates/darwin/x86_64/0.1.0?channel=stable"
 ```
 
 有更新应返回 `200` 和签名更新清单；当前版本已是最新或平台不支持时应返回 `204`。

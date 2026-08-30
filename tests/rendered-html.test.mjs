@@ -182,7 +182,7 @@ test("published downloads require a real stored artifact", async () => {
   assert.match(upload, /\.exe/);
   assert.doesNotMatch(upload, /\.msi/i);
   assert.match(upload, /\.dmg/);
-  assert.match(upload, /\.app\.tar\.gz/);
+  assert.doesNotMatch(upload, /\.app\.tar\.gz|APP_TAR_GZ/);
   assert.match(upload, /SHA-256/);
   assert.doesNotMatch(upload, /\.deb|\.rpm/);
 });
@@ -891,7 +891,9 @@ test("release delivery exposes direct macOS downloads and verified auto-update a
   assert.match(catalog, /JOIN release_artifacts/);
   assert.match(catalog, /a\.format IN \('NSIS', 'DMG'\)/);
   assert.match(catalog, /a\.format = 'DMG' OR \(a\.signature_verified_at IS NOT NULL AND a\.signature_key_id = \?\)/);
-  assert.match(catalog, /macUniversalSlot/);
+  assert.match(catalog, /const macSlot/);
+  assert.match(catalog, /darwin:universal:DMG.*darwin:aarch64:DMG.*darwin:x86_64:DMG/s);
+  assert.doesNotMatch(catalog, /macAppleSlot|macIntelSlot|macUniversalSlot/);
   assert.match(catalog, /publicReleaseSigningSettings/);
   assert.match(catalog, /a\.embedded_version = r\.version/);
   assert.match(catalog, /SELECT latest_r\.id/);
@@ -903,7 +905,7 @@ test("release delivery exposes direct macOS downloads and verified auto-update a
   assert.match(download, /a\.platform = 'windows'.*a\.signature_key_id = \?.*a\.platform = 'darwin'.*a\.signature_key_id = \?/);
   assert.match(releaseStore, /尚未通过当前 Tauri 更新公钥验签/);
   assert.match(releaseStore, /旧的 Tauri 更新公钥验签/);
-  assert.match(releaseStore, /macOS.*必须上传 DMG.*APP_TAR_GZ.*可以后续补充/);
+  assert.match(releaseStore, /macOS.*只支持上传 DMG/);
   assert.match(releaseStore, /format !== "DMG"/);
   assert.match(releaseStore, /INSERT INTO release_artifacts/);
   assert.match(adminUi, /name="file"/);
@@ -913,10 +915,8 @@ test("release delivery exposes direct macOS downloads and verified auto-update a
   assert.match(adminUi, /直接上传 macOS DMG/);
   assert.match(adminUi, /无需 Apple Developer ID 或 \.sig/);
   assert.match(adminUi, /直接上传 DMG/);
-  assert.match(adminUi, /value="APP_TAR_GZ"/);
-  assert.match(adminUi, /macOS 自动更新包（可选）/);
-  assert.match(adminUi, /MACOS AUTO UPDATE/);
-  assert.match(adminUi, /Windows 与 macOS 分别使用独立公钥/);
+  assert.doesNotMatch(adminUi, /value="APP_TAR_GZ"|macOS 自动更新包（可选）|MACOS AUTO UPDATE/);
+  assert.match(adminUi, /macOS 通过官网下载新版 DMG 手动安装/);
   assert.match(upload, /verifyUpdaterSignature/);
   assert.match(upload, /requireReleaseSigningSettings/);
   assert.match(upload, /requireReleaseSigningSettings\(spec\.platform\)/);
@@ -924,7 +924,8 @@ test("release delivery exposes direct macOS downloads and verified auto-update a
   assert.match(upload, /signed: Boolean\(artifact\.signatureVerifiedAt\)/);
   assert.match(upload, /inspectWindowsInstaller/);
   assert.match(upload, /inspectMacDmg/);
-  assert.match(upload, /inspectMacUpdaterBundle/);
+  assert.doesNotMatch(upload, /inspectMacUpdaterBundle|APP_TAR_GZ|\.app\.tar\.gz/);
+  assert.match(upload, /format === "DMG"/);
   assert.match(upload, /WHERE embedded_version = \?/);
   assert.doesNotMatch(upload, /tenant_id|tenantId/);
   assert.match(upload, /stageArtifactReplacement/);
@@ -985,7 +986,7 @@ test("release delivery exposes direct macOS downloads and verified auto-update a
   assert.match(adminUi, /save_release_settings/);
   assert.match(adminUi, /不要在这里填写或上传签名私钥/);
   assert.match(adminUi, /官网直接下载/);
-  assert.match(adminUi, /Windows 与 macOS 分别使用独立公钥/);
+  assert.match(adminUi, /Windows 使用签名更新包自动升级/);
   assert.match(adminUi, /历史版本转为私有/);
   assert.match(adminUi, /同版本的可发布平台产物/);
   assert.match(adminUi, /保存并应用发布设置/);

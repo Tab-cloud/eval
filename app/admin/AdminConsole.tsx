@@ -162,31 +162,29 @@ function PhoneBindingPanel({ data, busy, action }: ViewProps) {
   </AdminForm>;
 }
 
-function ReleaseKeyPanel({ platform, settings, busy, action }: {
-  platform: "windows" | "darwin";
+function WindowsReleaseKeyPanel({ settings, busy, action }: {
   settings: ReleaseSettingsSnapshot;
   busy: boolean;
   action: ViewProps["action"];
 }) {
-  const isMac = platform === "darwin";
-  const platformLabel = isMac ? "macOS" : "Windows";
   return <section className={`release-key-config ${settings.configured ? "is-ready" : "is-missing"}`}>
     <div className="release-key-copy">
       <span><i/>{settings.configured ? "SIGNING KEY READY" : "SIGNING KEY REQUIRED"}</span>
-      <h2>{platformLabel} 更新签名公钥</h2>
-      <p>{isMac ? "该公钥只验证 macOS APP_TAR_GZ 自动更新包；DMG 直接下载不依赖它。" : "该公钥只验证 Windows NSIS 更新包。"} 不要在这里填写或上传签名私钥。</p>
-      <small>{settings.configured ? `${settings.source === "database" ? "管理员配置" : "环境变量后备"} · 指纹 ${settings.updaterPublicKeyId}` : `尚未配置 ${platformLabel} 更新公钥。`}</small>
+      <h2>Windows 更新签名公钥</h2>
+      <p>该公钥只验证 Windows NSIS 更新包。不要在这里填写或上传签名私钥。</p>
+      <small>{settings.configured ? `${settings.source === "database" ? "管理员配置" : "环境变量后备"} · 指纹 ${settings.updaterPublicKeyId}` : "尚未配置 Windows 更新公钥。"}</small>
     </div>
-    <form key={`${platform}-${settings.source}-${settings.updatedAt ?? "default"}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);void action("save_release_settings",{platform,updaterPublicKey:form.get("updaterPublicKey")},`${platformLabel} 更新签名公钥已保存。`);}}>
-      <label><span>{platformLabel.toUpperCase()} MINISIGN PUBLIC KEY / updater.pub</span><textarea name="updaterPublicKey" defaultValue={settings.updaterPublicKey} placeholder={"untrusted comment: minisign public key\nRW..."} required spellCheck={false}/></label>
-      <div><small>公钥可安全保存；私钥必须永久保留在对应平台的构建机或 CI Secret。</small><button disabled={busy}>{busy ? "正在验证…" : "验证并保存公钥"}<Icon name="shield"/></button></div>
+    <form key={`windows-${settings.source}-${settings.updatedAt ?? "default"}`} onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);void action("save_release_settings",{platform:"windows",updaterPublicKey:form.get("updaterPublicKey")},"Windows 更新签名公钥已保存。");}}>
+      <label><span>WINDOWS MINISIGN PUBLIC KEY / updater.pub</span><textarea name="updaterPublicKey" defaultValue={settings.updaterPublicKey} placeholder={"untrusted comment: minisign public key\nRW..."} required spellCheck={false}/></label>
+      <div><small>公钥可安全保存；私钥必须永久保留在 Windows 构建机或 CI Secret。</small><button disabled={busy}>{busy ? "正在验证…" : "验证并保存公钥"}<Icon name="shield"/></button></div>
     </form>
   </section>;
 }
 
 function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload: (form: HTMLFormElement) => Promise<void> }) {
   const artifactUsesCurrentKey = (artifact: Snapshot["artifacts"][number]) => {
-    const settings = artifact.platform === "darwin" ? data.releaseSettings.darwin : data.releaseSettings.windows;
+    if (artifact.platform === "darwin") return artifact.format === "DMG";
+    const settings = data.releaseSettings.windows;
     return artifact.format === "DMG" || (artifact.signed && artifact.signatureKeyId === settings.updaterPublicKeyId);
   };
   const verifiedArtifacts = data.artifacts
@@ -205,8 +203,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
   const latestDownload = currentArtifacts.reduce((latest, artifact) => Math.max(latest, Number(artifact.lastDownloadedAt ?? 0)), 0);
 
   return <div className="admin-module release-center">
-    <ReleaseKeyPanel platform="windows" settings={data.releaseSettings.windows} busy={busy} action={action}/>
-    <ReleaseKeyPanel platform="darwin" settings={data.releaseSettings.darwin} busy={busy} action={action}/>
+    <WindowsReleaseKeyPanel settings={data.releaseSettings.windows} busy={busy} action={action}/>
 
     <section className={`release-current ${currentRelease ? "is-live" : "is-empty"}`}>
       <div className="release-current-copy"><p><i/>CURRENT DISTRIBUTION</p><span>当前稳定版本</span><h2>{currentRelease ? `v${currentRelease.version}` : "尚未发布"}</h2><small>{currentRelease ? `${currentRelease.mandatory ? "强制升级" : "用户可选升级"} · ${new Date(Number(currentRelease.publishedAt) * 1000).toLocaleString("zh-CN")}` : "上传并发布首个版本后，新用户即可在官网下载；签名更新包可后续补充。"}</small></div>
@@ -224,7 +221,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
 
     <section className="release-delivery-paths">
       <article><span>01 / NEW USER</span><Icon name="download"/><b>官网直接下载</b><p>公开下载页展示最新稳定版 Windows EXE 与 macOS DMG。</p></article>
-      <article><span>02 / EXISTING USER</span><Icon name="route"/><b>客户端自动升级</b><p>Windows 与 macOS 分别使用独立公钥验证对应平台的签名更新包。</p></article>
+      <article><span>02 / EXISTING USER</span><Icon name="route"/><b>版本升级</b><p>Windows 使用签名更新包自动升级；macOS 通过官网下载新版 DMG 手动安装。</p></article>
       <article><span>03 / RETENTION</span><Icon name="shield"/><b>历史版本转为私有</b><p>旧版本不再公开下载，但保留文件与审计记录，支持紧急回滚。</p></article>
     </section>
 
@@ -238,21 +235,6 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
           <label className="admin-file"><Icon name="shield"/><span>选择对应的 .exe.sig</span><input name="signature" type="file" accept=".sig" required/></label>
         </section>
         <button disabled={busy || !data.releaseSettings.windows.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.windows.configured ? "验签并上传最新产物" : "请先保存 Windows 更新公钥"} <Icon name="arrow"/></button>
-      </form>
-    </AdminForm>
-
-    <AdminForm title="上传 macOS 自动更新包（可选）" note="提交 Tauri 生成的 .app.tar.gz 与同名 .sig；系统只使用独立的 macOS 更新公钥验签。">
-      <form className="artifact-form" encType="multipart/form-data" onSubmit={event=>{event.preventDefault();void upload(event.currentTarget);}}>
-        <input type="hidden" name="platform" value="darwin"/><input type="hidden" name="format" value="APP_TAR_GZ"/>
-        <input className="artifact-label" name="label" placeholder="显示名称，如 Eval Agent macOS 自动更新包" required/>
-        <input name="version" placeholder="版本号，如 1.2.3" required/>
-        <section className="artifact-channel">
-          <header><span>MACOS AUTO UPDATE</span><b>APP.TAR.GZ + SIG</b></header>
-          <label>设备架构<select name="architecture" defaultValue="aarch64"><option value="aarch64">Apple Silicon / aarch64</option><option value="x86_64">Intel / x86_64</option><option value="universal">Universal / 通用包</option></select></label>
-          <label className="admin-file"><Icon name="download"/><span>选择 .app.tar.gz 更新包</span><input name="file" type="file" accept=".gz" required/></label>
-          <label className="admin-file"><Icon name="shield"/><span>选择对应的 .app.tar.gz.sig</span><input name="signature" type="file" accept=".sig" required/></label>
-        </section>
-        <button disabled={busy || !data.releaseSettings.darwin.configured}>{busy ? "正在验签并上传…" : data.releaseSettings.darwin.configured ? "验签并上传 Mac 更新包" : "请先保存 macOS 更新公钥"} <Icon name="arrow"/></button>
       </form>
     </AdminForm>
 
@@ -272,7 +254,7 @@ function ReleaseCenterView({ data, busy, upload, action }: ViewProps & { upload:
 
     {latestVersion && <section className="release-candidate"><header><div><span>LATEST PUBLISHABLE BUILD</span><h3>v{latestVersion}</h3></div><small>{candidateDrafts.length ? `已有 ${candidateDrafts.map(release => release.channel.toUpperCase()).join(" / ")} 草稿，可在下方直接发布` : "同版本的可发布平台产物会一起进入发布候选；DMG 无需签名"}</small></header><div>{candidateArtifacts.map(artifact => <article key={artifact.id}><span>{artifact.format}</span><div><b>{artifact.fileName}</b><small>{artifactTargetLabel(artifact)} · {formatBytes(artifact.sizeBytes)} · {artifact.productName || "Eval Agent"} · {artifact.signed ? "已验签" : "直接上传"}</small></div><a href={`/api/admin/artifacts/${artifact.id}`}>内部下载</a></article>)}</div></section>}
 
-    <AdminForm title="发布到用户" note="macOS 只上传 DMG 也可以公开下载；同版本的签名 APP_TAR_GZ 上传后会同时启用自动更新。">
+    <AdminForm title="发布到用户" note="macOS 发布只使用一个 DMG，公开后用户从官网或控制台下载安装。">
       <form onSubmit={event=>{event.preventDefault();if(!latestVersion)return;const form=new FormData(event.currentTarget);void action("create_release",{version:latestVersion,channel:form.get("channel"),status:form.get("status"),notes:form.get("notes"),mandatory:form.get("mandatory")==="on"},form.get("status")==="published"?"最新多平台版本已发布。":"版本草稿已保存。");event.currentTarget.reset();}}>
         <label>待发布版本<select name="artifactVersion" value={latestVersion ?? ""} disabled><option value={latestVersion ?? ""}>{latestVersion ? `v${latestVersion} · ${candidateArtifacts.length} 个平台产物` : "请先上传安装包"}</option></select></label>
         <label>发布渠道<select name="channel" defaultValue="stable"><option value="stable">Stable / 正式版</option><option value="beta">Beta / 测试版</option><option value="internal">Internal / 内部版</option></select></label>
@@ -297,7 +279,7 @@ type ViewProps = { data: Snapshot; busy: boolean; action: (name:string,input:Rec
 function AdminForm({title,note,children}:{title:string;note:string;children:React.ReactNode}){return <section className="admin-form"><div><p>CONFIGURATION</p><h2>{title}</h2><span>{note}</span></div>{children}</section>}
 function AdminLedger({headings,children}:{headings:string[];children:React.ReactNode}){return <section className="admin-ledger"><header>{headings.map(item=><span key={item}>{item}</span>)}</header>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="admin-empty"><i/><h3>{title}</h3><p>{text}</p></div>}
-function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",community:"控制 Eval Agent 访问论坛与博客的全站能力、限额和紧急停止。",releases:"上传并发布 Windows 与 macOS 安装包；两个平台使用相互隔离的签名密钥自动更新。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
+function adminDescription(id:string){return ({dashboard:"跨用户、登录、内容、发布与产品方案的独立管理视角。",users:"创建账号、控制管理员权限与用户状态。",identity:"配置短信、Google 与 GitHub 登录，并检查部署凭据完整度。",content:"发布公开博客，并治理全站论坛主题与回复。",community:"控制 Eval Agent 访问论坛与博客的全站能力、限额和紧急停止。",releases:"上传并发布 Windows EXE 与单一 macOS DMG；Windows 支持签名自动更新。",billing:"定义 Eval Agent 方案价格与功能权益。",audits:"查看全站可追溯的管理员与安全操作。"} as Record<string,string>)[id]}
 function formatBytes(value:number){return value>1024*1024?`${(value/1024/1024).toFixed(1)} MB`:`${Math.round(value/1024)} KB`}
 function artifactTargetLabel(artifact:{platform:string;architecture:string}){return artifact.platform==="darwin"?`macOS ${artifact.architecture==="aarch64"?"Apple Silicon":artifact.architecture==="x86_64"?"Intel":"Universal"}`:"Windows x64"}
 function compactNumber(value:number){return Intl.NumberFormat("zh-CN",{notation:"compact",maximumFractionDigits:1}).format(value)}

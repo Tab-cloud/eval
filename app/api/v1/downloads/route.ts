@@ -24,9 +24,7 @@ type DownloadSlot = {
 };
 
 const windowsSlot: DownloadSlot = { id: "eval-agent-win-x64-nsis", name: "Eval Agent Windows 安装程序", nameEn: "Eval Agent Windows Installer", platform: "Windows x64", architecture: "x86_64", format: "NSIS", fileExtension: ".exe" };
-const macAppleSlot: DownloadSlot = { id: "eval-agent-mac-arm64-dmg", name: "Eval Agent Mac 安装程序", nameEn: "Eval Agent Mac Installer", platform: "macOS Apple Silicon", architecture: "aarch64", format: "DMG", fileExtension: ".dmg" };
-const macIntelSlot: DownloadSlot = { id: "eval-agent-mac-x64-dmg", name: "Eval Agent Mac 安装程序", nameEn: "Eval Agent Mac Installer", platform: "macOS Intel", architecture: "x86_64", format: "DMG", fileExtension: ".dmg" };
-const macUniversalSlot: DownloadSlot = { id: "eval-agent-mac-universal-dmg", name: "Eval Agent Mac 通用安装程序", nameEn: "Eval Agent Mac Universal Installer", platform: "macOS Universal", architecture: "universal", format: "DMG", fileExtension: ".dmg" };
+const macSlot: DownloadSlot = { id: "eval-agent-mac-dmg", name: "Eval Agent Mac 安装程序", nameEn: "Eval Agent Mac Installer", platform: "macOS", architecture: "universal", format: "DMG", fileExtension: ".dmg" };
 
 export async function GET() {
   await ensureAdminSchema();
@@ -48,10 +46,17 @@ export async function GET() {
     ORDER BY a.platform, a.architecture, a.format
   `).bind(publicKeyId).all<PublishedArtifact>();
   const published = new Map(result.results.map(item => [`${item.platform}:${item.architecture}:${item.format}`, item]));
-  const universalMac = published.get("darwin:universal:DMG");
-  const slots = [windowsSlot, ...(universalMac ? [macUniversalSlot] : [macAppleSlot, macIntelSlot])];
-  const data = slots.map(slot => {
-    const item = published.get(`${slot.format === "NSIS" ? "windows" : "darwin"}:${slot.architecture}:${slot.format}`);
+  const macItem = published.get("darwin:universal:DMG")
+    ?? published.get("darwin:aarch64:DMG")
+    ?? published.get("darwin:x86_64:DMG");
+  const selections: Array<{ slot: DownloadSlot; item?: PublishedArtifact }> = [
+    { slot: windowsSlot, item: published.get("windows:x86_64:NSIS") },
+    {
+      slot: macItem ? { ...macSlot, platform: macPlatformLabel(macItem.architecture), architecture: macItem.architecture } : macSlot,
+      item: macItem,
+    },
+  ];
+  const data = selections.map(({ slot, item }) => {
     return item ? {
       ...slot,
       id: item.artifact_id,
@@ -75,4 +80,10 @@ export async function GET() {
   return Response.json({ data, meta: { authenticationRequired: false, managedBy: "administrator", note: "仅展示最新稳定版本中可公开下载的 Windows 安装包与 macOS DMG。" } }, {
     headers: { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" },
   });
+}
+
+function macPlatformLabel(architecture: PublishedArtifact["architecture"]) {
+  if (architecture === "aarch64") return "macOS Apple Silicon";
+  if (architecture === "x86_64") return "macOS Intel";
+  return "macOS Universal";
 }
